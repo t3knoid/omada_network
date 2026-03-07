@@ -9,6 +9,7 @@ import pytest
 import requests
 
 from omada.api.client import (
+    LoginResult,
     OmadaAPIError,
     OmadaClient,
     discover_controller_id,
@@ -245,11 +246,14 @@ class TestLogin:
         )
         with patch("omada.api.client.requests.Session") as MockSess:
             MockSess.return_value.post.return_value = resp
-            token = login(
+            result = login(
                 "https://192.168.1.1:8043", "cid123",
                 "admin", "secret", verify_ssl=False,
             )
-        assert token == "tok-abc"
+        assert isinstance(result, LoginResult)
+        assert result.token == "tok-abc"
+        assert result.session is not None
+        assert result.base_url == "https://192.168.1.1:8043"
 
     def test_raises_on_api_error(self) -> None:
         resp = _mock_response(
@@ -272,6 +276,29 @@ class TestLogin:
                     "https://192.168.1.1:8043", "cid123",
                     "admin", "pass", verify_ssl=False,
                 )
+
+    def test_session_has_csrf_and_auth_headers(self) -> None:
+        """login() must set both Csrf-Token and Authorization headers on the session."""
+        resp = _mock_response(
+            {"errorCode": 0, "result": {"token": "tok-v6"}}
+        )
+        with patch("omada.api.client.requests.Session") as MockSess:
+            mock_sess = MockSess.return_value
+            mock_sess.post.return_value = resp
+            result = login(
+                "https://192.168.1.1:8043", "cid123",
+                "admin", "secret", verify_ssl=False,
+            )
+        assert result.token == "tok-v6"
+        # Verify both auth headers were set
+        mock_sess.headers.update.assert_called()
+        update_args = mock_sess.headers.update.call_args_list
+        # Find the call that set Csrf-Token and Authorization
+        set_headers = {}
+        for call in update_args:
+            set_headers.update(call[0][0])
+        assert set_headers.get("Csrf-Token") == "tok-v6"
+        assert set_headers.get("Authorization") == "AccessToken=tok-v6"
 
 
 class TestDiscoverSiteId:
@@ -310,6 +337,69 @@ class TestDiscoverSiteId:
                 discover_site_id(
                     "https://192.168.1.1:8043", "cid123", "tok",
                     verify_ssl=False,
+                )
+
+    def test_site_name_selects_matching_site(self) -> None:
+        resp = _mock_response(
+            {
+                "errorCode": 0,
+                "result": {
+                    "data": [
+                        {"id": "s1", "name": "Office"},
+                        {"id": "s2", "name": "Home"},
+                    ],
+                },
+            }
+        )
+        with patch("omada.api.client.requests.Session") as MockSess:
+            MockSess.return_value.get.return_value = resp
+            sid = discover_site_id(
+                "https://192.168.1.1:8043", "cid123", "tok",
+                verify_ssl=False,
+                site_name="home",
+            )
+        assert sid == "s2"
+
+    def test_site_name_case_insensitive_and_stripped(self) -> None:
+        resp = _mock_response(
+            {
+                "errorCode": 0,
+                "result": {
+                    "data": [
+                        {"id": "s1", "name": "Office"},
+                        {"id": "s2", "name": "Home"},
+                    ],
+                },
+            }
+        )
+        with patch("omada.api.client.requests.Session") as MockSess:
+            MockSess.return_value.get.return_value = resp
+            sid = discover_site_id(
+                "https://192.168.1.1:8043", "cid123", "tok",
+                verify_ssl=False,
+                site_name="  OFFICE  ",
+            )
+        assert sid == "s1"
+
+    def test_site_name_no_match_raises(self) -> None:
+        resp = _mock_response(
+            {
+                "errorCode": 0,
+                "result": {
+                    "data": [
+                        {"id": "s1", "name": "Office"},
+                        {"id": "s2", "name": "Home"},
+                    ],
+                },
+            }
+        )
+        with patch("omada.api.client.requests.Session") as MockSess:
+            MockSess.return_value.get.return_value = resp
+            with pytest.raises(RuntimeError, match="No site named"):
+                discover_site_id(
+                    "https://192.168.1.1:8043", "cid123", "tok",
+                    verify_ssl=False,
+                    site_name="Warehouse",
                 )
 
     def test_no_sites_raises(self) -> None:

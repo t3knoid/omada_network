@@ -119,18 +119,22 @@ def create_app(output_dir: str | Path | None = None) -> Flask:
         _check_csrf()
         output_dir_ = current_app.config["OUTPUT_DIR"]
 
-        base_url = request.form.get("base_url", "")
+        controller_host = request.form.get("controller", "").strip()
+        port = request.form.get("port", "8043").strip() or "8043"
         controller_id = request.form.get("controller_id", "")
         token = request.form.get("token", "")
         site_id = request.form.get("site_id", "")
+        site_name = request.form.get("site_name", "").strip()
         username = request.form.get("username", "")
         password = request.form.get("password", "")
         verify_ssl = request.form.get("verify_ssl") == "on"
         auth_mode = request.form.get("auth_mode", "token")
 
-        if not base_url:
-            flash("Missing required field: base_url", "danger")
+        if not controller_host:
+            flash("Missing required field: Controller IP / Hostname", "danger")
             return redirect(url_for("index"))
+
+        base_url = f"https://{controller_host}:{port}"
 
         try:
             # Auto-discovery when using login mode
@@ -150,14 +154,21 @@ def create_app(output_dir: str | Path | None = None) -> Flask:
                         base_url, verify_ssl=verify_ssl
                     )
                 if not token:
-                    token = omada_login(
+                    login_result = omada_login(
                         base_url, controller_id, username, password,
                         verify_ssl=verify_ssl,
                     )
+                    token = login_result.token
+                    login_session = login_result.session
+                    base_url = login_result.base_url
+                else:
+                    login_session = None
                 if not site_id:
                     site_id = discover_site_id(
                         base_url, controller_id, token,
                         verify_ssl=verify_ssl,
+                        session=login_session,
+                        site_name=site_name,
                     )
             else:
                 missing = []
@@ -181,6 +192,11 @@ def create_app(output_dir: str | Path | None = None) -> Flask:
                 site_id=site_id,
                 output_dir=output_dir_,
                 verify_ssl=verify_ssl,
+                session=(
+                    login_session
+                    if auth_mode == "login" and username and password
+                    else None
+                ),
             )
             paths = service.run()
             doc_count = len(paths.get("docs", {}))

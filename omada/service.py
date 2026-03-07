@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import requests
 import yaml
 
 from omada.api.client import OmadaClient
@@ -56,11 +57,13 @@ class OmadaService:
         output_dir: str | Path = "docs",
         *,
         verify_ssl: bool = True,
+        session: requests.Session | None = None,
     ) -> None:
         self.site_id = site_id
         self.output_dir = Path(output_dir)
         self._client = OmadaClient(
-            base_url, controller_id, token, verify_ssl=verify_ssl
+            base_url, controller_id, token,
+            verify_ssl=verify_ssl, session=session,
         )
         self._yaml = YamlExporter(self.output_dir)
         self._md = MarkdownGenerator(self.output_dir)

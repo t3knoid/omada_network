@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -32,7 +32,7 @@ class TestFetchCommand:
                 cli,
                 [
                     "fetch",
-                    "--base-url", "https://192.168.1.1:8043",
+                    "--controller", "192.168.1.1",
                     "--controller-id", "abc123",
                     "--token", "mytoken",
                     "--site-id", "site001",
@@ -44,7 +44,7 @@ class TestFetchCommand:
     def test_fetch_reads_env_vars(self, runner: CliRunner, tmp_path: Path) -> None:
         mock_paths = {"yaml": {}, "docs": {}}
         env = {
-            "OMADA_BASE_URL": "https://192.168.1.1:8043",
+            "OMADA_CONTROLLER": "192.168.1.1",
             "OMADA_CONTROLLER_ID": "cid",
             "OMADA_TOKEN": "tok",
             "OMADA_SITE_ID": "sid",
@@ -63,16 +63,15 @@ class TestFetchCommand:
                 cli,
                 [
                     "fetch",
-                    "--base-url", "https://192.168.1.1:8043",
+                    "--controller", "192.168.1.1",
                     "--controller-id", "abc123",
                     "--token", "mytoken",
                     "--site-id", "site001",
                     "--output-dir", str(tmp_path),
-                    "--no-verify-ssl",
                 ],
             )
         assert result.exit_code == 0
-        # Verify the service was constructed with verify_ssl=False
+        # verify_ssl defaults to False (--verify-ssl flag not passed)
         _, kwargs = MockService.call_args
         assert kwargs.get("verify_ssl") is False
 
@@ -149,9 +148,13 @@ class TestFetchWithLogin:
     def test_login_auto_discovers_all(self, runner: CliRunner, tmp_path: Path) -> None:
         """--username/--password should auto-discover controller-id, token, site-id."""
         mock_paths = {"yaml": {}, "docs": {}}
+        mock_login_result = MagicMock()
+        mock_login_result.token = "tok"
+        mock_login_result.session = MagicMock()
+        mock_login_result.base_url = "https://192.168.1.1:8043"
         with (
             patch("omada.api.client.discover_controller_id", return_value="cid") as mock_cid,
-            patch("omada.api.client.login", return_value="tok") as mock_login,
+            patch("omada.api.client.login", return_value=mock_login_result) as mock_login,
             patch("omada.api.client.discover_site_id", return_value="sid") as mock_sid,
             patch("omada.service.OmadaService") as MockService,
         ):
@@ -160,7 +163,7 @@ class TestFetchWithLogin:
                 cli,
                 [
                     "fetch",
-                    "--base-url", "https://192.168.1.1:8043",
+                    "--controller", "192.168.1.1",
                     "--username", "admin",
                     "--password", "secret",
                     "--output-dir", str(tmp_path),
@@ -174,15 +177,19 @@ class TestFetchWithLogin:
     def test_login_env_vars(self, runner: CliRunner, tmp_path: Path) -> None:
         """OMADA_USERNAME and OMADA_PASSWORD env vars should work."""
         mock_paths = {"yaml": {}, "docs": {}}
+        mock_login_result = MagicMock()
+        mock_login_result.token = "tok"
+        mock_login_result.session = MagicMock()
+        mock_login_result.base_url = "https://192.168.1.1:8043"
         env = {
-            "OMADA_BASE_URL": "https://192.168.1.1:8043",
+            "OMADA_CONTROLLER": "192.168.1.1",
             "OMADA_USERNAME": "admin",
             "OMADA_PASSWORD": "secret",
             "OMADA_OUTPUT_DIR": str(tmp_path),
         }
         with (
             patch("omada.api.client.discover_controller_id", return_value="cid"),
-            patch("omada.api.client.login", return_value="tok"),
+            patch("omada.api.client.login", return_value=mock_login_result),
             patch("omada.api.client.discover_site_id", return_value="sid"),
             patch("omada.service.OmadaService") as MockService,
         ):
@@ -204,7 +211,7 @@ class TestFetchWithLogin:
                 cli,
                 [
                     "fetch",
-                    "--base-url", "https://192.168.1.1:8043",
+                    "--controller", "192.168.1.1",
                     "--username", "admin",
                     "--password", "secret",
                     "--controller-id", "explicit-cid",
@@ -222,7 +229,7 @@ class TestFetchWithLogin:
         """When no auth is provided, error should hint about --username/--password."""
         result = runner.invoke(
             cli,
-            ["fetch", "--base-url", "https://192.168.1.1:8043"],
+            ["fetch", "--controller", "192.168.1.1"],
         )
         assert result.exit_code != 0
         assert "username" in result.output.lower() or "username" in str(result.exception).lower()

@@ -41,12 +41,16 @@
           <form action="/run" method="POST" id="configForm">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="auth_mode" id="auth_mode" value="login">
-            <div class="mb-3">
-              <label class="form-label" for="base_url">Base API URL</label>
-              <input class="form-control" id="base_url" name="base_url"
-                     placeholder="https://192.168.1.1:8043" required>
-              <div class="form-text">
-                URL of your Omada SDN Controller, e.g. <code>https://192.168.1.1:8043</code>
+            <div class="row g-2 mb-3">
+              <div class="col-8">
+                <label class="form-label" for="controller">Controller IP / Hostname</label>
+                <input class="form-control" id="controller" name="controller"
+                       placeholder="192.168.1.1" required>
+              </div>
+              <div class="col-4">
+                <label class="form-label" for="port">Port</label>
+                <input class="form-control" id="port" name="port" type="number"
+                       value="8043" min="1" max="65535">
               </div>
             </div>
 
@@ -84,6 +88,11 @@
                   <input class="form-control" id="password" name="password" type="password"
                          placeholder="Password" autocomplete="current-password">
                 </div>
+                <div class="mb-3">
+                  <label class="form-label" for="site_name">Site Name</label>
+                  <input class="form-control" id="site_name" name="site_name"
+                         placeholder="e.g. Default (optional — required if multiple sites exist)">
+                </div>
                 <div class="form-text text-muted mb-3">
                   Controller ID, token, and site ID will be auto-discovered.
                 </div>
@@ -112,7 +121,7 @@
 
             <div class="mb-3 form-check">
               <input class="form-check-input" id="verify_ssl" name="verify_ssl"
-                     type="checkbox" checked>
+                     type="checkbox">
               <label class="form-check-label" for="verify_ssl">
                 Verify SSL certificate
               </label>
