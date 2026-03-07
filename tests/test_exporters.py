@@ -132,20 +132,19 @@ class TestMarkdownGenerator:
             {
                 "name": "LAN",
                 "purpose": "user",
-                "networkIp": "192.168.1.0",
-                "prefixLen": 24,
-                "vlanId": 1,
-                "dhcpEnable": True,
+                "gatewaySubnet": "192.168.1.1/24",
+                "vlan": 1,
+                "dhcpSettings": {"enable": True},
             }
         ]
         path = gen.generate("networks", data)
         content = path.read_text()
         assert "LAN" in content
-        assert "192.168.1.0" in content
+        assert "192.168.1.1/24" in content
 
     def test_generate_vlans(self, tmp_path: Path) -> None:
         gen = MarkdownGenerator(tmp_path)
-        data = [{"name": "IoT", "vlanId": 20, "networkIp": "10.20.0.0", "prefixLen": 24}]
+        data = [{"name": "IoT", "vlan": 20, "gatewaySubnet": "10.20.0.1/24"}]
         path = gen.generate("vlans", data)
         assert "20" in path.read_text()
 
@@ -164,7 +163,7 @@ class TestMarkdownGenerator:
                 "networkName": "LAN",
                 "ip": "192.168.1.50",
                 "mac": "aa:bb:cc:dd:ee:ff",
-                "name": "printer",
+                "clientName": "printer",
             }
         ]
         path = gen.generate("dhcp_reservations", data)

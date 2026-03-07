@@ -9,37 +9,24 @@ Environment variable mapping
 OMADA_CONTROLLER      → --controller
 OMADA_PORT            → --port  (default: 8043)
 OMADA_CONTROLLER_ID   → --controller-id
-OMADA_TOKEN           → --token
-OMADA_SITE_ID         → --site-id
-OMADA_USERNAME        → --username
-OMADA_PASSWORD        → --password
+OMADA_CLIENT_ID       → --client-id
+OMADA_CLIENT_SECRET   → --client-secret
+OMADA_USERNAME        → --username  (Authorization Code mode)
+OMADA_PASSWORD        → --password  (Authorization Code mode)
+OMADA_SITE_NAME       → --site-name
 OMADA_OUTPUT_DIR      → --output-dir
 OMADA_VERIFY_SSL      → --verify-ssl (set to 1/true/yes/on to enable)
 
-Usage examples
---------------
-# Username/password authentication (auto-discovers controller-id, token, site-id):
-python cli.py fetch --controller 192.168.1.1 \\
-              --username admin --password secret
+Authentication modes (both use the official Omada Open API)
+-----------------------------------------------------------
+Client Credentials Mode (default):
+  python cli.py fetch --controller 192.168.1.1 \\
+    --client-id MY_ID --client-secret MY_SECRET
 
-# Custom management port:
-python cli.py fetch --controller 192.168.1.1 --port 443 \\
-              --username admin --password secret
-
-# Passing options directly (token mode):
-python cli.py --controller 192.168.1.1 \\
-              --controller-id abc123 \\
-              --token mytoken \\
-              --site-id site001
-
-# Using environment variables (GitHub Actions):
-# OMADA_CONTROLLER=192.168.1.1 OMADA_CONTROLLER_ID=... python cli.py
-
-# Start the web server:
-# python cli.py serve
-
-# Regenerate Markdown from existing YAML (no API creds needed):
-# python cli.py generate --input-dir docs
+Authorization Code Mode (adds --username / --password):
+  python cli.py fetch --controller 192.168.1.1 \\
+    --client-id MY_ID --client-secret MY_SECRET \\
+    --username admin --password secret
 """
 
 from __future__ import annotations
@@ -72,158 +59,198 @@ def _env_bool(name: str) -> bool:
 
 
 @click.group(invoke_without_command=True)
+@click.option(
+    "-v", "--verbose",
+    is_flag=True,
+    default=False,
+    help="Enable verbose/debug logging.",
+)
 @click.pass_context
-def cli(ctx: click.Context) -> None:
+def cli(ctx: click.Context, verbose: bool) -> None:
     """Omada Network Documentation Generator.
 
     Run without a sub-command to fetch and generate docs (equivalent to
     running the ``fetch`` sub-command with default options).
     """
+    if verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
     if ctx.invoked_subcommand is None:
         ctx.invoke(fetch)
 
 
+# ---------------------------------------------------------------------------
+# Shared CLI options for Open API authentication
+# ---------------------------------------------------------------------------
+
+def _openapi_options(fn):
+    """Decorator that adds the common Open API CLI options."""
+    fn = click.option(
+        "--controller",
+        default=lambda: _env("OMADA_CONTROLLER"),
+        show_default="$OMADA_CONTROLLER",
+        help="IP address or hostname of the Omada controller.",
+    )(fn)
+    fn = click.option(
+        "--port",
+        default=lambda: _env("OMADA_PORT", "443"),
+        show_default="$OMADA_PORT (default: 443)",
+        type=click.IntRange(1, 65535),
+        help="Management / Open API port of the Omada controller.",
+    )(fn)
+    fn = click.option(
+        "--controller-id",
+        default=lambda: _env("OMADA_CONTROLLER_ID"),
+        show_default="$OMADA_CONTROLLER_ID",
+        help="Omada controller ID (omadacId). Auto-discovered from /api/info when omitted.",
+    )(fn)
+    fn = click.option(
+        "--client-id",
+        default=lambda: _env("OMADA_CLIENT_ID"),
+        show_default="$OMADA_CLIENT_ID",
+        help="Open API Client ID (required).",
+    )(fn)
+    fn = click.option(
+        "--client-secret",
+        default=lambda: _env("OMADA_CLIENT_SECRET"),
+        show_default="$OMADA_CLIENT_SECRET",
+        help="Open API Client Secret (required).",
+    )(fn)
+    fn = click.option(
+        "--username",
+        default=lambda: _env("OMADA_USERNAME"),
+        show_default="$OMADA_USERNAME",
+        help="Controller login username (enables Authorization Code mode).",
+    )(fn)
+    fn = click.option(
+        "--password",
+        envvar="OMADA_PASSWORD",
+        prompt=True,
+        hide_input=True,
+        prompt_required=False,
+        show_default=False,
+        help="Controller login password (Authorization Code mode).",
+    )(fn)
+    fn = click.option(
+        "--site-name",
+        default=lambda: _env("OMADA_SITE_NAME"),
+        show_default="$OMADA_SITE_NAME",
+        help="Site name to query (case-insensitive).",
+    )(fn)
+    fn = click.option(
+        "--verify-ssl",
+        is_flag=True,
+        default=lambda: _env_bool("OMADA_VERIFY_SSL"),
+        help="Enable TLS certificate verification (disabled by default).",
+    )(fn)
+    return fn
+
+
+def _build_client(
+    controller: str,
+    port: int,
+    controller_id: str,
+    client_id: str,
+    client_secret: str,
+    username: str,
+    password: str,
+    site_name: str,
+    verify_ssl: bool,
+):
+    """Shared helper: authenticate, discover site, return (client, site_id).
+
+    Raises :class:`click.UsageError` when required values are missing.
+    """
+    from omada.api.openapi_client import (
+        OmadaOpenApiClient,
+        discover_controller_id,
+        openapi_auth_code_login,
+        openapi_discover_site_id,
+        openapi_login,
+    )
+
+    if not controller:
+        raise click.UsageError("Missing required value: --controller / OMADA_CONTROLLER")
+    if not client_id or not client_secret:
+        raise click.UsageError(
+            "Missing required value(s): --client-id / OMADA_CLIENT_ID and "
+            "--client-secret / OMADA_CLIENT_SECRET"
+        )
+
+    base_url = f"https://{controller}:{port}"
+
+    if not controller_id:
+        controller_id = discover_controller_id(base_url, verify_ssl=verify_ssl)
+
+    # Choose auth mode
+    if username and password:
+        # Authorization Code Mode
+        login_result = openapi_auth_code_login(
+            base_url, controller_id, client_id, client_secret,
+            username, password,
+            verify_ssl=verify_ssl,
+        )
+    else:
+        # Client Credentials Mode
+        login_result = openapi_login(
+            base_url, controller_id, client_id, client_secret,
+            verify_ssl=verify_ssl,
+        )
+
+    site_id = openapi_discover_site_id(
+        login_result.base_url, controller_id, login_result.session,
+        site_name=site_name,
+    )
+
+    api_client = OmadaOpenApiClient(
+        login_result.base_url, controller_id, login_result.access_token,
+        verify_ssl=verify_ssl,
+        session=login_result.session,
+    )
+
+    return api_client, site_id, controller_id, login_result
+
+
 @cli.command()
-@click.option(
-    "--controller",
-    default=lambda: _env("OMADA_CONTROLLER"),
-    show_default="$OMADA_CONTROLLER",
-    help="IP address or hostname of the Omada controller, e.g. 192.168.1.1",
-)
-@click.option(
-    "--port",
-    default=lambda: _env("OMADA_PORT", "8043"),
-    show_default="$OMADA_PORT (default: 8043)",
-    type=click.IntRange(1, 65535),
-    help="Management port of the Omada controller.",
-)
-@click.option(
-    "--controller-id",
-    default=lambda: _env("OMADA_CONTROLLER_ID"),
-    show_default="$OMADA_CONTROLLER_ID",
-    help="Omada controller ID (omadacId). Auto-discovered when using --username/--password.",
-)
-@click.option(
-    "--token",
-    default=lambda: _env("OMADA_TOKEN"),
-    show_default="$OMADA_TOKEN",
-    help="Valid API access token. Auto-discovered when using --username/--password.",
-)
-@click.option(
-    "--site-id",
-    default=lambda: _env("OMADA_SITE_ID"),
-    show_default="$OMADA_SITE_ID",
-    help="Site ID to query. Auto-discovered when using --username/--password.",
-)
-@click.option(
-    "--site-name",
-    default=lambda: _env("OMADA_SITE_NAME"),
-    show_default="$OMADA_SITE_NAME",
-    help="Site name to query (case-insensitive). Used to select among multiple sites.",
-)
-@click.option(
-    "--username",
-    default=lambda: _env("OMADA_USERNAME"),
-    show_default="$OMADA_USERNAME",
-    help="Controller login username (enables auto-discovery of controller-id, token, and site-id).",
-)
-@click.option(
-    "--password",
-    envvar="OMADA_PASSWORD",
-    prompt=True,
-    hide_input=True,
-    prompt_required=False,
-    show_default=False,
-    help="Controller login password.",
-)
+@_openapi_options
 @click.option(
     "--output-dir",
     default=lambda: _env("OMADA_OUTPUT_DIR", "docs"),
     show_default="$OMADA_OUTPUT_DIR (default: docs)",
     help="Directory where YAML and Markdown files will be written.",
 )
-@click.option(
-    "--verify-ssl",
-    is_flag=True,
-    default=lambda: _env_bool("OMADA_VERIFY_SSL"),
-    help="Enable TLS certificate verification (disabled by default for self-signed certs).",
-)
 def fetch(
     controller: str,
     port: int,
     controller_id: str,
-    token: str,
-    site_id: str,
-    site_name: str,
+    client_id: str,
+    client_secret: str,
     username: str,
     password: str,
-    output_dir: str,
+    site_name: str,
     verify_ssl: bool,
+    output_dir: str,
 ) -> None:
     """Fetch network data from the controller and generate documentation."""
-    if not controller:
-        raise click.UsageError("Missing required value(s): --controller / OMADA_CONTROLLER")
+    api_client, site_id, controller_id, login_result = _build_client(
+        controller, port, controller_id,
+        client_id, client_secret,
+        username, password,
+        site_name, verify_ssl,
+    )
 
-    base_url = f"https://{controller}:{port}"
-
-    # --- Auto-discovery when username/password are provided ---
-    if username and password:
-        from omada.api.client import (
-            discover_controller_id,
-            discover_site_id,
-            login,
-        )
-
-        if not controller_id:
-            controller_id = discover_controller_id(
-                base_url, verify_ssl=verify_ssl
-            )
-        if not token:
-            login_result = login(
-                base_url, controller_id, username, password,
-                verify_ssl=verify_ssl,
-            )
-            token = login_result.token
-            login_session = login_result.session
-            base_url = login_result.base_url
-        else:
-            login_session = None
-        if not site_id:
-            site_id = discover_site_id(
-                base_url, controller_id, token, verify_ssl=verify_ssl,
-                session=login_session, site_name=site_name,
-            )
-
-    # --- Validate that we have everything we need ---
-    missing = []
-    if not controller_id:
-        missing.append("--controller-id / OMADA_CONTROLLER_ID")
-    if not token:
-        missing.append("--token / OMADA_TOKEN")
-    if not site_id:
-        missing.append("--site-id / OMADA_SITE_ID")
-    if missing:
-        raise click.UsageError(
-            "Missing required value(s): " + ", ".join(missing)
-            + "\n\nHint: provide --username and --password to auto-discover "
-            "controller-id, token, and site-id."
-        )
+    mode = "Authorization Code" if username and password else "Client Credentials"
 
     from omada.service import OmadaService
 
     service = OmadaService(
-        base_url=base_url,
-        controller_id=controller_id,
-        token=token,
+        client=api_client,
         site_id=site_id,
         output_dir=output_dir,
-        verify_ssl=verify_ssl,
-        session=login_session if username and password else None,
     )
 
     paths = service.run()
 
-    click.echo("\nGenerated files:")
+    click.echo(f"\nGenerated files ({mode} mode):")
     for category, file_map in paths.items():
         click.echo(f"  [{category.upper()}]")
         for name, path in sorted(file_map.items()):
@@ -287,6 +314,62 @@ def serve(host: str, port: int, debug: bool, output_dir: str) -> None:
     application = create_app(output_dir=output_dir)
     click.echo(f"Starting web UI on http://{host}:{port}  (output: {output_dir})")
     application.run(host=host, port=port, debug=debug)
+
+
+@cli.command()
+@_openapi_options
+def diagnose(
+    controller: str,
+    port: int,
+    controller_id: str,
+    client_id: str,
+    client_secret: str,
+    username: str,
+    password: str,
+    site_name: str,
+    verify_ssl: bool,
+) -> None:
+    """Probe each API endpoint and report raw response structures.
+
+    Use this command to debug missing or empty settings. It shows exactly
+    what the controller returns for each resource endpoint.
+    """
+    api_client, site_id, controller_id, login_result = _build_client(
+        controller, port, controller_id,
+        client_id, client_secret,
+        username, password,
+        site_name, verify_ssl,
+    )
+
+    mode = "Authorization Code" if username and password else "Client Credentials"
+
+    from omada.registry import RESOURCES
+
+    click.echo(f"\n{'='*60}")
+    click.echo(f"Diagnosing controller ({mode} mode): {login_result.base_url}")
+    click.echo(f"Controller ID: {controller_id}")
+    click.echo(f"Site ID: {site_id}")
+    click.echo(f"{'='*60}\n")
+
+    for defn in RESOURCES:
+        click.echo(f"--- {defn.title} ({defn.name}) ---")
+        click.echo(f"  Method: {defn.fetch_method}")
+        try:
+            fetcher = getattr(api_client, defn.fetch_method)
+            data = fetcher(site_id)
+            if isinstance(data, list):
+                click.echo(f"  Result: {len(data)} record(s)")
+                if data and isinstance(data[0], dict):
+                    click.echo(f"    First record keys: {list(data[0].keys())}")
+            elif isinstance(data, dict):
+                click.echo(f"  Result: dict with keys {list(data.keys())}")
+            else:
+                click.echo(f"  Result: {type(data).__name__}")
+        except Exception as exc:
+            click.echo(f"  ✗ Error: {exc}")
+        click.echo()
+
+    click.echo("Diagnosis complete.")
 
 
 if __name__ == "__main__":

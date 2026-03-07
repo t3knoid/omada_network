@@ -58,14 +58,14 @@ class TestRegistry:
 class TestRowFormatters:
     def test_acl_rule_rows(self) -> None:
         from omada.registry import _acl_rule_rows
-        rows = _acl_rule_rows([{"name": "rule1", "policy": "accept", "status": True}])
-        assert rows[0]["Name"] == "rule1"
-        assert rows[0]["Policy"] == "accept"
+        rows = _acl_rule_rows([{"description": "rule1", "policy": 1, "status": True}])
+        assert rows[0]["Description"] == "rule1"
+        assert rows[0]["Policy"] == "Permit"
         assert rows[0]["Status"] == "Enabled"
 
     def test_ip_group_rows(self) -> None:
         from omada.registry import _ip_group_rows
-        rows = _ip_group_rows([{"name": "g1", "ipList": ["10.0.0.0/8"]}])
+        rows = _ip_group_rows([{"name": "g1", "ipList": [{"ip": "10.0.0.0", "mask": "8"}]}])
         assert rows[0]["Name"] == "g1"
         assert "10.0.0.0/8" in rows[0]["IPs / Subnets"]
 
@@ -88,7 +88,7 @@ class TestRowFormatters:
     def test_dhcp_reservation_rows(self) -> None:
         from omada.registry import _dhcp_reservation_rows
         rows = _dhcp_reservation_rows(
-            [{"ip": "192.168.1.100", "mac": "aa:bb:cc:dd:ee:ff", "name": "laptop"}]
+            [{"ip": "192.168.1.100", "mac": "aa:bb:cc:dd:ee:ff", "clientName": "laptop"}]
         )
         assert rows[0]["IP Address"] == "192.168.1.100"
         assert rows[0]["Hostname"] == "laptop"
@@ -101,7 +101,7 @@ class TestGenerateFromYaml:
     def test_generates_markdown_from_yaml_files(self, tmp_path: Path) -> None:
         self._write_yaml(
             tmp_path / "acl_rules.yaml",
-            [{"name": "rule1", "policy": "accept"}],
+            [{"description": "rule1", "policy": 1}],
         )
         self._write_yaml(
             tmp_path / "ip_groups.yaml",

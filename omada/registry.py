@@ -42,22 +42,82 @@ class ResourceDefinition:
 # Row-formatter functions
 # ---------------------------------------------------------------------------
 
+_PROTO_MAP: dict[int, str] = {
+    1: "ICMP", 6: "TCP", 17: "UDP", 256: "All",
+}
+
+_POLICY_MAP: dict[int, str] = {0: "Deny", 1: "Permit"}
+
+_SOURCE_TYPE_MAP: dict[int, str] = {0: "Network", 1: "IP Group", 2: "IP-Port Group"}
+
+_PROFILE_TYPE_MAP: dict[int, str] = {0: "Trunk", 1: "Disabled", 2: "Access"}
+
+_PROTO_TYPE_MAP: dict[int, str] = {1: "DHCP", 2: "Static", 3: "PPPoE"}
+
+
+def _flatten(value: Any) -> str:
+    """Convert a value to a display string, handling dicts and lists."""
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        return value.get("name", value.get("ip", str(value)))
+    if isinstance(value, list):
+        return ", ".join(_flatten(v) for v in value)
+    return str(value)
+
+
+def _format_ip_entry(entry: Any) -> str:
+    """Format an ipList entry (dict with ip/mask/description or plain str)."""
+    if isinstance(entry, dict):
+        ip = entry.get("ip", "")
+        mask = entry.get("mask", "")
+        if mask and int(mask) != 32:
+            return f"{ip}/{mask}"
+        return ip
+    return str(entry)
+
+
+def _format_protocols(protocols: Any) -> str:
+    """Convert a list of protocol numbers to readable names."""
+    if isinstance(protocols, list):
+        return ", ".join(_PROTO_MAP.get(p, str(p)) for p in protocols)
+    if isinstance(protocols, (int, str)):
+        v = int(protocols) if isinstance(protocols, str) and protocols.isdigit() else protocols
+        return _PROTO_MAP.get(v, str(v)) if isinstance(v, int) else str(v)
+    return ""
+
+
+def _parse_subnet(gw_subnet: str) -> tuple[str, str]:
+    """Split 'x.x.x.x/prefix' into (subnet, prefix_len)."""
+    if "/" in str(gw_subnet):
+        parts = str(gw_subnet).split("/", 1)
+        return parts[0], parts[1]
+    return str(gw_subnet), ""
+
+
 def _acl_rule_rows(data: Any) -> list[dict[str, Any]]:
     items = data if isinstance(data, list) else []
-    return [
-        {
-            "Name": r.get("name", ""),
+    rows = []
+    for r in items:
+        policy_raw = r.get("policy", "")
+        policy = _POLICY_MAP.get(policy_raw, policy_raw) if isinstance(policy_raw, int) else policy_raw
+
+        src_type_raw = r.get("sourceType", r.get("srcType", ""))
+        src_type = _SOURCE_TYPE_MAP.get(src_type_raw, src_type_raw) if isinstance(src_type_raw, int) else src_type_raw
+
+        dst_type_raw = r.get("destinationType", r.get("dstType", ""))
+        dst_type = _SOURCE_TYPE_MAP.get(dst_type_raw, dst_type_raw) if isinstance(dst_type_raw, int) else dst_type_raw
+
+        rows.append({
+            "Description": r.get("description", r.get("name", "")),
             "Status": "Enabled" if r.get("status", True) else "Disabled",
-            "Policy": r.get("policy", ""),
-            "Protocol": r.get("protocol", ""),
-            "Source Type": r.get("srcType", ""),
-            "Source": r.get("srcIp", r.get("srcIpGroup", "")),
-            "Destination Type": r.get("dstType", ""),
-            "Destination": r.get("dstIp", r.get("dstIpGroup", "")),
-            "Port": r.get("dstPort", ""),
-        }
-        for r in items
-    ]
+            "Policy": policy,
+            "Protocols": _format_protocols(r.get("protocols", r.get("protocol", ""))),
+            "Source Type": src_type,
+            "Destination Type": dst_type,
+            "ACL Type": r.get("aclType", ""),
+        })
+    return rows
 
 
 def _ip_group_rows(data: Any) -> list[dict[str, Any]]:
@@ -65,8 +125,9 @@ def _ip_group_rows(data: Any) -> list[dict[str, Any]]:
     return [
         {
             "Name": g.get("name", ""),
-            "Type": g.get("type", ""),
-            "IPs / Subnets": ", ".join(g.get("ipList", [])),
+            "IPs / Subnets": ", ".join(
+                _format_ip_entry(ip) for ip in g.get("ipList", [])
+            ),
         }
         for g in items
     ]
@@ -85,18 +146,28 @@ def _port_group_rows(data: Any) -> list[dict[str, Any]]:
 
 def _network_rows(data: Any) -> list[dict[str, Any]]:
     items = data if isinstance(data, list) else []
-    return [
-        {
+    rows = []
+    for n in items:
+        gw = n.get("gatewaySubnet", "")
+        subnet, prefix = _parse_subnet(gw) if gw else ("", "")
+        # Fall back to networkIp / prefixLen if present
+        if not subnet:
+            subnet = n.get("networkIp", "")
+            prefix = n.get("prefixLen", "")
+        dhcp_settings = n.get("dhcpSettings")
+        dhcp_enabled = False
+        if isinstance(dhcp_settings, dict):
+            dhcp_enabled = dhcp_settings.get("enable", False)
+        else:
+            dhcp_enabled = n.get("dhcpEnable", False)
+        rows.append({
             "Name": n.get("name", ""),
             "Purpose": n.get("purpose", ""),
-            "Subnet": n.get("networkIp", ""),
-            "Prefix Length": n.get("prefixLen", ""),
-            "VLAN ID": n.get("vlanId", ""),
-            "DHCP": "Enabled" if n.get("dhcpEnable") else "Disabled",
-            "Domain Name": n.get("domainName", ""),
-        }
-        for n in items
-    ]
+            "Gateway / Subnet": n.get("gatewaySubnet", ""),
+            "VLAN ID": n.get("vlan", n.get("vlanId", "")),
+            "DHCP": "Enabled" if dhcp_enabled else "Disabled",
+        })
+    return rows
 
 
 def _vlan_rows(data: Any) -> list[dict[str, Any]]:
@@ -104,9 +175,8 @@ def _vlan_rows(data: Any) -> list[dict[str, Any]]:
     return [
         {
             "Name": n.get("name", ""),
-            "VLAN ID": n.get("vlanId", ""),
-            "Subnet": n.get("networkIp", ""),
-            "Prefix Length": n.get("prefixLen", ""),
+            "VLAN ID": n.get("vlan", n.get("vlanId", "")),
+            "Gateway / Subnet": n.get("gatewaySubnet", ""),
             "Purpose": n.get("purpose", ""),
         }
         for n in items
@@ -115,20 +185,30 @@ def _vlan_rows(data: Any) -> list[dict[str, Any]]:
 
 def _switch_port_profile_rows(data: Any) -> list[dict[str, Any]]:
     items = data if isinstance(data, list) else []
-    return [
-        {
+    rows = []
+    for p in items:
+        type_raw = p.get("type", "")
+        profile_type = _PROFILE_TYPE_MAP.get(type_raw, type_raw) if isinstance(type_raw, int) else type_raw
+
+        poe_raw = p.get("poe", p.get("poeEnable", ""))
+        if isinstance(poe_raw, bool):
+            poe = "Enabled" if poe_raw else "Disabled"
+        elif isinstance(poe_raw, int):
+            poe = {0: "Disabled", 1: "Enabled", 2: "Use Device Setting"}.get(poe_raw, str(poe_raw))
+        else:
+            poe = str(poe_raw)
+
+        tagged = p.get("tagNetworkIds", p.get("taggedNetworkIds",
+                 p.get("taggedVlans", [])))
+
+        rows.append({
             "Name": p.get("name", ""),
-            "Type": p.get("type", ""),
-            "Native VLAN": p.get("nativeNetworkId", p.get("nativeVlan", "")),
-            "Tagged VLANs": ", ".join(
-                str(v)
-                for v in p.get("taggedNetworkIds", p.get("taggedVlans", []))
-            ),
-            "Speed / Duplex": p.get("speed", ""),
-            "PoE": "Enabled" if p.get("poeEnable") else "Disabled",
-        }
-        for p in items
-    ]
+            "Type": profile_type,
+            "Spanning Tree": "Enabled" if p.get("spanningTreeEnable") else "Disabled",
+            "Loopback Detect": "Enabled" if p.get("loopbackDetectEnable") else "Disabled",
+            "PoE": poe,
+        })
+    return rows
 
 
 def _gateway_rows(data: Any) -> list[dict[str, Any]]:
@@ -139,21 +219,40 @@ def _gateway_rows(data: Any) -> list[dict[str, Any]]:
     else:
         items = []
 
-    rows = [
-        {
-            "WAN Mode": r.get("wanMode", ""),
-            "WAN1 IP": r.get("wan1Ip", ""),
-            "WAN1 Type": r.get("wan1Type", ""),
-            "WAN2 IP": r.get("wan2Ip", ""),
-            "WAN2 Type": r.get("wan2Type", ""),
-            "Load Balancing": "Enabled" if r.get("loadBalance") else "Disabled",
-        }
-        for r in items
-        if isinstance(r, dict)
-    ]
-    # Fall back to raw rows if all extracted fields are empty
-    if rows and all(not any(v for v in row.values()) for row in rows):
-        rows = [r for r in items if isinstance(r, dict)]
+    # If the data is in the Open API format with wanPortsConfig
+    if items and isinstance(items[0], dict) and "wanPortsConfig" not in items[0]:
+        # Legacy flat format
+        return [
+            {
+                "WAN Mode": r.get("wanMode", ""),
+                "WAN1 IP": r.get("wan1Ip", ""),
+                "WAN1 Type": r.get("wan1Type", ""),
+                "WAN2 IP": r.get("wan2Ip", ""),
+                "WAN2 Type": r.get("wan2Type", ""),
+                "Load Balancing": "Enabled" if r.get("loadBalance") else "Disabled",
+            }
+            for r in items
+            if isinstance(r, dict)
+        ]
+
+    # Open API format — extract WAN port details
+    rows = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        wan_ports = item.get("wanPortsConfig", [])
+        for wp in wan_ports:
+            port_name = wp.get("portName", "")
+            ipv4 = wp.get("wanPortIpv4Setting", {})
+            proto_type = ipv4.get("protoType", "")
+            proto = _PROTO_TYPE_MAP.get(proto_type, proto_type) if isinstance(proto_type, int) else proto_type
+            mac_setting = wp.get("wanPortMacSetting", {})
+            rows.append({
+                "Port": port_name,
+                "Type": proto,
+                "MAC": mac_setting.get("mac", ""),
+                "IPv6": "Enabled" if wp.get("wanPortIpv6Setting", {}).get("enable") else "Disabled",
+            })
     return rows
 
 
@@ -166,7 +265,7 @@ def _ssid_rows(data: Any) -> list[dict[str, Any]]:
             "Security": s.get("security", ""),
             "Band": s.get("band", ""),
             "Status": "Enabled" if s.get("enable", True) else "Disabled",
-            "VLAN": s.get("vlanId", ""),
+            "VLAN": s.get("vlanId", s.get("vlan", "")),
             "Hidden": "Yes" if s.get("hide") else "No",
         }
         for s in items
@@ -177,10 +276,10 @@ def _dhcp_reservation_rows(data: Any) -> list[dict[str, Any]]:
     items = data if isinstance(data, list) else []
     return [
         {
-            "Network": r.get("networkName", ""),
+            "Network": r.get("networkName", r.get("lanNetworkName", "")),
             "IP Address": r.get("ip", r.get("ipAddress", "")),
             "MAC Address": r.get("mac", r.get("macAddress", "")),
-            "Hostname": r.get("name", r.get("hostname", "")),
+            "Hostname": r.get("clientName", r.get("name", r.get("hostname", ""))),
             "Description": r.get("description", ""),
         }
         for r in items
@@ -197,7 +296,7 @@ RESOURCES: list[ResourceDefinition] = [
         title="ACL Rules",
         fetch_method="get_acl_rules",
         row_formatter=_acl_rule_rows,
-        sort_key="Name",
+        sort_key="Description",
     ),
     ResourceDefinition(
         name="ip_groups",
