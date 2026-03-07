@@ -20,9 +20,9 @@ Markdown documentation tables.
 
 ---
 
-## Web UI
+## Web Front End
 
-![Omada Network Documentation Generator web UI](https://github.com/user-attachments/assets/0b9f3db7-2231-4c28-bfbd-6865afa39d9f)
+![Web UI](image.png)
 
 ---
 
@@ -343,4 +343,3 @@ No other files need to be modified.
 ## License
 
 MIT
-
