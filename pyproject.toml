@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omada-network"
+version = "1.0.0"
+description = "Omada SDN Network Documentation Generator"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31.0",
+    "PyYAML>=6.0.1",
+    "Flask>=3.0.0",
+    "click>=8.1.7",
+    "Markdown>=3.6",
+    "markupsafe>=2.1.5",
+    "urllib3>=2.0.0",
+]
+
+[project.scripts]
+omada-docs = "cli:cli"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-mock>=3.12.0",
+    "flake8>=7.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["omada*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = [
+    # Tests intentionally use verify_ssl=False; suppress the expected warning.
+    "ignore::urllib3.exceptions.InsecureRequestWarning",
+]
