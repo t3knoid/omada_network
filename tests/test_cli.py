@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from cli import cli
+from cli import _env_bool, cli
 
 
 @pytest.fixture()
@@ -74,6 +74,24 @@ class TestFetchCommand:
         # verify_ssl defaults to False (--verify-ssl flag not passed)
         _, kwargs = MockService.call_args
         assert kwargs.get("verify_ssl") is False
+
+
+class TestEnvBool:
+    """Verify _env_bool parses boolean environment variables correctly."""
+
+    @pytest.mark.parametrize("value", ["1", "true", "True", "TRUE", "yes", "Yes", "on", "ON"])
+    def test_truthy_values(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("TEST_FLAG", value)
+        assert _env_bool("TEST_FLAG") is True
+
+    @pytest.mark.parametrize("value", ["0", "false", "False", "no", "off", "", "random"])
+    def test_falsy_values(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("TEST_FLAG", value)
+        assert _env_bool("TEST_FLAG") is False
+
+    def test_unset_is_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("TEST_FLAG", raising=False)
+        assert _env_bool("TEST_FLAG") is False
 
 
 class TestGenerateCommand:

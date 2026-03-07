@@ -14,7 +14,7 @@ OMADA_SITE_ID         → --site-id
 OMADA_USERNAME        → --username
 OMADA_PASSWORD        → --password
 OMADA_OUTPUT_DIR      → --output-dir
-OMADA_VERIFY_SSL      → --verify-ssl (set to any non-empty value to enable)
+OMADA_VERIFY_SSL      → --verify-ssl (set to 1/true/yes/on to enable)
 
 Usage examples
 --------------
@@ -60,6 +60,15 @@ logger = logging.getLogger(__name__)
 
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
+
+
+def _env_bool(name: str) -> bool:
+    """Parse a boolean environment variable (case-insensitive).
+
+    Truthy values: ``1``, ``true``, ``yes``, ``on``.
+    Everything else (including empty / unset) is ``False``.
+    """
+    return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
 
 
 @click.group(invoke_without_command=True)
@@ -133,7 +142,7 @@ def cli(ctx: click.Context) -> None:
 @click.option(
     "--verify-ssl",
     is_flag=True,
-    default=lambda: bool(_env("OMADA_VERIFY_SSL")),
+    default=lambda: _env_bool("OMADA_VERIFY_SSL"),
     help="Enable TLS certificate verification (disabled by default for self-signed certs).",
 )
 def fetch(
