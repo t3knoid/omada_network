@@ -121,9 +121,10 @@
 
             <div class="mb-3 form-check">
               <input class="form-check-input" id="verify_ssl" name="verify_ssl"
-                     type="checkbox">
+                     type="checkbox" checked>
               <label class="form-check-label" for="verify_ssl">
-                Verify SSL certificate
+                Verify SSL certificate (recommended; disabling may expose you to MITM attacks,
+                only skip for trusted self-signed controllers)
               </label>
             </div>
             <button class="btn btn-primary w-100" type="submit">
