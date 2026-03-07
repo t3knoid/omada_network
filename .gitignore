@@ -18,10 +18,6 @@ env/
 .coverage
 htmlcov/
 
-# Generated output (keep the docs/ dir tracked if desired; remove this line)
-docs/*.yaml
-docs/*.md
-
 # IDE
 .vscode/
 .idea/

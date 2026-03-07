@@ -84,6 +84,22 @@ class TestOmadaClientGet:
             items = client._get_paged("sites/s1/setting/networks")
         assert items == [{"id": "1"}]
 
+    def test_get_paged_stops_at_max_pages(self, client: OmadaClient) -> None:
+        """A lying API that never reports completion must stop at max_pages."""
+        # Each response claims totalRows=9999 but only returns 1 item
+        infinite_page = {
+            "errorCode": 0,
+            "result": {"data": [{"id": "x"}], "totalRows": 9999},
+        }
+        with patch.object(
+            client._session, "get", return_value=_mock_response(infinite_page)
+        ):
+            items = client._get_paged(
+                "sites/s1/setting/networks", page_size=1, max_pages=3
+            )
+        # Should have stopped after 3 pages (3 items) instead of looping forever
+        assert len(items) == 3
+
 
 class TestOmadaClientResourceMethods:
     def _patch_paged(self, client: OmadaClient, return_value: list):

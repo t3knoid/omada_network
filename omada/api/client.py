@@ -98,12 +98,20 @@ class OmadaClient:
         return body.get("result", body)
 
     def _get_paged(
-        self, path: str, *, page_size: int = 100
+        self, path: str, *, page_size: int = 100, max_pages: int = 200
     ) -> list[dict[str, Any]]:
-        """Fetch all pages for a paginated endpoint and return a flat list."""
+        """Fetch all pages for a paginated endpoint and return a flat list.
+
+        Parameters
+        ----------
+        page_size:
+            Number of records to request per API call.
+        max_pages:
+            Hard upper bound on the number of pages fetched.  Prevents an
+            infinite loop when the API returns inconsistent ``totalRows``.
+        """
         items: list[dict[str, Any]] = []
-        page = 1
-        while True:
+        for page in range(1, max_pages + 1):
             params = {"currentPage": page, "currentPageSize": page_size}
             result = self._get(path, params=params)
             # Result may be a list directly or wrapped in a dict with "data"
@@ -115,7 +123,14 @@ class OmadaClient:
             total_rows = result.get("totalRows", len(items))
             if len(items) >= total_rows:
                 break
-            page += 1
+        else:
+            logger.warning(
+                "Pagination reached max_pages=%d for %s; %d record(s) collected. "
+                "The API may be returning inconsistent totalRows.",
+                max_pages,
+                path,
+                len(items),
+            )
         return items
 
     # ------------------------------------------------------------------

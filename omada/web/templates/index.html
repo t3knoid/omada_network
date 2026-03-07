@@ -39,6 +39,7 @@
         <div class="card-header bg-white fw-semibold">Controller Configuration</div>
         <div class="card-body">
           <form action="/run" method="POST">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <div class="mb-3">
               <label class="form-label" for="base_url">Base API URL</label>
               <input class="form-control" id="base_url" name="base_url"
@@ -112,6 +113,7 @@
             Regenerate the Markdown tables without connecting to the controller.
           </p>
           <form action="/regenerate" method="POST" class="mb-0">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <button class="btn btn-outline-primary" type="submit">
               🔄 Regenerate Markdown from YAML
             </button>

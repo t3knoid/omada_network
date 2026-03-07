@@ -200,13 +200,9 @@ def generate(input_dir: str, output_dir: str | None) -> None:
 )
 def serve(host: str, port: int, debug: bool, output_dir: str) -> None:
     """Start the web UI server."""
-    import os as _os
-
-    _os.environ["OUTPUT_DIR"] = output_dir
-
     from omada.web.app import create_app
 
-    application = create_app()
+    application = create_app(output_dir=output_dir)
     click.echo(f"Starting web UI on http://{host}:{port}  (output: {output_dir})")
     application.run(host=host, port=port, debug=debug)
 

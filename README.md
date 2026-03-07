@@ -22,7 +22,7 @@ Markdown documentation tables.
 
 ## Web UI
 
-![Omada Network Documentation Generator web UI](https://github.com/user-attachments/assets/f335c7f5-22a1-45f6-a2d5-399e70508427)
+![Omada Network Documentation Generator web UI](https://github.com/user-attachments/assets/0b9f3db7-2231-4c28-bfbd-6865afa39d9f)
 
 ---
 
@@ -32,18 +32,19 @@ Markdown documentation tables.
 omada_network/
 ├── omada/
 │   ├── api/
-│   │   └── client.py          # Omada SDN HTTP client
+│   │   └── client.py              # Omada SDN HTTP client
 │   ├── exporters/
-│   │   ├── yaml_exporter.py   # Writes resources to YAML files
+│   │   ├── yaml_exporter.py       # Writes resources to YAML files
 │   │   └── markdown_generator.py  # Generates Markdown documentation
 │   ├── web/
-│   │   ├── app.py             # Flask web application
+│   │   ├── app.py                 # Flask application factory
 │   │   └── templates/
-│   │       ├── index.html     # Main configuration form
-│   │       └── doc_view.html  # Document viewer
-│   └── service.py             # Orchestration service layer
-├── cli.py                     # Click CLI entry-point
-├── tests/                     # pytest test suite
+│   │       ├── index.html         # Main configuration form
+│   │       └── doc_view.html      # Document viewer
+│   ├── registry.py                # Resource registry (single place to add a resource)
+│   └── service.py                 # Orchestration service layer
+├── cli.py                         # Click CLI entry-point
+├── tests/                         # pytest test suite
 ├── requirements.txt
 ├── requirements-dev.txt
 └── pyproject.toml
@@ -102,6 +103,8 @@ variable.
 
 ## CLI Usage
 
+### `fetch` — pull from the controller and generate docs
+
 ```bash
 # Fetch and generate documentation with explicit options
 python cli.py fetch \
@@ -120,9 +123,26 @@ python cli.py fetch
 
 # Self-signed certificate (skip SSL verification)
 python cli.py fetch --no-verify-ssl ...
+```
 
-# Start the web server
+### `generate` — regenerate Markdown from existing YAML (no API credentials)
+
+```bash
+# Regenerate all Markdown files from the YAML source-of-truth in docs/
+python cli.py generate --input-dir docs
+
+# Write Markdown to a different directory
+python cli.py generate --input-dir docs --output-dir site/docs
+
+# Via environment variable
+OMADA_OUTPUT_DIR=docs python cli.py generate
+```
+
+### `serve` — start the web server
+
+```bash
 python cli.py serve --host 0.0.0.0 --port 5000
+# Open http://127.0.0.1:5000 in your browser
 ```
 
 ---
@@ -134,7 +154,12 @@ python cli.py serve
 # Open http://127.0.0.1:5000 in your browser
 ```
 
-Fill in the configuration form and click **⚡ Fetch & Generate Documentation**.
+Fill in the configuration form and click **⚡ Fetch & Generate Documentation** to
+pull data from the controller and create YAML + Markdown files.
+
+To regenerate the Markdown tables from existing YAML files without connecting
+to the controller, click **🔄 Regenerate Markdown from YAML**.
+
 Generated Markdown files appear in the **Generated Documents** panel and can
 be viewed directly in the browser.
 
@@ -157,6 +182,8 @@ on:
 jobs:
   generate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -218,7 +245,7 @@ docs/
 ```markdown
 # DHCP Reservations
 
-| Network | Ip Address | Mac Address | Hostname | Description |
+| Network | IP Address | MAC Address | Hostname | Description |
 | --- | --- | --- | --- | --- |
 | LAN | 192.168.1.50 | aa:bb:cc:dd:ee:ff | printer | Office printer |
 ```
@@ -241,15 +268,26 @@ python -m pytest tests/test_client.py -v
 CLI / Web UI
      │
      ▼
-OmadaService          ← orchestrates everything
+OmadaService              ← orchestrates everything
      │
-     ├─► OmadaClient  ← HTTP calls to the controller API
-     ├─► YamlExporter ← writes *.yaml source-of-truth files
+     ├─► OmadaClient      ← HTTP calls to the controller API
+     ├─► YamlExporter     ← writes *.yaml source-of-truth files
      └─► MarkdownGenerator ← renders *.md documentation tables
+              │
+              └─► Registry (registry.py)
+                       └─ ResourceDefinition per resource type
+                          (title, fetch_method, row_formatter, sort_key)
 ```
+
+Adding a new resource type only requires:
+1. A new `get_*` method on `OmadaClient`
+2. A new `ResourceDefinition` entry in `omada/registry.py`
+
+No other files need to be modified.
 
 ---
 
 ## License
 
 MIT
+

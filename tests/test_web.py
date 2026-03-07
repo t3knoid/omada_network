@@ -12,15 +12,11 @@ from omada.web.app import create_app
 
 @pytest.fixture()
 def app_client(tmp_path: Path):
-    app = create_app()
-    app.config["TESTING"] = True
-    # Point the app at a temp dir
-    import omada.web.app as web_app
-    original = web_app.OUTPUT_DIR
-    web_app.OUTPUT_DIR = tmp_path
+    """Test client backed by a fresh app instance with output_dir=tmp_path."""
+    app = create_app(output_dir=tmp_path)
+    app.config["TESTING"] = True  # also disables CSRF check
     with app.test_client() as client:
         yield client
-    web_app.OUTPUT_DIR = original
 
 
 class TestIndexRoute:
@@ -36,6 +32,11 @@ class TestIndexRoute:
         assert "token" in html
         assert "site_id" in html
 
+    def test_index_contains_csrf_token_field(self, app_client) -> None:
+        resp = app_client.get("/")
+        html = resp.data.decode()
+        assert "_csrf_token" in html
+
 
 class TestRunRoute:
     def test_run_missing_fields_flashes_error(self, app_client) -> None:
@@ -48,9 +49,6 @@ class TestRunRoute:
         assert b"Missing required fields" in resp.data
 
     def test_run_success_flashes_message(self, app_client, tmp_path: Path) -> None:
-        import omada.web.app as web_app
-        web_app.OUTPUT_DIR = tmp_path
-
         form_data = {
             "base_url": "https://192.168.1.1:8043",
             "controller_id": "abc123",
@@ -82,48 +80,71 @@ class TestRunRoute:
             resp = app_client.post("/run", data=form_data, follow_redirects=True)
         assert b"Error" in resp.data
 
+    def test_run_csrf_enforced_outside_testing(self, tmp_path: Path) -> None:
+        """Without TESTING=True a POST without _csrf_token must return 400."""
+        app = create_app(output_dir=tmp_path)
+        app.config["TESTING"] = False
+        # Use a fixed secret key so sessions work deterministically
+        app.secret_key = "test-secret"
+        with app.test_client() as client:
+            resp = client.post(
+                "/run",
+                data={
+                    "base_url": "https://192.168.1.1:8043",
+                    "controller_id": "abc123",
+                    "token": "mytoken",
+                    "site_id": "site001",
+                },
+            )
+        assert resp.status_code == 400
+
 
 class TestRegenerateRoute:
     def test_regenerate_no_yaml_files_flashes_warning(
-        self, app_client, tmp_path: Path
+        self, app_client
     ) -> None:
-        import omada.web.app as web_app
-        web_app.OUTPUT_DIR = tmp_path  # empty dir, no yaml files
-
+        # app_client already points to tmp_path which is empty
         resp = app_client.post("/regenerate", follow_redirects=True)
         assert resp.status_code == 200
         assert b"No *.yaml files found" in resp.data
 
-    def test_regenerate_with_yaml_files(self, app_client, tmp_path: Path) -> None:
+    def test_regenerate_with_yaml_files(self, tmp_path: Path) -> None:
         import yaml
-        import omada.web.app as web_app
-        web_app.OUTPUT_DIR = tmp_path
 
         (tmp_path / "acl_rules.yaml").write_text(
             yaml.dump([{"name": "r1"}]), encoding="utf-8"
         )
 
-        resp = app_client.post("/regenerate", follow_redirects=True)
+        app = create_app(output_dir=tmp_path)
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            resp = client.post("/regenerate", follow_redirects=True)
+
         assert resp.status_code == 200
         assert b"Regenerated" in resp.data
         assert (tmp_path / "acl_rules.md").exists()
 
     def test_regenerate_missing_output_dir_flashes_warning(
-        self, app_client, tmp_path: Path
+        self, tmp_path: Path
     ) -> None:
-        import omada.web.app as web_app
-        web_app.OUTPUT_DIR = tmp_path / "nonexistent"
-
-        resp = app_client.post("/regenerate", follow_redirects=True)
+        app = create_app(output_dir=tmp_path / "nonexistent")
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            resp = client.post("/regenerate", follow_redirects=True)
         assert resp.status_code == 200
         assert b"does not exist" in resp.data
 
+    def test_regenerate_csrf_enforced_outside_testing(self, tmp_path: Path) -> None:
+        app = create_app(output_dir=tmp_path)
+        app.config["TESTING"] = False
+        app.secret_key = "test-secret"
+        with app.test_client() as client:
+            resp = client.post("/regenerate")
+        assert resp.status_code == 400
+
 
 class TestDocViewPathTraversal:
-    def test_path_traversal_is_blocked(self, app_client, tmp_path: Path) -> None:
-        import omada.web.app as web_app
-        web_app.OUTPUT_DIR = tmp_path
-
+    def test_path_traversal_is_blocked(self, app_client) -> None:
         # Attempt to traverse outside output dir
         resp = app_client.get("/docs/../../../etc/passwd", follow_redirects=True)
         # Flask normalises the path, so the file won't exist — but should not
@@ -131,11 +152,7 @@ class TestDocViewPathTraversal:
         assert resp.status_code == 200
         assert b"not found" in resp.data or b"Access denied" in resp.data
 
-
-
     def test_view_existing_doc(self, app_client, tmp_path: Path) -> None:
-        import omada.web.app as web_app
-        web_app.OUTPUT_DIR = tmp_path
         doc = tmp_path / "acl_rules.md"
         doc.write_text("# ACL Rules\n\n| Name |\n| --- |\n| rule1 |\n")
 
@@ -147,3 +164,4 @@ class TestDocViewPathTraversal:
         resp = app_client.get("/docs/nonexistent.md", follow_redirects=True)
         assert resp.status_code == 200
         assert b"not found" in resp.data
+
