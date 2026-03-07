@@ -173,7 +173,14 @@ def discover_site_id(
         raise OmadaAPIError(error_code, body.get("msg", "unknown error"))
 
     result = body.get("result", {})
-    sites = result.get("data", []) if isinstance(result, dict) else result
+    if isinstance(result, dict):
+        sites = result.get("data", [])
+    elif isinstance(result, list):
+        sites = result
+    else:
+        raise RuntimeError(
+            "Unexpected response format from /api/v2/sites"
+        )
 
     if not sites:
         raise RuntimeError("No sites found on the controller")
