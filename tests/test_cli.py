@@ -77,6 +77,63 @@ class TestFetchCommand:
         assert kwargs.get("verify_ssl") is False
 
 
+class TestGenerateCommand:
+    def test_generate_from_yaml_files(self, runner: CliRunner, tmp_path: Path) -> None:
+        """generate command should produce Markdown from YAML without API creds."""
+        import yaml as _yaml
+
+        (tmp_path / "acl_rules.yaml").write_text(
+            _yaml.dump([{"name": "rule1", "policy": "accept"}]), encoding="utf-8"
+        )
+        result = runner.invoke(
+            cli,
+            ["generate", "--input-dir", str(tmp_path)],
+        )
+        assert result.exit_code == 0, result.output
+        assert (tmp_path / "acl_rules.md").exists()
+
+    def test_generate_separate_output_dir(self, runner: CliRunner, tmp_path: Path) -> None:
+        import yaml as _yaml
+
+        in_dir = tmp_path / "in"
+        out_dir = tmp_path / "out"
+        in_dir.mkdir()
+        (in_dir / "networks.yaml").write_text(
+            _yaml.dump([{"name": "LAN"}]), encoding="utf-8"
+        )
+        result = runner.invoke(
+            cli,
+            [
+                "generate",
+                "--input-dir", str(in_dir),
+                "--output-dir", str(out_dir),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert (out_dir / "networks.md").exists()
+
+    def test_generate_empty_dir_exits_nonzero(self, runner: CliRunner, tmp_path: Path) -> None:
+        result = runner.invoke(
+            cli,
+            ["generate", "--input-dir", str(tmp_path)],
+        )
+        assert result.exit_code != 0
+
+    def test_generate_reads_env_var(self, runner: CliRunner, tmp_path: Path) -> None:
+        import yaml as _yaml
+
+        (tmp_path / "ssids.yaml").write_text(
+            _yaml.dump([{"ssid": "TestNet"}]), encoding="utf-8"
+        )
+        result = runner.invoke(
+            cli,
+            ["generate"],
+            env={"OMADA_OUTPUT_DIR": str(tmp_path)},
+        )
+        assert result.exit_code == 0, result.output
+        assert (tmp_path / "ssids.md").exists()
+
+
 class TestServeCommand:
     def test_serve_starts_flask(self, runner: CliRunner) -> None:
         with patch("omada.web.app.Flask.run") as mock_run:

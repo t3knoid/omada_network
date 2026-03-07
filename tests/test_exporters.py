@@ -31,6 +31,15 @@ class TestYamlExporter:
         loaded = yaml.safe_load(path.read_text())
         assert loaded == data
 
+    def test_sort_keys_true(self, tmp_path: Path) -> None:
+        """YAML keys must be sorted alphabetically for deterministic diffs."""
+        exporter = YamlExporter(tmp_path)
+        data = {"z_key": 1, "a_key": 2, "m_key": 3}
+        path = exporter.export("test", data)
+        raw = path.read_text()
+        # a_key should appear before z_key in the file
+        assert raw.index("a_key") < raw.index("z_key")
+
     def test_creates_output_dir(self, tmp_path: Path) -> None:
         target = tmp_path / "nested" / "output"
         exporter = YamlExporter(target)
@@ -61,7 +70,7 @@ class TestYamlExporter:
 # ---------------------------------------------------------------------------
 
 class TestMarkdownHelpers:
-    def test_pretty_converts_snake_case(self) -> None:
+    def test_column_header_converts_snake_case(self) -> None:
         assert _column_header("vlan_id") == "Vlan Id"
         assert _column_header("ip_address") == "Ip Address"
 
@@ -182,6 +191,32 @@ class TestMarkdownGenerator:
 
     def test_unknown_resource_fallback(self, tmp_path: Path) -> None:
         gen = MarkdownGenerator(tmp_path)
-        path = gen.generate("custom_resource", [{"key": "value"}])
+        path = gen.generate("custom_resource", [{"some_key": "value"}])
         content = path.read_text()
         assert "Custom Resource" in content
+        # Raw snake_case keys must be converted to Title Case in the table header
+        assert "Some Key" in content
+        assert "some_key" not in content
+
+    def test_rows_sorted_by_name(self, tmp_path: Path) -> None:
+        """Rows must be sorted alphabetically by the configured sort_key."""
+        gen = MarkdownGenerator(tmp_path)
+        data = [
+            {"name": "Zulu Rule", "policy": "accept"},
+            {"name": "Alpha Rule", "policy": "drop"},
+        ]
+        path = gen.generate("acl_rules", data)
+        content = path.read_text()
+        # Alpha Rule must appear before Zulu Rule
+        assert content.index("Alpha Rule") < content.index("Zulu Rule")
+
+    def test_ssids_sorted_by_ssid_column(self, tmp_path: Path) -> None:
+        gen = MarkdownGenerator(tmp_path)
+        data = [
+            {"ssid": "Zulu-Net", "wlanName": "home"},
+            {"ssid": "Alpha-Net", "wlanName": "home"},
+        ]
+        path = gen.generate("ssids", data)
+        content = path.read_text()
+        assert content.index("Alpha-Net") < content.index("Zulu-Net")
+

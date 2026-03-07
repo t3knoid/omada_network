@@ -25,7 +25,10 @@ python cli.py --base-url https://192.168.1.1:8043 \\
 # OMADA_BASE_URL=https://... OMADA_CONTROLLER_ID=... python cli.py
 
 # Start the web server:
-python cli.py serve
+# python cli.py serve
+
+# Regenerate Markdown from existing YAML (no API creds needed):
+# python cli.py generate --input-dir docs
 """
 
 from __future__ import annotations
@@ -143,6 +146,47 @@ def fetch(
         click.echo(f"  [{category.upper()}]")
         for name, path in sorted(file_map.items()):
             click.echo(f"    {name}: {path}")
+
+
+@cli.command()
+@click.option(
+    "--input-dir",
+    default=lambda: _env("OMADA_OUTPUT_DIR", "docs"),
+    show_default="$OMADA_OUTPUT_DIR (default: docs)",
+    help="Directory containing *.yaml source files.",
+)
+@click.option(
+    "--output-dir",
+    default=None,
+    help=(
+        "Directory where Markdown files will be written.  "
+        "Defaults to --input-dir when not specified."
+    ),
+)
+def generate(input_dir: str, output_dir: str | None) -> None:
+    """Generate Markdown documentation from existing YAML files.
+
+    No API credentials are required — this command reads the ``*.yaml``
+    files already present in INPUT_DIR and (re)generates the corresponding
+    Markdown tables.
+
+    Useful for local editing workflows and for regenerating docs from
+    version-controlled YAML without connecting to the controller.
+    """
+    if output_dir is None:
+        output_dir = input_dir
+
+    from omada.service import generate_from_yaml
+
+    paths = generate_from_yaml(input_dir, output_dir)
+
+    if not paths:
+        click.echo(f"No *.yaml files found in '{input_dir}'.", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"\nGenerated {len(paths)} Markdown file(s) in '{output_dir}':")
+    for name, path in sorted(paths.items()):
+        click.echo(f"  {name}: {path}")
 
 
 @cli.command()

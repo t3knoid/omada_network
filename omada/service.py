@@ -3,6 +3,10 @@
 The :class:`OmadaService` class is the main entry-point for both the CLI and
 the web UI.  It fetches data from the controller, persists it as YAML files,
 and generates Markdown documentation.
+
+The standalone :func:`generate_from_yaml` function performs the Markdown
+generation step only, reading existing ``*.yaml`` files from a directory.
+No API credentials are required.
 """
 
 from __future__ import annotations
@@ -11,9 +15,12 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from omada.api.client import OmadaClient
 from omada.exporters.markdown_generator import MarkdownGenerator
 from omada.exporters.yaml_exporter import YamlExporter
+from omada.registry import RESOURCES
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +44,8 @@ class OmadaService:
         Whether to verify TLS certificates.
     """
 
-    # Names used as YAML/Markdown file stems
-    RESOURCE_NAMES = (
-        "acl_rules",
-        "ip_groups",
-        "port_groups",
-        "networks",
-        "vlans",
-        "switch_port_profiles",
-        "gateway_settings",
-        "ssids",
-        "dhcp_reservations",
-    )
+    #: Ordered tuple of all resource names, derived from the registry.
+    RESOURCE_NAMES: tuple[str, ...] = tuple(defn.name for defn in RESOURCES)
 
     def __init__(
         self,
@@ -77,38 +74,21 @@ class OmadaService:
         logger.info("Fetching all resources for site '%s'…", self.site_id)
         data: dict[str, Any] = {}
 
-        fetchers = {
-            "acl_rules": lambda: self._client.get_acl_rules(self.site_id),
-            "ip_groups": lambda: self._client.get_ip_groups(self.site_id),
-            "port_groups": lambda: self._client.get_port_groups(self.site_id),
-            "networks": lambda: self._client.get_networks(self.site_id),
-            "vlans": lambda: self._client.get_vlans(self.site_id),
-            "switch_port_profiles": lambda: self._client.get_switch_port_profiles(
-                self.site_id
-            ),
-            "gateway_settings": lambda: self._client.get_gateway_settings(
-                self.site_id
-            ),
-            "ssids": lambda: self._client.get_ssids(self.site_id),
-            "dhcp_reservations": lambda: self._client.get_dhcp_reservations(
-                self.site_id
-            ),
-        }
-
-        for name, fetcher in fetchers.items():
+        for defn in RESOURCES:
+            fetcher = getattr(self._client, defn.fetch_method)
             try:
-                data[name] = fetcher()
+                data[defn.name] = fetcher(self.site_id)
                 count = (
-                    len(data[name])
-                    if isinstance(data[name], list)
+                    len(data[defn.name])
+                    if isinstance(data[defn.name], list)
                     else 1
                 )
-                logger.info("  ✓ %s – %d record(s)", name, count)
+                logger.info("  ✓ %s – %d record(s)", defn.name, count)
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception as exc:  # noqa: BLE001
-                logger.warning("  ✗ %s – %s", name, exc)
-                data[name] = []
+                logger.warning("  ✗ %s – %s", defn.name, exc)
+                data[defn.name] = []
 
         return data
 
@@ -136,3 +116,49 @@ class OmadaService:
         doc_paths = self.generate_docs(data)
         logger.info("Done. YAML in %s, docs in %s", self.output_dir, self.output_dir)
         return {"yaml": yaml_paths, "docs": doc_paths}
+
+
+# ---------------------------------------------------------------------------
+# Standalone generate-from-YAML function (no API credentials needed)
+# ---------------------------------------------------------------------------
+
+def generate_from_yaml(
+    input_dir: str | Path,
+    output_dir: str | Path,
+) -> dict[str, Path]:
+    """Generate Markdown documentation by reading ``*.yaml`` files.
+
+    Parameters
+    ----------
+    input_dir:
+        Directory containing ``<resource_name>.yaml`` files.
+    output_dir:
+        Directory where Markdown files will be written (may be the same as
+        *input_dir*).
+
+    Returns
+    -------
+    dict[str, Path]
+        Mapping of resource name → generated Markdown path.
+    """
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    md_gen = MarkdownGenerator(output_dir)
+    paths: dict[str, Path] = {}
+
+    for yaml_path in sorted(input_dir.glob("*.yaml")):
+        name = yaml_path.stem
+        raw = yaml_path.read_text(encoding="utf-8")
+        data = yaml.safe_load(raw)
+        if data is None:
+            data = []
+        paths[name] = md_gen.generate(name, data)
+        logger.info("Generated %s → %s", name, paths[name])
+
+    if not paths:
+        logger.warning("No *.yaml files found in '%s'", input_dir)
+
+    return paths
+

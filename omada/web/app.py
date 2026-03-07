@@ -1,7 +1,8 @@
 """Flask web application for the Omada Network Documentation Generator.
 
 Provides a simple UI to configure the connection parameters, trigger a full
-fetch-and-export run, and browse the generated Markdown documentation.
+fetch-and-export run, browse the generated Markdown documentation, and
+regenerate Markdown from existing YAML files without API credentials.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import markdown as _markdown
 from flask import Flask, flash, redirect, render_template, request, url_for
 from markupsafe import Markup
 
-from omada.service import OmadaService
+from omada.service import OmadaService, generate_from_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +81,46 @@ def run():
     return redirect(url_for("index"))
 
 
+@app.route("/regenerate", methods=["POST"])
+def regenerate():
+    """Regenerate Markdown docs from existing YAML files (no API creds needed)."""
+    if not OUTPUT_DIR.is_dir():
+        flash(
+            f"Output directory '{OUTPUT_DIR}' does not exist.  "
+            "Run a fetch first to create YAML files.",
+            "warning",
+        )
+        return redirect(url_for("index"))
+
+    try:
+        paths = generate_from_yaml(OUTPUT_DIR, OUTPUT_DIR)
+        if paths:
+            flash(
+                f"Regenerated {len(paths)} Markdown doc(s) from YAML in '{OUTPUT_DIR}'.",
+                "success",
+            )
+        else:
+            flash(f"No *.yaml files found in '{OUTPUT_DIR}'.", "warning")
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Error regenerating docs from YAML")
+        flash(f"Error: {exc}", "danger")
+
+    return redirect(url_for("index"))
+
+
 @app.route("/docs/<path:filename>")
 def view_doc(filename: str):
     """Render a generated Markdown documentation file as HTML."""
-    doc_path = OUTPUT_DIR / filename
+    # Security: prevent path traversal outside OUTPUT_DIR
+    try:
+        doc_path = (OUTPUT_DIR / filename).resolve()
+        doc_path.relative_to(OUTPUT_DIR.resolve())
+    except ValueError:
+        flash("Access denied.", "danger")
+        return redirect(url_for("index"))
+
     if not doc_path.is_file():
         flash(f"Document '{filename}' not found.", "warning")
         return redirect(url_for("index"))
@@ -107,3 +144,4 @@ def _list_docs() -> list[str]:
 def create_app() -> Flask:
     """Application factory (useful for testing)."""
     return app
+

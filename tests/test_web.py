@@ -83,7 +83,56 @@ class TestRunRoute:
         assert b"Error" in resp.data
 
 
-class TestDocViewRoute:
+class TestRegenerateRoute:
+    def test_regenerate_no_yaml_files_flashes_warning(
+        self, app_client, tmp_path: Path
+    ) -> None:
+        import omada.web.app as web_app
+        web_app.OUTPUT_DIR = tmp_path  # empty dir, no yaml files
+
+        resp = app_client.post("/regenerate", follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"No *.yaml files found" in resp.data
+
+    def test_regenerate_with_yaml_files(self, app_client, tmp_path: Path) -> None:
+        import yaml
+        import omada.web.app as web_app
+        web_app.OUTPUT_DIR = tmp_path
+
+        (tmp_path / "acl_rules.yaml").write_text(
+            yaml.dump([{"name": "r1"}]), encoding="utf-8"
+        )
+
+        resp = app_client.post("/regenerate", follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"Regenerated" in resp.data
+        assert (tmp_path / "acl_rules.md").exists()
+
+    def test_regenerate_missing_output_dir_flashes_warning(
+        self, app_client, tmp_path: Path
+    ) -> None:
+        import omada.web.app as web_app
+        web_app.OUTPUT_DIR = tmp_path / "nonexistent"
+
+        resp = app_client.post("/regenerate", follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"does not exist" in resp.data
+
+
+class TestDocViewPathTraversal:
+    def test_path_traversal_is_blocked(self, app_client, tmp_path: Path) -> None:
+        import omada.web.app as web_app
+        web_app.OUTPUT_DIR = tmp_path
+
+        # Attempt to traverse outside output dir
+        resp = app_client.get("/docs/../../../etc/passwd", follow_redirects=True)
+        # Flask normalises the path, so the file won't exist — but should not
+        # return the contents of an arbitrary file; should redirect with error
+        assert resp.status_code == 200
+        assert b"not found" in resp.data or b"Access denied" in resp.data
+
+
+
     def test_view_existing_doc(self, app_client, tmp_path: Path) -> None:
         import omada.web.app as web_app
         web_app.OUTPUT_DIR = tmp_path

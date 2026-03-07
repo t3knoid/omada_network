@@ -30,7 +30,7 @@ class YamlExporter:
                 fh,
                 allow_unicode=True,
                 default_flow_style=False,
-                sort_keys=False,
+                sort_keys=True,
             )
         return path
 
