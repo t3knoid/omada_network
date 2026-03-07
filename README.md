@@ -304,6 +304,14 @@ The configuration form offers two authentication tabs:
 - **🔒 Token** — supply the controller ID, token, and site ID manually
   (existing workflow).
 
+> **Note on SSL verification defaults:** The web UI defaults to SSL
+> verification **enabled** (checkbox checked) to encourage secure connections
+> in the browser-based workflow. The CLI defaults to SSL verification **off**
+> (`--verify-ssl` must be passed explicitly) because most self-signed
+> controller setups are managed from the command line. This difference is
+> intentional — set `OMADA_VERIFY_SSL=true` or pass `--verify-ssl` in the CLI
+> if your controller has a valid (non-self-signed) certificate.
+
 Fill in the configuration form and click **⚡ Fetch & Generate Documentation** to
 pull data from the controller and create YAML + Markdown files.
 
