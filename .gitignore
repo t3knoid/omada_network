@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+*.so
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Generated output (keep the docs/ dir tracked if desired; remove this line)
+docs/*.yaml
+docs/*.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Flask
+instance/
+*.session

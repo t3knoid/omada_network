@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ filename }} – Omada Docs</title>
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <!-- GitHub Markdown CSS for consistent rendering -->
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown-light.min.css">
+  <style>
+    body { background: #f8f9fa; }
+    .brand-bar { background: #004f8b; }
+    .brand-bar a { color: #fff; text-decoration: none; }
+    .markdown-body { box-sizing: border-box; padding: 2rem; background: #fff;
+                     border-radius: .5rem; }
+    table { font-size: .875rem; }
+  </style>
+</head>
+<body>
+<nav class="navbar brand-bar px-4 mb-4">
+  <a class="navbar-brand fw-bold fs-5" href="/">
+    🌐 Omada Network Documentation Generator
+  </a>
+</nav>
+
+<div class="container-fluid">
+  <div class="row g-3">
+
+    <!-- Sidebar: document list -->
+    <div class="col-lg-2 col-md-3">
+      <div class="card shadow-sm">
+        <div class="card-header bg-white fw-semibold small">Documents</div>
+        <ul class="list-group list-group-flush small">
+          {% for doc in docs %}
+            <li class="list-group-item {% if doc == filename %}active{% endif %} p-2">
+              <a href="{{ url_for('view_doc', filename=doc) }}"
+                 class="{% if doc == filename %}text-white{% else %}text-decoration-none{% endif %}">
+                {{ doc }}
+              </a>
+            </li>
+          {% endfor %}
+          <li class="list-group-item p-2">
+            <a href="/" class="text-decoration-none">← Back to home</a>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Main content: rendered Markdown -->
+    <div class="col-lg-10 col-md-9">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endwith %}
+
+      <article class="markdown-body shadow-sm">
+        {{ content | markdown }}
+      </article>
+    </div>
+
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
