@@ -189,7 +189,39 @@ the `<link>` / `<script>` tags in `omada/web/templates/`.
 ## GitHub Actions Integration
 
 Store your controller credentials as **repository secrets** and use them in a
-workflow:
+workflow.
+
+### Adding Repository Secrets
+
+The GitHub Actions workflow requires the following secrets to be configured in
+your repository:
+
+| Secret Name | Description |
+|---|---|
+| `OMADA_BASE_URL` | Base URL of your Omada controller (e.g. `https://192.168.1.1:8043`) |
+| `OMADA_CONTROLLER_ID` | The `omadacId` value (see [Getting your Controller ID](#getting-your-controller-id-omadacid)) |
+| `OMADA_TOKEN` | A valid API access token |
+| `OMADA_SITE_ID` | The site ID to query |
+| `OMADA_NO_VERIFY_SSL` | *(Optional)* Set to `true` if your controller uses a self-signed certificate |
+
+To add these secrets:
+
+1. Navigate to your repository on GitHub.
+2. Click **Settings** → **Secrets and variables** → **Actions**.
+3. Click **New repository secret**.
+4. Enter the **Name** (e.g. `OMADA_BASE_URL`) and **Secret** value.
+5. Click **Add secret**.
+6. Repeat for each secret listed above.
+
+> **Tip:** You can also add secrets via the GitHub CLI:
+> ```bash
+> gh secret set OMADA_BASE_URL --body "https://192.168.1.1:8043"
+> gh secret set OMADA_CONTROLLER_ID --body "your-controller-id"
+> gh secret set OMADA_TOKEN --body "your-api-token"
+> gh secret set OMADA_SITE_ID --body "your-site-id"
+> ```
+
+### Workflow Configuration
 
 ```yaml
 # .github/workflows/generate-docs.yml
