@@ -294,7 +294,7 @@ def discover_site_id(
         return site_id
 
     # Multiple sites — list them and ask the user to specify
-    lines = ["Multiple sites found. Please specify --site-name or --site-id:"]
+    lines = ["Multiple sites found. Please select a site by name or id:"]
     for s in sites:
         lines.append(f"  • {s.get('name', '?')}  (id: {s.get('id', '?')})")
     raise RuntimeError("\n".join(lines))
