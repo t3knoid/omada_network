@@ -119,20 +119,68 @@ def create_app(output_dir: str | Path | None = None) -> Flask:
         _check_csrf()
         output_dir_ = current_app.config["OUTPUT_DIR"]
 
-        required = ("base_url", "controller_id", "token", "site_id")
-        missing = [f for f in required if not request.form.get(f)]
-        if missing:
-            flash(f"Missing required fields: {', '.join(missing)}", "danger")
+        base_url = request.form.get("base_url", "")
+        controller_id = request.form.get("controller_id", "")
+        token = request.form.get("token", "")
+        site_id = request.form.get("site_id", "")
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        verify_ssl = request.form.get("verify_ssl") == "on"
+        auth_mode = request.form.get("auth_mode", "token")
+
+        if not base_url:
+            flash("Missing required field: base_url", "danger")
             return redirect(url_for("index"))
 
         try:
+            # Auto-discovery when using login mode
+            if auth_mode == "login":
+                if not username or not password:
+                    flash("Missing required fields: username, password", "danger")
+                    return redirect(url_for("index"))
+
+                from omada.api.client import (
+                    discover_controller_id,
+                    discover_site_id,
+                    login as omada_login,
+                )
+
+                if not controller_id:
+                    controller_id = discover_controller_id(
+                        base_url, verify_ssl=verify_ssl
+                    )
+                if not token:
+                    token = omada_login(
+                        base_url, controller_id, username, password,
+                        verify_ssl=verify_ssl,
+                    )
+                if not site_id:
+                    site_id = discover_site_id(
+                        base_url, controller_id, token,
+                        verify_ssl=verify_ssl,
+                    )
+            else:
+                missing = []
+                if not controller_id:
+                    missing.append("controller_id")
+                if not token:
+                    missing.append("token")
+                if not site_id:
+                    missing.append("site_id")
+                if missing:
+                    flash(
+                        f"Missing required fields: {', '.join(missing)}",
+                        "danger",
+                    )
+                    return redirect(url_for("index"))
+
             service = OmadaService(
-                base_url=request.form["base_url"],
-                controller_id=request.form["controller_id"],
-                token=request.form["token"],
-                site_id=request.form["site_id"],
+                base_url=base_url,
+                controller_id=controller_id,
+                token=token,
+                site_id=site_id,
                 output_dir=output_dir_,
-                verify_ssl=request.form.get("verify_ssl") == "on",
+                verify_ssl=verify_ssl,
             )
             paths = service.run()
             doc_count = len(paths.get("docs", {}))

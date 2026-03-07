@@ -143,3 +143,86 @@ class TestServeCommand:
             )
         # The runner may not block (Flask.run is patched) so just check no error
         assert result.exit_code == 0 or "Starting" in result.output
+
+
+class TestFetchWithLogin:
+    def test_login_auto_discovers_all(self, runner: CliRunner, tmp_path: Path) -> None:
+        """--username/--password should auto-discover controller-id, token, site-id."""
+        mock_paths = {"yaml": {}, "docs": {}}
+        with (
+            patch("omada.api.client.discover_controller_id", return_value="cid") as mock_cid,
+            patch("omada.api.client.login", return_value="tok") as mock_login,
+            patch("omada.api.client.discover_site_id", return_value="sid") as mock_sid,
+            patch("omada.service.OmadaService") as MockService,
+        ):
+            MockService.return_value.run.return_value = mock_paths
+            result = runner.invoke(
+                cli,
+                [
+                    "fetch",
+                    "--base-url", "https://192.168.1.1:8043",
+                    "--username", "admin",
+                    "--password", "secret",
+                    "--output-dir", str(tmp_path),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        mock_cid.assert_called_once()
+        mock_login.assert_called_once()
+        mock_sid.assert_called_once()
+
+    def test_login_env_vars(self, runner: CliRunner, tmp_path: Path) -> None:
+        """OMADA_USERNAME and OMADA_PASSWORD env vars should work."""
+        mock_paths = {"yaml": {}, "docs": {}}
+        env = {
+            "OMADA_BASE_URL": "https://192.168.1.1:8043",
+            "OMADA_USERNAME": "admin",
+            "OMADA_PASSWORD": "secret",
+            "OMADA_OUTPUT_DIR": str(tmp_path),
+        }
+        with (
+            patch("omada.api.client.discover_controller_id", return_value="cid"),
+            patch("omada.api.client.login", return_value="tok"),
+            patch("omada.api.client.discover_site_id", return_value="sid"),
+            patch("omada.service.OmadaService") as MockService,
+        ):
+            MockService.return_value.run.return_value = mock_paths
+            result = runner.invoke(cli, ["fetch"], env=env)
+        assert result.exit_code == 0, result.output
+
+    def test_explicit_overrides_skip_discovery(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Explicit --controller-id/--token/--site-id should skip auto-discovery."""
+        mock_paths = {"yaml": {}, "docs": {}}
+        with (
+            patch("omada.api.client.discover_controller_id") as mock_cid,
+            patch("omada.api.client.login") as mock_login,
+            patch("omada.api.client.discover_site_id") as mock_sid,
+            patch("omada.service.OmadaService") as MockService,
+        ):
+            MockService.return_value.run.return_value = mock_paths
+            result = runner.invoke(
+                cli,
+                [
+                    "fetch",
+                    "--base-url", "https://192.168.1.1:8043",
+                    "--username", "admin",
+                    "--password", "secret",
+                    "--controller-id", "explicit-cid",
+                    "--token", "explicit-tok",
+                    "--site-id", "explicit-sid",
+                    "--output-dir", str(tmp_path),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        mock_cid.assert_not_called()
+        mock_login.assert_not_called()
+        mock_sid.assert_not_called()
+
+    def test_missing_all_auth_shows_hint(self, runner: CliRunner) -> None:
+        """When no auth is provided, error should hint about --username/--password."""
+        result = runner.invoke(
+            cli,
+            ["fetch", "--base-url", "https://192.168.1.1:8043"],
+        )
+        assert result.exit_code != 0
+        assert "username" in result.output.lower() or "username" in str(result.exception).lower()

@@ -42,7 +42,7 @@ class TestRunRoute:
     def test_run_missing_fields_flashes_error(self, app_client) -> None:
         resp = app_client.post(
             "/run",
-            data={"base_url": "https://localhost"},
+            data={"base_url": "https://localhost", "auth_mode": "token"},
             follow_redirects=True,
         )
         assert resp.status_code == 200
@@ -54,6 +54,7 @@ class TestRunRoute:
             "controller_id": "abc123",
             "token": "mytoken",
             "site_id": "site001",
+            "auth_mode": "token",
         }
 
         mock_paths = {
@@ -74,6 +75,7 @@ class TestRunRoute:
             "controller_id": "abc123",
             "token": "mytoken",
             "site_id": "site001",
+            "auth_mode": "token",
         }
         with patch("omada.web.app.OmadaService") as MockService:
             MockService.return_value.run.side_effect = Exception("Connection refused")
@@ -97,6 +99,42 @@ class TestRunRoute:
                 },
             )
         assert resp.status_code == 400
+
+    def test_run_login_mode_auto_discovers(self, app_client, tmp_path: Path) -> None:
+        """Login mode should auto-discover controller-id, token, site-id."""
+        form_data = {
+            "base_url": "https://192.168.1.1:8043",
+            "username": "admin",
+            "password": "secret",
+            "auth_mode": "login",
+        }
+
+        mock_paths = {
+            "yaml": {"acl_rules": tmp_path / "acl_rules.yaml"},
+            "docs": {"acl_rules": tmp_path / "acl_rules.md"},
+        }
+
+        with (
+            patch("omada.api.client.discover_controller_id", return_value="cid"),
+            patch("omada.api.client.login", return_value="tok"),
+            patch("omada.api.client.discover_site_id", return_value="sid"),
+            patch("omada.web.app.OmadaService") as MockService,
+        ):
+            MockService.return_value.run.return_value = mock_paths
+            resp = app_client.post("/run", data=form_data, follow_redirects=True)
+
+        assert resp.status_code == 200
+        assert b"Success" in resp.data
+
+    def test_run_login_mode_missing_credentials_flashes_error(self, app_client) -> None:
+        """Login mode without username/password should flash an error."""
+        form_data = {
+            "base_url": "https://192.168.1.1:8043",
+            "auth_mode": "login",
+        }
+        resp = app_client.post("/run", data=form_data, follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"Missing required fields" in resp.data
 
 
 class TestRegenerateRoute:

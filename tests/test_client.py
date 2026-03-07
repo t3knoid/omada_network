@@ -8,7 +8,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from omada.api.client import OmadaAPIError, OmadaClient
+from omada.api.client import (
+    OmadaAPIError,
+    OmadaClient,
+    discover_controller_id,
+    discover_site_id,
+    login,
+)
 
 
 @pytest.fixture()
@@ -197,3 +203,123 @@ class TestOmadaClientResourceMethods:
         with patch.object(client, "_get_paged", side_effect=side_effects):
             result = client.get_dhcp_reservations("site1")
         assert result[0]["networkName"] == "LAN"
+
+
+class TestDiscoverControllerId:
+    def test_returns_omadac_id(self) -> None:
+        resp = _mock_response(
+            {"errorCode": 0, "result": {"omadacId": "cid123"}}
+        )
+        with patch("omada.api.client.requests.Session") as MockSess:
+            MockSess.return_value.get.return_value = resp
+            cid = discover_controller_id(
+                "https://192.168.1.1:8043", verify_ssl=False
+            )
+        assert cid == "cid123"
+
+    def test_raises_on_api_error(self) -> None:
+        resp = _mock_response(
+            {"errorCode": 500, "msg": "internal error"}
+        )
+        with patch("omada.api.client.requests.Session") as MockSess:
+            MockSess.return_value.get.return_value = resp
+            with pytest.raises(OmadaAPIError):
+                discover_controller_id(
+                    "https://192.168.1.1:8043", verify_ssl=False
+                )
+
+    def test_raises_when_omadac_id_missing(self) -> None:
+        resp = _mock_response({"errorCode": 0, "result": {}})
+        with patch("omada.api.client.requests.Session") as MockSess:
+            MockSess.return_value.get.return_value = resp
+            with pytest.raises(RuntimeError, match="omadacId"):
+                discover_controller_id(
+                    "https://192.168.1.1:8043", verify_ssl=False
+                )
+
+
+class TestLogin:
+    def test_returns_token(self) -> None:
+        resp = _mock_response(
+            {"errorCode": 0, "result": {"token": "tok-abc"}}
+        )
+        with patch("omada.api.client.requests.Session") as MockSess:
+            MockSess.return_value.post.return_value = resp
+            token = login(
+                "https://192.168.1.1:8043", "cid123",
+                "admin", "secret", verify_ssl=False,
+            )
+        assert token == "tok-abc"
+
+    def test_raises_on_api_error(self) -> None:
+        resp = _mock_response(
+            {"errorCode": -30109, "msg": "invalid credentials"}
+        )
+        with patch("omada.api.client.requests.Session") as MockSess:
+            MockSess.return_value.post.return_value = resp
+            with pytest.raises(OmadaAPIError):
+                login(
+                    "https://192.168.1.1:8043", "cid123",
+                    "admin", "wrong", verify_ssl=False,
+                )
+
+    def test_raises_when_token_missing(self) -> None:
+        resp = _mock_response({"errorCode": 0, "result": {}})
+        with patch("omada.api.client.requests.Session") as MockSess:
+            MockSess.return_value.post.return_value = resp
+            with pytest.raises(RuntimeError, match="no token"):
+                login(
+                    "https://192.168.1.1:8043", "cid123",
+                    "admin", "pass", verify_ssl=False,
+                )
+
+
+class TestDiscoverSiteId:
+    def test_single_site_returns_id(self) -> None:
+        resp = _mock_response(
+            {
+                "errorCode": 0,
+                "result": {
+                    "data": [{"id": "site001", "name": "Default"}],
+                },
+            }
+        )
+        with patch("omada.api.client.requests.Session") as MockSess:
+            MockSess.return_value.get.return_value = resp
+            sid = discover_site_id(
+                "https://192.168.1.1:8043", "cid123", "tok",
+                verify_ssl=False,
+            )
+        assert sid == "site001"
+
+    def test_multiple_sites_exits_with_listing(self) -> None:
+        resp = _mock_response(
+            {
+                "errorCode": 0,
+                "result": {
+                    "data": [
+                        {"id": "s1", "name": "Office"},
+                        {"id": "s2", "name": "Home"},
+                    ],
+                },
+            }
+        )
+        with patch("omada.api.client.requests.Session") as MockSess:
+            MockSess.return_value.get.return_value = resp
+            with pytest.raises(SystemExit, match="Multiple sites found"):
+                discover_site_id(
+                    "https://192.168.1.1:8043", "cid123", "tok",
+                    verify_ssl=False,
+                )
+
+    def test_no_sites_raises(self) -> None:
+        resp = _mock_response(
+            {"errorCode": 0, "result": {"data": []}}
+        )
+        with patch("omada.api.client.requests.Session") as MockSess:
+            MockSess.return_value.get.return_value = resp
+            with pytest.raises(RuntimeError, match="No sites found"):
+                discover_site_id(
+                    "https://192.168.1.1:8043", "cid123", "tok",
+                    verify_ssl=False,
+                )

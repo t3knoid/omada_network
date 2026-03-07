@@ -77,10 +77,50 @@ pip install -r requirements-dev.txt
 
 ## Configuration
 
-The application requires four parameters:
+The application supports two authentication modes:
+
+### Option A — Username / Password (recommended)
+
+Provide just the **base URL**, **username**, and **password**. The application
+will automatically discover the controller ID, obtain a token, and select the
+site:
 
 | Parameter | CLI Option | Environment Variable |
-| --- | -- | --- |
+| --- | --- | --- |
+| Base API URL | `--base-url` | `OMADA_BASE_URL` |
+| Username | `--username` | `OMADA_USERNAME` |
+| Password | `--password` | `OMADA_PASSWORD` |
+| Output directory | `--output-dir` | `OMADA_OUTPUT_DIR` |
+| Skip SSL verify | `--no-verify-ssl` | `OMADA_NO_VERIFY_SSL` |
+
+```bash
+python cli.py fetch \
+  --base-url https://192.168.1.1:8043 \
+  --username admin \
+  --password secret \
+  --output-dir docs
+```
+
+Auto-discovery steps:
+
+1. **Controller ID** — `GET /api/info` → `result.omadacId`
+2. **Token** — `POST /<omadacId>/api/v2/login` with credentials → `result.token`
+3. **Site ID** — `GET /<omadacId>/api/v2/sites` → uses the sole site
+   automatically, or prints available sites and exits if there are multiple
+
+You can override any auto-discovered value by passing it explicitly (e.g.
+`--site-id SITE_ID`).
+
+> **Security note:** `OMADA_PASSWORD` set as an environment variable is
+> visible to other processes on the same host. The token obtained via login
+> is used only for the duration of the session and is never cached to disk.
+
+### Option B — Token (manual)
+
+Supply all four parameters directly:
+
+| Parameter | CLI Option | Environment Variable |
+| --- | --- | --- |
 | Base API URL | `--base-url` | `OMADA_BASE_URL` |
 | Controller ID | `--controller-id` | `OMADA_CONTROLLER_ID` |
 | API Token | `--token` | `OMADA_TOKEN` |
@@ -175,20 +215,25 @@ python cli.py fetch --token $token ...
 ### `fetch` — pull from the controller and generate docs
 
 ```bash
-# Fetch and generate documentation with explicit options
+# Username/password mode (auto-discovers controller-id, token, site-id)
+python cli.py fetch \
+  --base-url https://192.168.1.1:8043 \
+  --username admin \
+  --password secret
+
+# Same using environment variables (ideal for CI/CD)
+export OMADA_BASE_URL=https://192.168.1.1:8043
+export OMADA_USERNAME=admin
+export OMADA_PASSWORD=secret
+python cli.py fetch
+
+# Token mode with explicit options
 python cli.py fetch \
   --base-url    https://192.168.1.1:8043 \
   --controller-id abc123def456 \
   --token       YOUR_TOKEN \
   --site-id     SITE_ID \
   --output-dir  docs
-
-# Same using environment variables (ideal for CI/CD)
-export OMADA_BASE_URL=https://192.168.1.1:8043
-export OMADA_CONTROLLER_ID=abc123def456
-export OMADA_TOKEN=YOUR_TOKEN
-export OMADA_SITE_ID=SITE_ID
-python cli.py fetch
 
 # Self-signed certificate (skip SSL verification)
 python cli.py fetch --no-verify-ssl ...
@@ -222,6 +267,13 @@ python cli.py serve --host 0.0.0.0 --port 5000
 python cli.py serve
 # Open http://127.0.0.1:5000 in your browser
 ```
+
+The configuration form offers two authentication tabs:
+
+- **🔑 Login** — enter your username and password; the controller ID, token,
+  and site ID are auto-discovered.
+- **🔒 Token** — supply the controller ID, token, and site ID manually
+  (existing workflow).
 
 Fill in the configuration form and click **⚡ Fetch & Generate Documentation** to
 pull data from the controller and create YAML + Markdown files.

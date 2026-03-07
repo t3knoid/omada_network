@@ -10,12 +10,18 @@ OMADA_BASE_URL        → --base-url
 OMADA_CONTROLLER_ID   → --controller-id
 OMADA_TOKEN           → --token
 OMADA_SITE_ID         → --site-id
+OMADA_USERNAME        → --username
+OMADA_PASSWORD        → --password
 OMADA_OUTPUT_DIR      → --output-dir
 OMADA_NO_VERIFY_SSL   → --no-verify-ssl (set to any non-empty value)
 
 Usage examples
 --------------
-# Passing options directly:
+# Username/password authentication (auto-discovers controller-id, token, site-id):
+python cli.py fetch --base-url https://192.168.1.1:8043 \\
+              --username admin --password secret
+
+# Passing options directly (token mode):
 python cli.py --base-url https://192.168.1.1:8043 \\
               --controller-id abc123 \\
               --token mytoken \\
@@ -75,22 +81,31 @@ def cli(ctx: click.Context) -> None:
     "--controller-id",
     default=lambda: _env("OMADA_CONTROLLER_ID"),
     show_default="$OMADA_CONTROLLER_ID",
-    required=True,
-    help="Omada controller ID (omadacId).",
+    help="Omada controller ID (omadacId). Auto-discovered when using --username/--password.",
 )
 @click.option(
     "--token",
     default=lambda: _env("OMADA_TOKEN"),
     show_default="$OMADA_TOKEN",
-    required=True,
-    help="Valid API access token.",
+    help="Valid API access token. Auto-discovered when using --username/--password.",
 )
 @click.option(
     "--site-id",
     default=lambda: _env("OMADA_SITE_ID"),
     show_default="$OMADA_SITE_ID",
-    required=True,
-    help="Site ID to query.",
+    help="Site ID to query. Auto-discovered when using --username/--password.",
+)
+@click.option(
+    "--username",
+    default=lambda: _env("OMADA_USERNAME"),
+    show_default="$OMADA_USERNAME",
+    help="Controller login username (enables auto-discovery of controller-id, token, and site-id).",
+)
+@click.option(
+    "--password",
+    default=lambda: _env("OMADA_PASSWORD"),
+    show_default="$OMADA_PASSWORD",
+    help="Controller login password.",
 )
 @click.option(
     "--output-dir",
@@ -109,14 +124,41 @@ def fetch(
     controller_id: str,
     token: str,
     site_id: str,
+    username: str,
+    password: str,
     output_dir: str,
     no_verify_ssl: bool,
 ) -> None:
     """Fetch network data from the controller and generate documentation."""
-    # Validate that required options are provided
-    missing = []
     if not base_url:
-        missing.append("--base-url / OMADA_BASE_URL")
+        raise click.UsageError("Missing required value(s): --base-url / OMADA_BASE_URL")
+
+    verify_ssl = not no_verify_ssl
+
+    # --- Auto-discovery when username/password are provided ---
+    if username and password:
+        from omada.api.client import (
+            discover_controller_id,
+            discover_site_id,
+            login,
+        )
+
+        if not controller_id:
+            controller_id = discover_controller_id(
+                base_url, verify_ssl=verify_ssl
+            )
+        if not token:
+            token = login(
+                base_url, controller_id, username, password,
+                verify_ssl=verify_ssl,
+            )
+        if not site_id:
+            site_id = discover_site_id(
+                base_url, controller_id, token, verify_ssl=verify_ssl
+            )
+
+    # --- Validate that we have everything we need ---
+    missing = []
     if not controller_id:
         missing.append("--controller-id / OMADA_CONTROLLER_ID")
     if not token:
@@ -126,6 +168,8 @@ def fetch(
     if missing:
         raise click.UsageError(
             "Missing required value(s): " + ", ".join(missing)
+            + "\n\nHint: provide --username and --password to auto-discover "
+            "controller-id, token, and site-id."
         )
 
     from omada.service import OmadaService
@@ -136,7 +180,7 @@ def fetch(
         token=token,
         site_id=site_id,
         output_dir=output_dir,
-        verify_ssl=not no_verify_ssl,
+        verify_ssl=verify_ssl,
     )
 
     paths = service.run()
