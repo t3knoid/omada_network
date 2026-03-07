@@ -6,23 +6,34 @@ GitHub Actions secrets) or as command-line options.
 
 Environment variable mapping
 -----------------------------
-OMADA_BASE_URL        → --base-url
+OMADA_CONTROLLER      → --controller
+OMADA_PORT            → --port  (default: 8043)
 OMADA_CONTROLLER_ID   → --controller-id
 OMADA_TOKEN           → --token
 OMADA_SITE_ID         → --site-id
+OMADA_USERNAME        → --username
+OMADA_PASSWORD        → --password
 OMADA_OUTPUT_DIR      → --output-dir
-OMADA_NO_VERIFY_SSL   → --no-verify-ssl (set to any non-empty value)
+OMADA_VERIFY_SSL      → --verify-ssl (set to 1/true/yes/on to enable)
 
 Usage examples
 --------------
-# Passing options directly:
-python cli.py --base-url https://192.168.1.1:8043 \\
+# Username/password authentication (auto-discovers controller-id, token, site-id):
+python cli.py fetch --controller 192.168.1.1 \\
+              --username admin --password secret
+
+# Custom management port:
+python cli.py fetch --controller 192.168.1.1 --port 443 \\
+              --username admin --password secret
+
+# Passing options directly (token mode):
+python cli.py --controller 192.168.1.1 \\
               --controller-id abc123 \\
               --token mytoken \\
               --site-id site001
 
 # Using environment variables (GitHub Actions):
-# OMADA_BASE_URL=https://... OMADA_CONTROLLER_ID=... python cli.py
+# OMADA_CONTROLLER=192.168.1.1 OMADA_CONTROLLER_ID=... python cli.py
 
 # Start the web server:
 # python cli.py serve
@@ -51,6 +62,15 @@ def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
+def _env_bool(name: str) -> bool:
+    """Parse a boolean environment variable (case-insensitive).
+
+    Truthy values: ``1``, ``true``, ``yes``, ``on``.
+    Everything else (including empty / unset) is ``False``.
+    """
+    return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
+
+
 @click.group(invoke_without_command=True)
 @click.pass_context
 def cli(ctx: click.Context) -> None:
@@ -65,32 +85,56 @@ def cli(ctx: click.Context) -> None:
 
 @cli.command()
 @click.option(
-    "--base-url",
-    default=lambda: _env("OMADA_BASE_URL"),
-    show_default="$OMADA_BASE_URL",
-    required=True,
-    help="Base URL of the Omada controller, e.g. https://192.168.1.1:8043",
+    "--controller",
+    default=lambda: _env("OMADA_CONTROLLER"),
+    show_default="$OMADA_CONTROLLER",
+    help="IP address or hostname of the Omada controller, e.g. 192.168.1.1",
+)
+@click.option(
+    "--port",
+    default=lambda: _env("OMADA_PORT", "8043"),
+    show_default="$OMADA_PORT (default: 8043)",
+    type=click.IntRange(1, 65535),
+    help="Management port of the Omada controller.",
 )
 @click.option(
     "--controller-id",
     default=lambda: _env("OMADA_CONTROLLER_ID"),
     show_default="$OMADA_CONTROLLER_ID",
-    required=True,
-    help="Omada controller ID (omadacId).",
+    help="Omada controller ID (omadacId). Auto-discovered when using --username/--password.",
 )
 @click.option(
     "--token",
     default=lambda: _env("OMADA_TOKEN"),
     show_default="$OMADA_TOKEN",
-    required=True,
-    help="Valid API access token.",
+    help="Valid API access token. Auto-discovered when using --username/--password.",
 )
 @click.option(
     "--site-id",
     default=lambda: _env("OMADA_SITE_ID"),
     show_default="$OMADA_SITE_ID",
-    required=True,
-    help="Site ID to query.",
+    help="Site ID to query. Auto-discovered when using --username/--password.",
+)
+@click.option(
+    "--site-name",
+    default=lambda: _env("OMADA_SITE_NAME"),
+    show_default="$OMADA_SITE_NAME",
+    help="Site name to query (case-insensitive). Used to select among multiple sites.",
+)
+@click.option(
+    "--username",
+    default=lambda: _env("OMADA_USERNAME"),
+    show_default="$OMADA_USERNAME",
+    help="Controller login username (enables auto-discovery of controller-id, token, and site-id).",
+)
+@click.option(
+    "--password",
+    envvar="OMADA_PASSWORD",
+    prompt=True,
+    hide_input=True,
+    prompt_required=False,
+    show_default=False,
+    help="Controller login password.",
 )
 @click.option(
     "--output-dir",
@@ -99,24 +143,59 @@ def cli(ctx: click.Context) -> None:
     help="Directory where YAML and Markdown files will be written.",
 )
 @click.option(
-    "--no-verify-ssl",
+    "--verify-ssl",
     is_flag=True,
-    default=lambda: bool(_env("OMADA_NO_VERIFY_SSL")),
-    help="Disable TLS certificate verification (for self-signed certs).",
+    default=lambda: _env_bool("OMADA_VERIFY_SSL"),
+    help="Enable TLS certificate verification (disabled by default for self-signed certs).",
 )
 def fetch(
-    base_url: str,
+    controller: str,
+    port: int,
     controller_id: str,
     token: str,
     site_id: str,
+    site_name: str,
+    username: str,
+    password: str,
     output_dir: str,
-    no_verify_ssl: bool,
+    verify_ssl: bool,
 ) -> None:
     """Fetch network data from the controller and generate documentation."""
-    # Validate that required options are provided
+    if not controller:
+        raise click.UsageError("Missing required value(s): --controller / OMADA_CONTROLLER")
+
+    base_url = f"https://{controller}:{port}"
+
+    # --- Auto-discovery when username/password are provided ---
+    if username and password:
+        from omada.api.client import (
+            discover_controller_id,
+            discover_site_id,
+            login,
+        )
+
+        if not controller_id:
+            controller_id = discover_controller_id(
+                base_url, verify_ssl=verify_ssl
+            )
+        if not token:
+            login_result = login(
+                base_url, controller_id, username, password,
+                verify_ssl=verify_ssl,
+            )
+            token = login_result.token
+            login_session = login_result.session
+            base_url = login_result.base_url
+        else:
+            login_session = None
+        if not site_id:
+            site_id = discover_site_id(
+                base_url, controller_id, token, verify_ssl=verify_ssl,
+                session=login_session, site_name=site_name,
+            )
+
+    # --- Validate that we have everything we need ---
     missing = []
-    if not base_url:
-        missing.append("--base-url / OMADA_BASE_URL")
     if not controller_id:
         missing.append("--controller-id / OMADA_CONTROLLER_ID")
     if not token:
@@ -126,6 +205,8 @@ def fetch(
     if missing:
         raise click.UsageError(
             "Missing required value(s): " + ", ".join(missing)
+            + "\n\nHint: provide --username and --password to auto-discover "
+            "controller-id, token, and site-id."
         )
 
     from omada.service import OmadaService
@@ -136,7 +217,8 @@ def fetch(
         token=token,
         site_id=site_id,
         output_dir=output_dir,
-        verify_ssl=not no_verify_ssl,
+        verify_ssl=verify_ssl,
+        session=login_session if username and password else None,
     )
 
     paths = service.run()

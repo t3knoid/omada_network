@@ -38,36 +38,93 @@
       <div class="card shadow-sm h-100">
         <div class="card-header bg-white fw-semibold">Controller Configuration</div>
         <div class="card-body">
-          <form action="/run" method="POST">
+          <form action="/run" method="POST" id="configForm">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-            <div class="mb-3">
-              <label class="form-label" for="base_url">Base API URL</label>
-              <input class="form-control" id="base_url" name="base_url"
-                     placeholder="https://192.168.1.1:8043" required>
-              <div class="form-text">
-                URL of your Omada SDN Controller, e.g. <code>https://192.168.1.1:8043</code>
+            <input type="hidden" name="auth_mode" id="auth_mode" value="login">
+            <div class="row g-2 mb-3">
+              <div class="col-8">
+                <label class="form-label" for="controller">Controller IP / Hostname</label>
+                <input class="form-control" id="controller" name="controller"
+                       placeholder="192.168.1.1" required>
+              </div>
+              <div class="col-4">
+                <label class="form-label" for="port">Port</label>
+                <input class="form-control" id="port" name="port" type="number"
+                       value="8043" min="1" max="65535">
               </div>
             </div>
-            <div class="mb-3">
-              <label class="form-label" for="controller_id">Controller ID (omadacId)</label>
-              <input class="form-control" id="controller_id" name="controller_id"
-                     placeholder="abc123def456" required>
+
+            <!-- Auth mode tabs -->
+            <ul class="nav nav-tabs mb-3" role="tablist">
+              <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="login-tab" data-bs-toggle="tab"
+                        data-bs-target="#login-pane" type="button" role="tab"
+                        aria-controls="login-pane" aria-selected="true"
+                        onclick="document.getElementById('auth_mode').value='login'">
+                  🔑 Login
+                </button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" id="token-tab" data-bs-toggle="tab"
+                        data-bs-target="#token-pane" type="button" role="tab"
+                        aria-controls="token-pane" aria-selected="false"
+                        onclick="document.getElementById('auth_mode').value='token'">
+                  🔒 Token
+                </button>
+              </li>
+            </ul>
+
+            <div class="tab-content">
+              <!-- Login tab -->
+              <div class="tab-pane fade show active" id="login-pane" role="tabpanel"
+                   aria-labelledby="login-tab">
+                <div class="mb-3">
+                  <label class="form-label" for="username">Username</label>
+                  <input class="form-control" id="username" name="username"
+                         placeholder="admin" autocomplete="username">
+                </div>
+                <div class="mb-3">
+                  <label class="form-label" for="password">Password</label>
+                  <input class="form-control" id="password" name="password" type="password"
+                         placeholder="Password" autocomplete="current-password">
+                </div>
+                <div class="mb-3">
+                  <label class="form-label" for="site_name">Site Name</label>
+                  <input class="form-control" id="site_name" name="site_name"
+                         placeholder="e.g. Default (optional — required if multiple sites exist)">
+                </div>
+                <div class="form-text text-muted mb-3">
+                  Controller ID, token, and site ID will be auto-discovered.
+                </div>
+              </div>
+
+              <!-- Token tab -->
+              <div class="tab-pane fade" id="token-pane" role="tabpanel"
+                   aria-labelledby="token-tab">
+                <div class="mb-3">
+                  <label class="form-label" for="controller_id">Controller ID (omadacId)</label>
+                  <input class="form-control" id="controller_id" name="controller_id"
+                         placeholder="abc123def456">
+                </div>
+                <div class="mb-3">
+                  <label class="form-label" for="site_id">Site ID</label>
+                  <input class="form-control" id="site_id" name="site_id"
+                         placeholder="abcdef123456">
+                </div>
+                <div class="mb-3">
+                  <label class="form-label" for="token">API Token</label>
+                  <input class="form-control" id="token" name="token" type="password"
+                         placeholder="Your access token">
+                </div>
+              </div>
             </div>
-            <div class="mb-3">
-              <label class="form-label" for="site_id">Site ID</label>
-              <input class="form-control" id="site_id" name="site_id"
-                     placeholder="abcdef123456" required>
-            </div>
-            <div class="mb-3">
-              <label class="form-label" for="token">API Token</label>
-              <input class="form-control" id="token" name="token" type="password"
-                     placeholder="Your access token" required>
-            </div>
+
             <div class="mb-3 form-check">
               <input class="form-check-input" id="verify_ssl" name="verify_ssl"
                      type="checkbox" checked>
               <label class="form-check-label" for="verify_ssl">
-                Verify SSL certificate
+                Verify SSL certificate (recommended; disabling may expose you to MITM attacks,
+                only skip for trusted self-signed controllers)
               </label>
             </div>
             <button class="btn btn-primary w-100" type="submit">

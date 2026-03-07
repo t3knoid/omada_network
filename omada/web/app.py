@@ -119,20 +119,95 @@ def create_app(output_dir: str | Path | None = None) -> Flask:
         _check_csrf()
         output_dir_ = current_app.config["OUTPUT_DIR"]
 
-        required = ("base_url", "controller_id", "token", "site_id")
-        missing = [f for f in required if not request.form.get(f)]
-        if missing:
-            flash(f"Missing required fields: {', '.join(missing)}", "danger")
+        controller_host = request.form.get("controller", "").strip()
+        port_str = request.form.get("port", "8043").strip() or "8043"
+        controller_id = request.form.get("controller_id", "")
+        token = request.form.get("token", "")
+        site_id = request.form.get("site_id", "")
+        site_name = request.form.get("site_name", "").strip()
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        verify_ssl = request.form.get("verify_ssl") == "on"
+        auth_mode = request.form.get("auth_mode", "token")
+
+        if not controller_host:
+            flash("Missing required field: Controller IP / Hostname", "danger")
             return redirect(url_for("index"))
 
         try:
+            port = int(port_str)
+            if not (1 <= port <= 65535):
+                raise ValueError("out of range")
+        except ValueError:
+            flash(
+                f"Invalid port: '{port_str}'. Must be an integer between 1 and 65535.",
+                "danger",
+            )
+            return redirect(url_for("index"))
+
+        base_url = f"https://{controller_host}:{port}"
+
+        try:
+            # Auto-discovery when using login mode
+            if auth_mode == "login":
+                if not username or not password:
+                    flash("Missing required fields: username, password", "danger")
+                    return redirect(url_for("index"))
+
+                from omada.api.client import (
+                    discover_controller_id,
+                    discover_site_id,
+                    login as omada_login,
+                )
+
+                if not controller_id:
+                    controller_id = discover_controller_id(
+                        base_url, verify_ssl=verify_ssl
+                    )
+                if not token:
+                    login_result = omada_login(
+                        base_url, controller_id, username, password,
+                        verify_ssl=verify_ssl,
+                    )
+                    token = login_result.token
+                    login_session = login_result.session
+                    base_url = login_result.base_url
+                else:
+                    login_session = None
+                if not site_id:
+                    site_id = discover_site_id(
+                        base_url, controller_id, token,
+                        verify_ssl=verify_ssl,
+                        session=login_session,
+                        site_name=site_name,
+                    )
+            else:
+                missing = []
+                if not controller_id:
+                    missing.append("controller_id")
+                if not token:
+                    missing.append("token")
+                if not site_id:
+                    missing.append("site_id")
+                if missing:
+                    flash(
+                        f"Missing required fields: {', '.join(missing)}",
+                        "danger",
+                    )
+                    return redirect(url_for("index"))
+
             service = OmadaService(
-                base_url=request.form["base_url"],
-                controller_id=request.form["controller_id"],
-                token=request.form["token"],
-                site_id=request.form["site_id"],
+                base_url=base_url,
+                controller_id=controller_id,
+                token=token,
+                site_id=site_id,
                 output_dir=output_dir_,
-                verify_ssl=request.form.get("verify_ssl") == "on",
+                verify_ssl=verify_ssl,
+                session=(
+                    login_session
+                    if auth_mode == "login" and username and password
+                    else None
+                ),
             )
             paths = service.run()
             doc_count = len(paths.get("docs", {}))

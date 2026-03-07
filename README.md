@@ -55,7 +55,7 @@ omada_network/
 ## Requirements
 
 - Python 3.10+
-- An Omada SDN Controller (v5.x+) with a valid API token
+- An Omada SDN Controller (v5.x / v6.x) with a valid API token or login credentials
 
 ---
 
@@ -77,16 +77,71 @@ pip install -r requirements-dev.txt
 
 ## Configuration
 
-The application requires four parameters:
+The application supports two authentication modes:
 
-| Parameter | CLI Option | Environment Variable |
-| --- | -- | --- |
-| Base API URL | `--base-url` | `OMADA_BASE_URL` |
-| Controller ID | `--controller-id` | `OMADA_CONTROLLER_ID` |
-| API Token | `--token` | `OMADA_TOKEN` |
-| Site ID | `--site-id` | `OMADA_SITE_ID` |
-| Output directory | `--output-dir` | `OMADA_OUTPUT_DIR` |
-| Skip SSL verify | `--no-verify-ssl` | `OMADA_NO_VERIFY_SSL` |
+### Option A — Username / Password (recommended)
+
+Provide the **controller address**, **username**, and **password**. The
+application will automatically discover the controller ID, obtain a token,
+and select the site:
+
+| Parameter | CLI Option | Environment Variable | Default |
+| --- | --- | --- | --- |
+| Controller IP / hostname | `--controller` | `OMADA_CONTROLLER` | |
+| Management port | `--port` | `OMADA_PORT` | `8043` |
+| Username | `--username` | `OMADA_USERNAME` | |
+| Password | `--password` | `OMADA_PASSWORD` | |
+| Site name | `--site-name` | `OMADA_SITE_NAME` | |
+| Output directory | `--output-dir` | `OMADA_OUTPUT_DIR` | `docs` |
+| Verify SSL cert | `--verify-ssl` | `OMADA_VERIFY_SSL` | off |
+
+```bash
+python cli.py fetch \
+  --controller 192.168.1.1 \
+  --username admin \
+  --password secret \
+  --output-dir docs
+
+# Multi-site controller — select a site by name
+python cli.py fetch \
+  --controller 192.168.1.1 \
+  --username admin \
+  --password secret \
+  --site-name "My Office"
+```
+
+Auto-discovery steps:
+
+1. **Controller ID** — `GET /api/info` → `result.omadacId`
+2. **Token** — `POST /<omadacId>/api/v2/login` with credentials → `result.token`
+   (on v6.x controllers the login automatically falls back to port 443 if the
+   management port returns an error)
+3. **Site ID** — `GET /<omadacId>/api/v2/sites` → uses the sole site
+   automatically. For controllers with multiple sites, pass `--site-name`
+   to select a site by its display name (case-insensitive), or the tool
+   prints available sites and exits.
+
+You can override any auto-discovered value by passing it explicitly (e.g.
+`--site-id SITE_ID` or `--site-name "My Office"`).
+
+> **Security note:** `OMADA_PASSWORD` set as an environment variable is
+> visible to other processes on the same host. The token obtained via login
+> is used only for the duration of the session and is never cached to disk.
+
+### Option B — Token (manual)
+
+Supply all four parameters directly:
+
+| Parameter | CLI Option | Environment Variable | Default |
+| --- | --- | --- | --- |
+| Controller IP / hostname | `--controller` | `OMADA_CONTROLLER` | |
+| Management port | `--port` | `OMADA_PORT` | `8043` |
+| Controller ID | `--controller-id` | `OMADA_CONTROLLER_ID` | |
+| API Token | `--token` | `OMADA_TOKEN` | |
+| Site ID | `--site-id` | `OMADA_SITE_ID` | |
+| Site name | `--site-name` | `OMADA_SITE_NAME` | |
+| Output directory | `--output-dir` | `OMADA_OUTPUT_DIR` | `docs` |
+| Verify SSL cert | `--verify-ssl` | `OMADA_VERIFY_SSL` | off |
 
 ### Getting your Controller ID (omadacId)
 
@@ -175,23 +230,42 @@ python cli.py fetch --token $token ...
 ### `fetch` — pull from the controller and generate docs
 
 ```bash
-# Fetch and generate documentation with explicit options
+# Username/password mode (auto-discovers controller-id, token, site-id)
 python cli.py fetch \
-  --base-url    https://192.168.1.1:8043 \
+  --controller 192.168.1.1 \
+  --username admin \
+  --password secret
+
+# Custom management port
+python cli.py fetch \
+  --controller 192.168.1.1 \
+  --port 443 \
+  --username admin \
+  --password secret
+
+# Multi-site controller — select by name
+python cli.py fetch \
+  --controller 192.168.1.1 \
+  --username admin \
+  --password secret \
+  --site-name "My Office"
+
+# Same using environment variables (ideal for CI/CD)
+export OMADA_CONTROLLER=192.168.1.1
+export OMADA_USERNAME=admin
+export OMADA_PASSWORD=secret
+python cli.py fetch
+
+# Token mode with explicit options
+python cli.py fetch \
+  --controller  192.168.1.1 \
   --controller-id abc123def456 \
   --token       YOUR_TOKEN \
   --site-id     SITE_ID \
   --output-dir  docs
 
-# Same using environment variables (ideal for CI/CD)
-export OMADA_BASE_URL=https://192.168.1.1:8043
-export OMADA_CONTROLLER_ID=abc123def456
-export OMADA_TOKEN=YOUR_TOKEN
-export OMADA_SITE_ID=SITE_ID
-python cli.py fetch
-
-# Self-signed certificate (skip SSL verification)
-python cli.py fetch --no-verify-ssl ...
+# Enable SSL verification (off by default)
+python cli.py fetch --verify-ssl ...
 ```
 
 ### `generate` — regenerate Markdown from existing YAML (no API credentials)
@@ -222,6 +296,21 @@ python cli.py serve --host 0.0.0.0 --port 5000
 python cli.py serve
 # Open http://127.0.0.1:5000 in your browser
 ```
+
+The configuration form offers two authentication tabs:
+
+- **🔑 Login** — enter your username and password; the controller ID, token,
+  and site ID are auto-discovered.
+- **🔒 Token** — supply the controller ID, token, and site ID manually
+  (existing workflow).
+
+> **Note on SSL verification defaults:** The web UI defaults to SSL
+> verification **enabled** (checkbox checked) to encourage secure connections
+> in the browser-based workflow. The CLI defaults to SSL verification **off**
+> (`--verify-ssl` must be passed explicitly) because most self-signed
+> controller setups are managed from the command line. This difference is
+> intentional — set `OMADA_VERIFY_SSL=true` or pass `--verify-ssl` in the CLI
+> if your controller has a valid (non-self-signed) certificate.
 
 Fill in the configuration form and click **⚡ Fetch & Generate Documentation** to
 pull data from the controller and create YAML + Markdown files.
@@ -292,28 +381,32 @@ your repository:
 
 | Secret Name | Description |
 | --- | --- |
-| `OMADA_BASE_URL` | Base URL of your Omada controller (e.g. `https://192.168.1.1:8043`) |
+| `OMADA_CONTROLLER` | IP address or hostname of your Omada controller (e.g. `192.168.1.1`) |
+| `OMADA_PORT` | *(Optional)* Management port if not the default `8043` |
 | `OMADA_CONTROLLER_ID` | The `omadacId` value (see [Getting your Controller ID](#getting-your-controller-id-omadacid)) |
 | `OMADA_TOKEN` | A valid API access token |
 | `OMADA_SITE_ID` | The site ID to query |
-| `OMADA_NO_VERIFY_SSL` | *(Optional)* Set to `true` if your controller uses a self-signed certificate |
+| `OMADA_SITE_NAME` | *(Optional)* Human-readable site name (alternative to `OMADA_SITE_ID` for multi-site controllers) |
+| `OMADA_VERIFY_SSL` | *(Optional)* Set to `true` if your controller has a valid (non-self-signed) certificate |
 
 To add these secrets:
 
 1. Navigate to your repository on GitHub.
 2. Click **Settings** → **Secrets and variables** → **Actions**.
 3. Click **New repository secret**.
-4. Enter the **Name** (e.g. `OMADA_BASE_URL`) and **Secret** value.
+4. Enter the **Name** (e.g. `OMADA_CONTROLLER`) and **Secret** value.
 5. Click **Add secret**.
 6. Repeat for each secret listed above.
 
 **Tip:** You can also add secrets via the GitHub CLI:
 
 ```bash
-gh secret set OMADA_BASE_URL --body "https://192.168.1.1:8043"
+gh secret set OMADA_CONTROLLER --body "192.168.1.1"
 gh secret set OMADA_CONTROLLER_ID --body "your-controller-id"
 gh secret set OMADA_TOKEN --body "your-api-token"
 gh secret set OMADA_SITE_ID --body "your-site-id"
+# Or use site name instead of site ID:
+# gh secret set OMADA_SITE_NAME --body "My Office"
 ```
 
 ### Workflow Configuration
@@ -344,11 +437,11 @@ jobs:
 
       - name: Generate documentation
         env:
-          OMADA_BASE_URL:       ${{ secrets.OMADA_BASE_URL }}
+          OMADA_CONTROLLER:     ${{ secrets.OMADA_CONTROLLER }}
           OMADA_CONTROLLER_ID:  ${{ secrets.OMADA_CONTROLLER_ID }}
           OMADA_TOKEN:          ${{ secrets.OMADA_TOKEN }}
           OMADA_SITE_ID:        ${{ secrets.OMADA_SITE_ID }}
-          OMADA_NO_VERIFY_SSL:  "true"   # omit for valid TLS certs
+          OMADA_SITE_NAME:      ${{ secrets.OMADA_SITE_NAME }}
         run: python cli.py fetch --output-dir docs
 
       - name: Commit generated docs

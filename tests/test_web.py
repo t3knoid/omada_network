@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -27,7 +27,7 @@ class TestIndexRoute:
     def test_index_contains_form(self, app_client) -> None:
         resp = app_client.get("/")
         html = resp.data.decode()
-        assert "base_url" in html
+        assert "controller" in html
         assert "controller_id" in html
         assert "token" in html
         assert "site_id" in html
@@ -42,7 +42,7 @@ class TestRunRoute:
     def test_run_missing_fields_flashes_error(self, app_client) -> None:
         resp = app_client.post(
             "/run",
-            data={"base_url": "https://localhost"},
+            data={"controller": "192.168.1.1", "auth_mode": "token"},
             follow_redirects=True,
         )
         assert resp.status_code == 200
@@ -50,10 +50,12 @@ class TestRunRoute:
 
     def test_run_success_flashes_message(self, app_client, tmp_path: Path) -> None:
         form_data = {
-            "base_url": "https://192.168.1.1:8043",
+            "controller": "192.168.1.1",
+            "port": "8043",
             "controller_id": "abc123",
             "token": "mytoken",
             "site_id": "site001",
+            "auth_mode": "token",
         }
 
         mock_paths = {
@@ -70,10 +72,12 @@ class TestRunRoute:
 
     def test_run_service_error_flashes_error(self, app_client) -> None:
         form_data = {
-            "base_url": "https://192.168.1.1:8043",
+            "controller": "192.168.1.1",
+            "port": "8043",
             "controller_id": "abc123",
             "token": "mytoken",
             "site_id": "site001",
+            "auth_mode": "token",
         }
         with patch("omada.web.app.OmadaService") as MockService:
             MockService.return_value.run.side_effect = Exception("Connection refused")
@@ -90,13 +94,71 @@ class TestRunRoute:
             resp = client.post(
                 "/run",
                 data={
-                    "base_url": "https://192.168.1.1:8043",
+                    "controller": "192.168.1.1",
+                    "port": "8043",
                     "controller_id": "abc123",
                     "token": "mytoken",
                     "site_id": "site001",
                 },
             )
         assert resp.status_code == 400
+
+    def test_run_login_mode_auto_discovers(self, app_client, tmp_path: Path) -> None:
+        """Login mode should auto-discover controller-id, token, site-id."""
+        form_data = {
+            "controller": "192.168.1.1",
+            "port": "8043",
+            "username": "admin",
+            "password": "secret",
+            "auth_mode": "login",
+        }
+
+        mock_paths = {
+            "yaml": {"acl_rules": tmp_path / "acl_rules.yaml"},
+            "docs": {"acl_rules": tmp_path / "acl_rules.md"},
+        }
+
+        mock_login_result = MagicMock()
+        mock_login_result.token = "tok"
+        mock_login_result.session = MagicMock()
+        mock_login_result.base_url = "https://192.168.1.1:8043"
+
+        with (
+            patch("omada.api.client.discover_controller_id", return_value="cid"),
+            patch("omada.api.client.login", return_value=mock_login_result),
+            patch("omada.api.client.discover_site_id", return_value="sid"),
+            patch("omada.web.app.OmadaService") as MockService,
+        ):
+            MockService.return_value.run.return_value = mock_paths
+            resp = app_client.post("/run", data=form_data, follow_redirects=True)
+
+        assert resp.status_code == 200
+        assert b"Success" in resp.data
+
+    def test_run_login_mode_missing_credentials_flashes_error(self, app_client) -> None:
+        """Login mode without username/password should flash an error."""
+        form_data = {
+            "controller": "192.168.1.1",
+            "auth_mode": "login",
+        }
+        resp = app_client.post("/run", data=form_data, follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"Missing required fields" in resp.data
+
+    @pytest.mark.parametrize("bad_port", ["abc", "0", "65536", "-1", "3.14"])
+    def test_run_invalid_port_flashes_error(self, app_client, bad_port: str) -> None:
+        """Non-numeric or out-of-range port should flash a friendly error."""
+        form_data = {
+            "controller": "192.168.1.1",
+            "port": bad_port,
+            "auth_mode": "token",
+            "controller_id": "cid",
+            "token": "tok",
+            "site_id": "sid",
+        }
+        resp = app_client.post("/run", data=form_data, follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"Invalid port" in resp.data
 
 
 class TestRegenerateRoute:
