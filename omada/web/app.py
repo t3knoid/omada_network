@@ -72,7 +72,16 @@ def create_app(output_dir: str | Path | None = None) -> Flask:
         ``OUTPUT_DIR`` environment variable, then ``docs``.
     """
     app = Flask(__name__)
-    app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24))
+    _secret_key = os.environ.get("FLASK_SECRET_KEY")
+    if _secret_key:
+        app.secret_key = _secret_key
+    else:
+        app.secret_key = os.urandom(24)
+        logger.warning(
+            "FLASK_SECRET_KEY is not set. Using an ephemeral random key — "
+            "sessions and CSRF tokens will be invalidated on every server restart. "
+            "Set FLASK_SECRET_KEY to a stable value for persistent deployments."
+        )
 
     if output_dir is None:
         output_dir = os.environ.get("OUTPUT_DIR", "docs")

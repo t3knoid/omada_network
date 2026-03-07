@@ -35,3 +35,7 @@ include = ["omada*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+filterwarnings = [
+    # Tests intentionally use verify_ssl=False; suppress the expected warning.
+    "ignore::urllib3.exceptions.InsecureRequestWarning",
+]

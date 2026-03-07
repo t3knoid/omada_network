@@ -163,6 +163,27 @@ to the controller, click **🔄 Regenerate Markdown from YAML**.
 Generated Markdown files appear in the **Generated Documents** panel and can
 be viewed directly in the browser.
 
+### Persistent sessions (`FLASK_SECRET_KEY`)
+
+By default the web server generates a random secret key on startup.  This
+means browser sessions — and the CSRF tokens embedded in every form — are
+invalidated every time the server restarts.  For deployments that need
+persistent sessions, set the `FLASK_SECRET_KEY` environment variable to a
+stable, secret value:
+
+```bash
+export FLASK_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+python cli.py serve
+```
+
+### Air-gapped networks
+
+The web UI loads **Bootstrap 5** and **GitHub Markdown CSS** from public CDNs
+(`cdn.jsdelivr.net` and `cdnjs.cloudflare.com`).  On networks without
+internet access the UI will still function but will render without styling.
+If you need fully offline operation, download those assets locally and update
+the `<link>` / `<script>` tags in `omada/web/templates/`.
+
 ---
 
 ## GitHub Actions Integration

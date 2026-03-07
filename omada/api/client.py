@@ -10,6 +10,7 @@ cloud-managed instances.
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Any
 from urllib.parse import urljoin
 
@@ -67,8 +68,19 @@ class OmadaClient:
             }
         )
         if not verify_ssl:
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             self._session.verify = False
+            # Emit a single process-level warning (respects -W flags and
+            # warnings.filterwarnings) instead of globally silencing all
+            # InsecureRequestWarnings for the whole process.
+            warnings.warn(
+                f"TLS certificate verification is disabled for {base_url}. "
+                "This makes the connection vulnerable to MITM attacks.",
+                urllib3.exceptions.InsecureRequestWarning,
+                stacklevel=2,
+            )
+            logger.warning(
+                "TLS certificate verification disabled for %s", base_url
+            )
 
     # ------------------------------------------------------------------
     # Internal helpers
