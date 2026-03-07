@@ -74,7 +74,6 @@ def cli(ctx: click.Context) -> None:
     "--base-url",
     default=lambda: _env("OMADA_BASE_URL"),
     show_default="$OMADA_BASE_URL",
-    required=True,
     help="Base URL of the Omada controller, e.g. https://192.168.1.1:8043",
 )
 @click.option(

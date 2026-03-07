@@ -306,7 +306,7 @@ class TestDiscoverSiteId:
         )
         with patch("omada.api.client.requests.Session") as MockSess:
             MockSess.return_value.get.return_value = resp
-            with pytest.raises(SystemExit, match="Multiple sites found"):
+            with pytest.raises(RuntimeError, match="Multiple sites found"):
                 discover_site_id(
                     "https://192.168.1.1:8043", "cid123", "tok",
                     verify_ssl=False,

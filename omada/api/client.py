@@ -151,7 +151,7 @@ def discover_site_id(
     """Auto-discover the site ID.
 
     If the controller has exactly one site, its ``id`` is returned.
-    If there are multiple sites, a :class:`SystemExit` is raised with a
+    If there are multiple sites, a :class:`RuntimeError` is raised with a
     message listing the available sites so the user can choose.
 
     Returns
@@ -195,7 +195,7 @@ def discover_site_id(
     lines = ["Multiple sites found. Please specify --site-id:"]
     for s in sites:
         lines.append(f"  • {s.get('name', '?')}  (id: {s.get('id', '?')})")
-    raise SystemExit("\n".join(lines))
+    raise RuntimeError("\n".join(lines))
 
 
 class OmadaClient:
