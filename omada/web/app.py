@@ -120,7 +120,7 @@ def create_app(output_dir: str | Path | None = None) -> Flask:
         output_dir_ = current_app.config["OUTPUT_DIR"]
 
         controller_host = request.form.get("controller", "").strip()
-        port = request.form.get("port", "8043").strip() or "8043"
+        port_str = request.form.get("port", "8043").strip() or "8043"
         controller_id = request.form.get("controller_id", "")
         token = request.form.get("token", "")
         site_id = request.form.get("site_id", "")
@@ -132,6 +132,17 @@ def create_app(output_dir: str | Path | None = None) -> Flask:
 
         if not controller_host:
             flash("Missing required field: Controller IP / Hostname", "danger")
+            return redirect(url_for("index"))
+
+        try:
+            port = int(port_str)
+            if not (1 <= port <= 65535):
+                raise ValueError("out of range")
+        except ValueError:
+            flash(
+                f"Invalid port: '{port_str}'. Must be an integer between 1 and 65535.",
+                "danger",
+            )
             return redirect(url_for("index"))
 
         base_url = f"https://{controller_host}:{port}"

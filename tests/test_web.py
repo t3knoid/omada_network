@@ -145,6 +145,21 @@ class TestRunRoute:
         assert resp.status_code == 200
         assert b"Missing required fields" in resp.data
 
+    @pytest.mark.parametrize("bad_port", ["abc", "0", "65536", "-1", "3.14"])
+    def test_run_invalid_port_flashes_error(self, app_client, bad_port: str) -> None:
+        """Non-numeric or out-of-range port should flash a friendly error."""
+        form_data = {
+            "controller": "192.168.1.1",
+            "port": bad_port,
+            "auth_mode": "token",
+            "controller_id": "cid",
+            "token": "tok",
+            "site_id": "sid",
+        }
+        resp = app_client.post("/run", data=form_data, follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"Invalid port" in resp.data
+
 
 class TestRegenerateRoute:
     def test_regenerate_no_yaml_files_flashes_warning(
