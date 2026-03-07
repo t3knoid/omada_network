@@ -83,9 +83,9 @@ def cli(ctx: click.Context) -> None:
 )
 @click.option(
     "--port",
-    default=lambda: int(_env("OMADA_PORT", "8043")),
+    default=lambda: _env("OMADA_PORT", "8043"),
     show_default="$OMADA_PORT (default: 8043)",
-    type=int,
+    type=click.IntRange(1, 65535),
     help="Management port of the Omada controller.",
 )
 @click.option(
