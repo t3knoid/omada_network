@@ -129,8 +129,11 @@ def cli(ctx: click.Context) -> None:
 )
 @click.option(
     "--password",
-    default=lambda: _env("OMADA_PASSWORD"),
-    show_default="$OMADA_PASSWORD",
+    envvar="OMADA_PASSWORD",
+    prompt=True,
+    hide_input=True,
+    prompt_required=False,
+    show_default=False,
     help="Controller login password.",
 )
 @click.option(
