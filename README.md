@@ -7,7 +7,7 @@ Markdown documentation tables.
 ## Features
 
 | Resource | YAML | Markdown |
-|---|---|---|
+| --- | --- | --- |
 | ACL Rules | ✓ | ✓ |
 | IP Groups | ✓ | ✓ |
 | Port Groups | ✓ | ✓ |
@@ -28,7 +28,7 @@ Markdown documentation tables.
 
 ## Project Structure
 
-```
+```text
 omada_network/
 ├── omada/
 │   ├── api/
@@ -80,7 +80,7 @@ pip install -r requirements-dev.txt
 The application requires four parameters:
 
 | Parameter | CLI Option | Environment Variable |
-|---|---|---|
+| --- | -- | --- |
 | Base API URL | `--base-url` | `OMADA_BASE_URL` |
 | Controller ID | `--controller-id` | `OMADA_CONTROLLER_ID` |
 | API Token | `--token` | `OMADA_TOKEN` |
@@ -93,11 +93,80 @@ The application requires four parameters:
 The `omadacId` can be found by navigating to
 `https://<controller-ip>:<port>/api/info` in your browser.
 
+### Getting your Site ID
+
+The Site ID can be found by logging into your Omada controller's web interface
+and navigating to a site. The Site ID appears in the URL as the path segment
+after `/site/`, for example:
+
+```text
+https://<controller-ip>:<port>/<omadacId>/site/<siteId>/dashboard
+```
+
+Alternatively, query the controller's API directly:
+
+```text
+https://<controller-ip>:<port>/<omadacId>/api/v2/sites?currentPage=1&currentPageSize=100
+```
+
+Each site object in the response contains an `"id"` field — that is your Site ID.
+
 ### Getting a Token
 
-Use your Omada controller's login API to obtain a token, or obtain one from
-the Omada portal.  Pass it via `--token` or the `OMADA_TOKEN` environment
+A valid API token is required to authenticate with the Omada controller. You
+can obtain one by calling the controller's login endpoint:
+
+```text
+POST https://<controller-ip>:<port>/<omadacId>/api/v2/login
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "your-password"
+}
+```
+
+A successful response contains a `token` field inside the `result` object:
+
+```json
+{
+  "errorCode": 0,
+  "result": {
+    "token": "your-access-token",
+    ...
+  }
+}
+```
+
+Use that `token` value with `--token` or the `OMADA_TOKEN` environment
 variable.
+
+**Programmatic retrieval (bash):**
+
+```bash
+TOKEN=$(curl -sk -X POST \
+  "https://<controller-ip>:<port>/<omadacId>/api/v2/login" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"your-password"}' \
+  | python -c "import sys,json; print(json.load(sys.stdin)['result']['token'])")
+
+python cli.py fetch --token "$TOKEN" ...
+```
+
+**Programmatic retrieval (PowerShell):**
+
+```powershell
+$body = @{ username = "admin"; password = "your-password" } | ConvertTo-Json
+$resp = Invoke-RestMethod -Uri "https://<controller-ip>:<port>/<omadacId>/api/v2/login" `
+    -Method Post -Body $body -ContentType "application/json" -SkipCertificateCheck
+$token = $resp.result.token
+
+python cli.py fetch --token $token ...
+```
+
+> **Note:** Tokens expire after a period of inactivity. For automated
+> workflows (e.g. GitHub Actions), retrieve a fresh token at the start of
+> each run rather than storing a long-lived token in secrets.
 
 ---
 
@@ -197,7 +266,7 @@ The GitHub Actions workflow requires the following secrets to be configured in
 your repository:
 
 | Secret Name | Description |
-|---|---|
+| --- | --- |
 | `OMADA_BASE_URL` | Base URL of your Omada controller (e.g. `https://192.168.1.1:8043`) |
 | `OMADA_CONTROLLER_ID` | The `omadacId` value (see [Getting your Controller ID](#getting-your-controller-id-omadacid)) |
 | `OMADA_TOKEN` | A valid API access token |
@@ -213,13 +282,14 @@ To add these secrets:
 5. Click **Add secret**.
 6. Repeat for each secret listed above.
 
-> **Tip:** You can also add secrets via the GitHub CLI:
-> ```bash
-> gh secret set OMADA_BASE_URL --body "https://192.168.1.1:8043"
-> gh secret set OMADA_CONTROLLER_ID --body "your-controller-id"
-> gh secret set OMADA_TOKEN --body "your-api-token"
-> gh secret set OMADA_SITE_ID --body "your-site-id"
-> ```
+**Tip:** You can also add secrets via the GitHub CLI:
+
+```bash
+gh secret set OMADA_BASE_URL --body "https://192.168.1.1:8043"
+gh secret set OMADA_CONTROLLER_ID --body "your-controller-id"
+gh secret set OMADA_TOKEN --body "your-api-token"
+gh secret set OMADA_SITE_ID --body "your-site-id"
+```
 
 ### Workflow Configuration
 
@@ -271,7 +341,7 @@ jobs:
 
 After a successful run the `docs/` directory contains:
 
-```
+```text
 docs/
 ├── acl_rules.yaml          ← Source of truth (YAML)
 ├── acl_rules.md            ← Markdown documentation table
@@ -317,7 +387,7 @@ python -m pytest tests/test_client.py -v
 
 ### Architecture
 
-```
+```text
 CLI / Web UI
      │
      ▼
@@ -333,6 +403,7 @@ OmadaService              ← orchestrates everything
 ```
 
 Adding a new resource type only requires:
+
 1. A new `get_*` method on `OmadaClient`
 2. A new `ResourceDefinition` entry in `omada/registry.py`
 
