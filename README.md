@@ -250,8 +250,33 @@ python cli.py serve
 The web UI loads **Bootstrap 5** and **GitHub Markdown CSS** from public CDNs
 (`cdn.jsdelivr.net` and `cdnjs.cloudflare.com`).  On networks without
 internet access the UI will still function but will render without styling.
-If you need fully offline operation, download those assets locally and update
-the `<link>` / `<script>` tags in `omada/web/templates/`.
+
+If you need fully offline operation, download the three assets listed below
+and place them in a local directory (e.g. `omada/web/static/`):
+
+| Asset | CDN URL |
+|---|---|
+| Bootstrap 5.3.3 CSS | `https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css` |
+| Bootstrap 5.3.3 JS | `https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js` |
+| GitHub Markdown CSS 5.5.1 | `https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown-light.min.css` |
+
+Then update the `<link>` and `<script>` tags in both
+`omada/web/templates/index.html` and `omada/web/templates/doc_view.html` to
+point to the local files instead of the CDN URLs. For example, replace:
+
+```html
+<link rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+```
+
+with:
+
+```html
+<link rel="stylesheet"
+      href="{{ url_for('static', filename='bootstrap.min.css') }}">
+```
+
+Repeat for the Bootstrap JS bundle and the GitHub Markdown CSS file.
 
 ---
 
