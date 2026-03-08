@@ -75,9 +75,8 @@ class OmadaService:
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "  ✗ %s – %s", defn.name, exc, exc_info=True,
-                )
+                logger.error("  ✗ %s – %s", defn.name, exc)
+                logger.debug("Traceback for %s:", defn.name, exc_info=True)
                 data[defn.name] = []
                 failures.append(defn.name)
 
