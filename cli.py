@@ -16,6 +16,9 @@ OMADA_PASSWORD        → --password  (Authorization Code mode)
 OMADA_SITE_NAME       → --site-name
 OMADA_OUTPUT_DIR      → --output-dir
 OMADA_VERIFY_SSL      → --verify-ssl (set to 1/true/yes/on to enable)
+OMADA_LOG_LEVEL       → --log-level  (DEBUG, INFO, WARNING, ERROR)
+OMADA_LOG_FILE        → --log-file   (path to log file; enables file logging)
+OMADA_LOG_FORMAT      → log format string (default: "%(levelname)s %(message)s")
 
 Authentication modes (both use the official Omada Open API)
 -----------------------------------------------------------
@@ -37,11 +40,8 @@ import sys
 
 import click
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)s %(message)s",
-    stream=sys.stderr,
-)
+from omada.logging_config import setup_logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,15 +65,35 @@ def _env_bool(name: str) -> bool:
     default=False,
     help="Enable verbose/debug logging.",
 )
+@click.option(
+    "--log-level",
+    default=lambda: _env("OMADA_LOG_LEVEL", "INFO"),
+    show_default="$OMADA_LOG_LEVEL (default: INFO)",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
+    help="Set the logging level.",
+)
+@click.option(
+    "--log-file",
+    default=lambda: _env("OMADA_LOG_FILE"),
+    show_default="$OMADA_LOG_FILE (default: disabled)",
+    help=(
+        "Path to the log file.  When provided, logs are also written to "
+        "this file using rotating file handling."
+    ),
+)
 @click.pass_context
-def cli(ctx: click.Context, verbose: bool) -> None:
+def cli(ctx: click.Context, verbose: bool, log_level: str, log_file: str) -> None:
     """Omada Network Documentation Generator.
 
     Run without a sub-command to fetch and generate docs (equivalent to
     running the ``fetch`` sub-command with default options).
     """
-    if verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    effective_level = "DEBUG" if verbose else log_level.upper()
+    setup_logging(
+        level=effective_level,
+        log_file=log_file or None,
+        log_format=_env("OMADA_LOG_FORMAT") or None,
+    )
     if ctx.invoked_subcommand is None:
         ctx.invoke(fetch)
 
@@ -326,7 +346,7 @@ def serve(host: str, port: int, debug: bool, output_dir: str) -> None:
     """Start the web UI server."""
     from omada.web.app import create_app
 
-    application = create_app(output_dir=output_dir)
+    application = create_app(output_dir=output_dir, configure_logging=False)
     click.echo(f"Starting web UI on http://{host}:{port}  (output: {output_dir})")
     application.run(host=host, port=port, debug=debug)
 
