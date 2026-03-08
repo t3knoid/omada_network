@@ -221,7 +221,7 @@ def openapi_auth_code_login(
         code_url,
         params={
             "client_id": client_id,
-            "omadac_id": omadac_id,
+            "omadacId": omadac_id,
             "response_type": "code",
         },
         headers={

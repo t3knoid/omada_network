@@ -150,6 +150,24 @@ class TestOpenApiAuthCodeLogin:
         assert result.base_url == "https://192.168.1.1"
         assert mock_sess.post.call_count == 3
 
+        # Verify query params are consistent across all three steps
+        step1_call = mock_sess.post.call_args_list[0]
+        assert step1_call.kwargs["params"] == {
+            "client_id": "my-client-id",
+            "omadacId": "ctrl-001",
+        }
+        step2_call = mock_sess.post.call_args_list[1]
+        assert step2_call.kwargs["params"] == {
+            "client_id": "my-client-id",
+            "omadacId": "ctrl-001",
+            "response_type": "code",
+        }
+        step3_call = mock_sess.post.call_args_list[2]
+        assert step3_call.kwargs["params"] == {
+            "grant_type": "authorization_code",
+            "code": "OC-my-auth-code",
+        }
+
     def test_auth_code_login_step1_error(self) -> None:
         login_resp = {"errorCode": -30109, "msg": "Invalid credentials"}
         with patch("omada.api.openapi_client._make_session") as mock_session_factory:
