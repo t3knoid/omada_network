@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -252,3 +254,98 @@ class TestDocViewPathTraversal:
         assert resp.status_code == 200
         assert b"not found" in resp.data
 
+
+class TestDownloadDoc:
+    def test_download_single_file(self, app_client, tmp_path: Path) -> None:
+        doc = tmp_path / "acl_rules.md"
+        doc.write_text("# ACL Rules\n")
+
+        resp = app_client.get("/download/acl_rules.md")
+        assert resp.status_code == 200
+        assert resp.headers["Content-Disposition"].startswith("attachment")
+        assert b"# ACL Rules" in resp.data
+
+    def test_download_missing_file_redirects(self, app_client) -> None:
+        resp = app_client.get(
+            "/download/nonexistent.md", follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert b"not found" in resp.data
+
+    def test_download_path_traversal_blocked(self, app_client) -> None:
+        resp = app_client.get(
+            "/download/../../../etc/passwd", follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert b"not found" in resp.data or b"Access denied" in resp.data
+
+
+class TestDownloadSelected:
+    def test_no_files_selected_flashes_warning(self, app_client) -> None:
+        resp = app_client.post("/download", data={}, follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"No files selected" in resp.data
+
+    def test_download_single_selected_file(
+        self, app_client, tmp_path: Path,
+    ) -> None:
+        doc = tmp_path / "acl_rules.md"
+        doc.write_text("# ACL Rules\n")
+
+        resp = app_client.post(
+            "/download",
+            data={"filenames": "acl_rules.md"},
+        )
+        assert resp.status_code == 200
+        assert resp.headers["Content-Disposition"].startswith("attachment")
+        assert b"# ACL Rules" in resp.data
+
+    def test_download_multiple_files_as_zip(
+        self, app_client, tmp_path: Path,
+    ) -> None:
+        (tmp_path / "acl_rules.md").write_text("# ACL Rules\n")
+        (tmp_path / "static_routes.md").write_text("# Static Routes\n")
+
+        resp = app_client.post(
+            "/download",
+            data={"filenames": ["acl_rules.md", "static_routes.md"]},
+        )
+        assert resp.status_code == 200
+        assert "omada_docs.zip" in resp.headers["Content-Disposition"]
+
+        zf = zipfile.ZipFile(BytesIO(resp.data))
+        assert sorted(zf.namelist()) == ["acl_rules.md", "static_routes.md"]
+        assert b"# ACL Rules" in zf.read("acl_rules.md")
+        assert b"# Static Routes" in zf.read("static_routes.md")
+
+    def test_download_selected_path_traversal_blocked(
+        self, app_client,
+    ) -> None:
+        resp = app_client.post(
+            "/download",
+            data={"filenames": "../../../etc/passwd"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert b"not found" in resp.data or b"Access denied" in resp.data
+
+    def test_download_selected_missing_file_redirects(
+        self, app_client,
+    ) -> None:
+        resp = app_client.post(
+            "/download",
+            data={"filenames": "nonexistent.md"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert b"not found" in resp.data
+
+    def test_download_csrf_enforced_outside_testing(
+        self, tmp_path: Path,
+    ) -> None:
+        app = create_app(output_dir=tmp_path)
+        app.config["TESTING"] = False
+        app.secret_key = "test-secret"
+        with app.test_client() as client:
+            resp = client.post("/download", data={"filenames": "a.md"})
+        assert resp.status_code == 400
