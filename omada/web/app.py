@@ -29,6 +29,7 @@ from flask import (
 )
 from markupsafe import Markup
 
+from omada.logging_config import setup_logging
 from omada.service import OmadaService, generate_from_yaml
 
 logger = logging.getLogger(__name__)
@@ -62,8 +63,30 @@ def _check_csrf() -> None:
 # Application factory
 # ---------------------------------------------------------------------------
 
-def create_app(output_dir: str | Path | None = None) -> Flask:
-    """Create and return a configured Flask application."""
+def create_app(
+    output_dir: str | Path | None = None,
+    *,
+    configure_logging: bool = True,
+) -> Flask:
+    """Create and return a configured Flask application.
+
+    Parameters
+    ----------
+    output_dir:
+        Directory for generated YAML / Markdown files.
+    configure_logging:
+        When ``True`` (the default), :func:`setup_logging` is called using
+        ``OMADA_LOG_*`` environment variables.  Pass ``False`` when the
+        caller has already configured logging (e.g. the CLI ``serve``
+        command) to avoid overriding those settings.
+    """
+    if configure_logging:
+        setup_logging(
+            level=os.environ.get("OMADA_LOG_LEVEL", "INFO").strip() or "INFO",
+            log_file=os.environ.get("OMADA_LOG_FILE", "").strip() or None,
+            log_format=os.environ.get("OMADA_LOG_FORMAT", "").strip() or None,
+        )
+
     app = Flask(__name__)
     _secret_key = os.environ.get("FLASK_SECRET_KEY")
     if _secret_key:

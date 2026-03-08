@@ -44,4 +44,4 @@ echo ""
   fi \
 ) &
 
-exec python cli.py serve --host "$HOST" --port "$PORT"
+exec python cli.py --log-file omada_network.log serve --host "$HOST" --port "$PORT"

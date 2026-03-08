@@ -157,6 +157,47 @@ python cli.py fetch \
 > client credentials, the tool automatically uses Authorization Code mode.
 > Without them, it defaults to Client Credentials mode.
 
+### Logging
+
+By default the application logs to the console (``stderr``) at the ``INFO``
+level.  You can optionally enable **file logging** with automatic rotation,
+and customise the log level and format via CLI options or environment
+variables.
+
+| Parameter | CLI Option | Environment Variable | Default |
+| --- | --- | --- | --- |
+| Log level | `--log-level` | `OMADA_LOG_LEVEL` | `INFO` |
+| Log file path | `--log-file` | `OMADA_LOG_FILE` | *(disabled)* |
+| Log format | — | `OMADA_LOG_FORMAT` | `%(levelname)s %(message)s` |
+
+When a log file path is provided, the application uses a
+`RotatingFileHandler` (5 MB per file, 3 backups) so log files never grow
+without bound.  The log directory is created automatically if it does not
+exist.  **Log file paths are relative to the current working directory**
+(the directory from which you run the command).
+
+```bash
+# Enable file logging — writes to ./logs/omada_network.log relative to CWD
+python cli.py --log-file logs/omada_network.log fetch ...
+
+# Change log level to DEBUG
+python cli.py --log-level DEBUG fetch ...
+
+# Using environment variables
+export OMADA_LOG_LEVEL=DEBUG
+export OMADA_LOG_FILE=logs/omada_network.log
+python cli.py fetch ...
+```
+
+> **Note:** The `--verbose` / `-v` flag is a shortcut for `--log-level DEBUG`.
+> Console logging to ``stderr`` is always active regardless of file logging
+> settings.
+>
+> The `start_web` convenience scripts enable file logging to
+> `omada_network.log` in the current working directory (not the default
+> `logs/` subdirectory).  These scripts are intended for local development
+> only.
+
 ### Auto-discovery
 
 Both modes automatically discover:
