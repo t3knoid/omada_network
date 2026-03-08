@@ -13,7 +13,6 @@ See :func:`setup_logging` for the full list of parameters and their defaults.
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -22,7 +21,7 @@ from pathlib import Path
 DEFAULT_FORMAT = "%(levelname)s %(message)s"
 
 #: Default log file path when file logging is enabled.
-DEFAULT_LOG_FILE = os.path.join("logs", "omada_network.log")
+DEFAULT_LOG_FILE = "logs/omada_network.log"
 
 #: Default maximum log file size before rotation (5 MB).
 DEFAULT_MAX_BYTES = 5 * 1024 * 1024
@@ -58,6 +57,7 @@ def setup_logging(
         Number of rotated backup files to retain.
     """
     # Resolve effective values.
+    level = (level or "").upper()
     numeric_level = getattr(logging, level, None)
     if not isinstance(numeric_level, int):
         numeric_level = logging.INFO

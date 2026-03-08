@@ -63,14 +63,24 @@ def _check_csrf() -> None:
 # Application factory
 # ---------------------------------------------------------------------------
 
-def create_app(output_dir: str | Path | None = None) -> Flask:
-    """Create and return a configured Flask application."""
-    # Configure logging only when create_app() is the entry-point (e.g.
-    # standalone WSGI).  When the CLI launches the web server it will
-    # have already called setup_logging() — skip to avoid overriding
-    # CLI-supplied settings.
-    root = logging.getLogger()
-    if not root.handlers:
+def create_app(
+    output_dir: str | Path | None = None,
+    *,
+    configure_logging: bool = True,
+) -> Flask:
+    """Create and return a configured Flask application.
+
+    Parameters
+    ----------
+    output_dir:
+        Directory for generated YAML / Markdown files.
+    configure_logging:
+        When ``True`` (the default), :func:`setup_logging` is called using
+        ``OMADA_LOG_*`` environment variables.  Pass ``False`` when the
+        caller has already configured logging (e.g. the CLI ``serve``
+        command) to avoid overriding those settings.
+    """
+    if configure_logging:
         setup_logging(
             level=os.environ.get("OMADA_LOG_LEVEL", "INFO").strip().upper() or "INFO",
             log_file=os.environ.get("OMADA_LOG_FILE", "").strip() or None,

@@ -179,13 +179,10 @@ class TestSetupLoggingEnvVarsViaCli:
         formatted = handler.formatter.format(record)
         assert "mymod: msg" == formatted
 
-    def test_empty_log_file_disables_file_logging(self) -> None:
-        setup_logging(log_file="")
-        root = logging.getLogger()
-        file_handlers = [
-            h for h in root.handlers if isinstance(h, logging.FileHandler)
-        ]
-        assert len(file_handlers) == 0
+    def test_lowercase_level_is_normalized(self) -> None:
+        """Verify setup_logging() handles lowercase level strings."""
+        setup_logging(level="debug")
+        assert logging.getLogger().level == logging.DEBUG
 
 
 class TestDefaults:

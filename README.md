@@ -173,10 +173,11 @@ variables.
 When a log file path is provided, the application uses a
 `RotatingFileHandler` (5 MB per file, 3 backups) so log files never grow
 without bound.  The log directory is created automatically if it does not
-exist.
+exist.  **Log file paths are relative to the current working directory**
+(the directory from which you run the command).
 
 ```bash
-# Enable file logging to the default path
+# Enable file logging — writes to ./logs/omada_network.log relative to CWD
 python cli.py fetch --log-file logs/omada_network.log ...
 
 # Change log level to DEBUG

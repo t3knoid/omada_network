@@ -346,7 +346,7 @@ def serve(host: str, port: int, debug: bool, output_dir: str) -> None:
     """Start the web UI server."""
     from omada.web.app import create_app
 
-    application = create_app(output_dir=output_dir)
+    application = create_app(output_dir=output_dir, configure_logging=False)
     click.echo(f"Starting web UI on http://{host}:{port}  (output: {output_dir})")
     application.run(host=host, port=port, debug=debug)
 
