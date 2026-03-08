@@ -279,7 +279,7 @@ class TestPasswordPromptBehaviour:
             patch("sys.stdin") as mock_stdin,
         ):
             mock_stdin.isatty.return_value = False
-            with pytest.raises(click.UsageError, match="stdin is not a TTY"):
+            with pytest.raises(click.UsageError, match="Password required.*stdin is not a TTY"):
                 _build_client(
                     controller="192.168.1.1",
                     port=443,
