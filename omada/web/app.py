@@ -65,12 +65,17 @@ def _check_csrf() -> None:
 
 def create_app(output_dir: str | Path | None = None) -> Flask:
     """Create and return a configured Flask application."""
-    # Configure logging for the web app — honours OMADA_LOG_* env vars.
-    setup_logging(
-        level=os.environ.get("OMADA_LOG_LEVEL", "INFO").strip().upper() or "INFO",
-        log_file=os.environ.get("OMADA_LOG_FILE", "").strip() or None,
-        log_format=os.environ.get("OMADA_LOG_FORMAT", "").strip() or None,
-    )
+    # Configure logging only when create_app() is the entry-point (e.g.
+    # standalone WSGI).  When the CLI launches the web server it will
+    # have already called setup_logging() — skip to avoid overriding
+    # CLI-supplied settings.
+    root = logging.getLogger()
+    if not root.handlers:
+        setup_logging(
+            level=os.environ.get("OMADA_LOG_LEVEL", "INFO").strip().upper() or "INFO",
+            log_file=os.environ.get("OMADA_LOG_FILE", "").strip() or None,
+            log_format=os.environ.get("OMADA_LOG_FORMAT", "").strip() or None,
+        )
 
     app = Flask(__name__)
     _secret_key = os.environ.get("FLASK_SECRET_KEY")

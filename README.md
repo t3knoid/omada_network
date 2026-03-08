@@ -191,6 +191,11 @@ python cli.py fetch ...
 > **Note:** The `--verbose` / `-v` flag is a shortcut for `--log-level DEBUG`.
 > Console logging to ``stderr`` is always active regardless of file logging
 > settings.
+>
+> The `start_web` convenience scripts enable file logging to
+> `omada_network.log` in the current working directory (not the default
+> `logs/` subdirectory).  These scripts are intended for local development
+> only.
 
 ### Auto-discovery
 
