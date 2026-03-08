@@ -63,6 +63,45 @@ class TestRowFormatters:
         assert rows[0]["Policy"] == "Permit"
         assert rows[0]["Status"] == "Enabled"
 
+    def test_acl_rule_rows_resolves_names(self) -> None:
+        from omada.registry import _acl_rule_rows
+        context = {
+            "ip_groups": [{"groupId": "ip1", "name": "HDHomeRun"}],
+            "port_groups": [{"groupId": "pg1", "name": "Minecraft"}],
+            "networks": [{"id": "net1", "name": "IoT Devices"}],
+        }
+        rules = [
+            {
+                "description": "Allow HDHomeRun",
+                "policy": 1,
+                "status": True,
+                "sourceType": 1,
+                "sourceIds": ["ip1"],
+                "destinationType": 1,
+                "destinationIds": ["ip1"],
+            },
+            {
+                "description": "Allow Net to Port",
+                "policy": 1,
+                "status": True,
+                "sourceType": 0,
+                "sourceIds": ["net1"],
+                "destinationType": 2,
+                "destinationIds": ["pg1"],
+            },
+        ]
+        rows = _acl_rule_rows(rules, context)
+        assert rows[0]["Source"] == "HDHomeRun"
+        assert rows[0]["Destination"] == "HDHomeRun"
+        assert rows[1]["Source"] == "IoT Devices"
+        assert rows[1]["Destination"] == "Minecraft"
+
+    def test_acl_rule_rows_no_context_shows_raw_ids(self) -> None:
+        from omada.registry import _acl_rule_rows
+        rows = _acl_rule_rows([{"description": "r", "sourceIds": ["abc123"], "destinationIds": []}])
+        assert rows[0]["Source"] == "abc123"
+        assert rows[0]["Destination"] == ""
+
     def test_ip_group_rows(self) -> None:
         from omada.registry import _ip_group_rows
         rows = _ip_group_rows([{"name": "g1", "ipList": [{"ip": "10.0.0.0", "mask": "8"}]}])
@@ -81,17 +120,21 @@ class TestRowFormatters:
 
     def test_ssid_rows(self) -> None:
         from omada.registry import _ssid_rows
-        rows = _ssid_rows([{"ssid": "HomeNet", "wlanName": "Main", "enable": False}])
+        rows = _ssid_rows([{"name": "HomeNet", "wlanName": "Main", "band": 3, "security": 3, "broadcast": False}])
         assert rows[0]["SSID"] == "HomeNet"
-        assert rows[0]["Status"] == "Disabled"
+        assert rows[0]["Band"] == "2.4 GHz / 5 GHz"
+        assert rows[0]["Security"] == "WPA2"
+        assert rows[0]["Broadcast"] == "No"
 
     def test_dhcp_reservation_rows(self) -> None:
         from omada.registry import _dhcp_reservation_rows
         rows = _dhcp_reservation_rows(
-            [{"ip": "192.168.1.100", "mac": "aa:bb:cc:dd:ee:ff", "clientName": "laptop"}]
+            [{"netName": "IoT", "ip": "192.168.1.100", "mac": "AA-BB-CC-DD-EE-FF", "name": "laptop", "status": True, "serverName": "Gateway"}]
         )
         assert rows[0]["IP Address"] == "192.168.1.100"
-        assert rows[0]["Hostname"] == "laptop"
+        assert rows[0]["Name"] == "laptop"
+        assert rows[0]["Network"] == "IoT"
+        assert rows[0]["Status"] == "Enabled"
 
 
 class TestGenerateFromYaml:

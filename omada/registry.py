@@ -34,8 +34,9 @@ class ResourceDefinition:
     name: str
     title: str
     fetch_method: str
-    row_formatter: Callable[[Any], list[dict[str, Any]]]
+    row_formatter: Callable[..., list[dict[str, Any]]]
     sort_key: str = "Name"
+    needs_context: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -95,8 +96,39 @@ def _parse_subnet(gw_subnet: str) -> tuple[str, str]:
     return str(gw_subnet), ""
 
 
-def _acl_rule_rows(data: Any) -> list[dict[str, Any]]:
+def _build_id_lookup(context: dict[str, Any] | None) -> dict[str, str]:
+    """Build a combined ID → name lookup from networks, IP groups, and port groups."""
+    lookup: dict[str, str] = {}
+    if not context:
+        return lookup
+    for net in (context.get("networks") or []):
+        if isinstance(net, dict):
+            net_id = net.get("id", "")
+            if net_id:
+                lookup[net_id] = net.get("name", net_id)
+    for grp in (context.get("ip_groups") or []):
+        if isinstance(grp, dict):
+            grp_id = grp.get("groupId", grp.get("id", ""))
+            if grp_id:
+                lookup[grp_id] = grp.get("name", grp_id)
+    for grp in (context.get("port_groups") or []):
+        if isinstance(grp, dict):
+            grp_id = grp.get("groupId", grp.get("id", ""))
+            if grp_id:
+                lookup[grp_id] = grp.get("name", grp_id)
+    return lookup
+
+
+def _resolve_ids(ids: list[str], lookup: dict[str, str]) -> str:
+    """Resolve a list of IDs to a comma-separated string of names."""
+    if not ids:
+        return ""
+    return ", ".join(lookup.get(i, i) for i in ids)
+
+
+def _acl_rule_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     items = data if isinstance(data, list) else []
+    lookup = _build_id_lookup(context)
     rows = []
     for r in items:
         policy_raw = r.get("policy", "")
@@ -113,7 +145,9 @@ def _acl_rule_rows(data: Any) -> list[dict[str, Any]]:
             "Status": "Enabled" if r.get("status", True) else "Disabled",
             "Policy": policy,
             "Protocols": _format_protocols(r.get("protocols", r.get("protocol", ""))),
+            "Source": _resolve_ids(r.get("sourceIds", []), lookup),
             "Source Type": src_type,
+            "Destination": _resolve_ids(r.get("destinationIds", []), lookup),
             "Destination Type": dst_type,
             "ACL Type": r.get("aclType", ""),
         })
@@ -256,17 +290,39 @@ def _gateway_rows(data: Any) -> list[dict[str, Any]]:
     return rows
 
 
+# Band bits: 1=2.4GHz, 2=5GHz, 4=6GHz  (7=all, 3=2.4+5, etc.)
+_BAND_MAP: dict[int, str] = {
+    1: "2.4 GHz",
+    2: "5 GHz",
+    3: "2.4 GHz / 5 GHz",
+    4: "6 GHz",
+    5: "2.4 GHz / 6 GHz",
+    6: "5 GHz / 6 GHz",
+    7: "2.4 GHz / 5 GHz / 6 GHz",
+}
+
+_SECURITY_MAP: dict[int, str] = {
+    0: "None",
+    1: "WEP",
+    2: "WPA",
+    3: "WPA2",
+    4: "WPA/WPA2",
+    5: "WPA3",
+    6: "WPA2/WPA3",
+}
+
+
 def _ssid_rows(data: Any) -> list[dict[str, Any]]:
     items = data if isinstance(data, list) else []
     return [
         {
             "WLAN": s.get("wlanName", ""),
-            "SSID": s.get("ssid", s.get("name", "")),
-            "Security": s.get("security", ""),
-            "Band": s.get("band", ""),
-            "Status": "Enabled" if s.get("enable", True) else "Disabled",
+            "SSID": s.get("name", s.get("ssid", "")),
+            "Security": _SECURITY_MAP.get(s.get("security"), str(s.get("security", ""))),
+            "Band": _BAND_MAP.get(s.get("band"), str(s.get("band", ""))),
+            "Broadcast": "Yes" if s.get("broadcast", True) else "No",
             "VLAN": s.get("vlanId", s.get("vlan", "")),
-            "Hidden": "Yes" if s.get("hide") else "No",
+            "Guest": "Yes" if s.get("guestNetEnable") else "No",
         }
         for s in items
     ]
@@ -276,11 +332,12 @@ def _dhcp_reservation_rows(data: Any) -> list[dict[str, Any]]:
     items = data if isinstance(data, list) else []
     return [
         {
-            "Network": r.get("networkName", r.get("lanNetworkName", "")),
-            "IP Address": r.get("ip", r.get("ipAddress", "")),
-            "MAC Address": r.get("mac", r.get("macAddress", "")),
-            "Hostname": r.get("clientName", r.get("name", r.get("hostname", ""))),
-            "Description": r.get("description", ""),
+            "Network": r.get("netName", r.get("networkName", "")),
+            "IP Address": r.get("ip", ""),
+            "MAC Address": r.get("mac", ""),
+            "Name": r.get("name", r.get("clientName", "")),
+            "Status": "Enabled" if r.get("status") else "Disabled",
+            "Server": r.get("serverName", ""),
         }
         for r in items
     ]
@@ -297,6 +354,7 @@ RESOURCES: list[ResourceDefinition] = [
         fetch_method="get_acl_rules",
         row_formatter=_acl_rule_rows,
         sort_key="Description",
+        needs_context=True,
     ),
     ResourceDefinition(
         name="ip_groups",

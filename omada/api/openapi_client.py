@@ -631,7 +631,7 @@ class OmadaOpenApiClient:
 
         ssids: list[dict[str, Any]] = []
         for wlan in wlans:
-            wlan_id = wlan.get("id", "")
+            wlan_id = wlan.get("wlanId", wlan.get("id", ""))
             if not wlan_id:
                 continue
             try:
@@ -647,24 +647,8 @@ class OmadaOpenApiClient:
         return ssids
 
     def get_dhcp_reservations(self, site_id: str) -> list[dict[str, Any]]:
-        """Return DHCP reservations across all LAN networks for the site."""
-        networks = self.get_networks(site_id)
-        reservations: list[dict[str, Any]] = []
-        for net in networks:
-            net_id = net.get("id", "")
-            net_name = net.get("name", "")
-            if not net_id:
-                continue
-            try:
-                net_reservations = self._get_paged(
-                    f"sites/{site_id}/lan-networks/{net_id}/dhcp/reservations",
-                )
-                for r in net_reservations:
-                    r.setdefault("lanNetworkName", net_name)
-                reservations.extend(net_reservations)
-            except OmadaAPIError:
-                logger.debug(
-                    "No DHCP reservations endpoint for network %s (%s)",
-                    net_name, net_id,
-                )
-        return reservations
+        """Return DHCP reservations for the site.
+
+        Endpoint: ``GET /sites/{siteId}/setting/service/dhcp``
+        """
+        return self._get_paged(f"sites/{site_id}/setting/service/dhcp")

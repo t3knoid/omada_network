@@ -528,8 +528,8 @@ class TestOpenApiResourceMethods:
         assert result == {}
 
     def test_get_ssids(self, openapi_client: OmadaOpenApiClient) -> None:
-        wlans = [{"id": "wlan-1", "name": "WLAN Group 1"}]
-        ssids = [{"name": "MySSID", "band": "5GHz"}]
+        wlans = [{"wlanId": "wlan-1", "name": "WLAN Group 1"}]
+        ssids = [{"name": "MySSID", "band": 2, "security": 3}]
         with patch.object(openapi_client, "_get_paged") as mock_paged:
             mock_paged.side_effect = [wlans, ssids]
             result = openapi_client.get_ssids("site-001")
@@ -544,16 +544,13 @@ class TestOpenApiResourceMethods:
         assert result == []
 
     def test_get_dhcp_reservations(self, openapi_client: OmadaOpenApiClient) -> None:
-        networks = [{"id": "net-1", "name": "LAN"}]
-        reservations = [{"ip": "192.168.1.50", "mac": "aa:bb:cc:dd:ee:ff"}]
-        with patch.object(openapi_client, "get_networks") as mock_nets, \
-             patch.object(openapi_client, "_get_paged") as mock_paged:
-            mock_nets.return_value = networks
-            mock_paged.return_value = reservations
+        reservations = [{"netName": "LAN", "ip": "192.168.1.50", "mac": "AA-BB-CC-DD-EE-FF", "name": "printer", "status": True, "serverName": "Gateway"}]
+        with patch.object(openapi_client, "_get_paged") as mock:
+            mock.return_value = reservations
             result = openapi_client.get_dhcp_reservations("site-001")
         assert len(result) == 1
         assert result[0]["ip"] == "192.168.1.50"
-        assert result[0]["lanNetworkName"] == "LAN"
+        assert result[0]["netName"] == "LAN"
 
 
 # ---------------------------------------------------------------------------

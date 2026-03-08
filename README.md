@@ -5,6 +5,7 @@ extract network configuration data into YAML files (source of truth) and
 generate Markdown documentation tables.
 
 Supports both official Open API authentication modes:
+
 - **Client Credentials Mode** — direct token exchange with Client ID + Secret
 - **Authorization Code Mode** — three-step flow with user credentials
 
@@ -156,10 +157,6 @@ python cli.py fetch \
 > client credentials, the tool automatically uses Authorization Code mode.
 > Without them, it defaults to Client Credentials mode.
 
-> **Note:** The Open API does not currently expose a DHCP-reservations
-> endpoint. DHCP reservations will be returned as an empty list. All other
-> resources are fully supported.
-
 ### Auto-discovery
 
 Both modes automatically discover:
@@ -239,7 +236,7 @@ python cli.py serve
 
 The configuration form offers two authentication tabs:
 
-- **� Client Credentials** — enter your Client ID and Client Secret for a
+- **🔒 Client Credentials** — enter your Client ID and Client Secret for a
   direct token exchange (simplest mode).
 - **🔑 Authorization Code** — enter Client ID, Client Secret, plus your
   controller username and password for the three-step OAuth2 flow.
@@ -284,7 +281,7 @@ If you need fully offline operation, download the three assets listed below
 and place them in a local directory (e.g. `omada/web/static/`):
 
 | Asset | CDN URL |
-|---|---|
+| --- | --- |
 | Bootstrap 5.3.3 CSS | `https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css` |
 | Bootstrap 5.3.3 JS | `https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js` |
 | GitHub Markdown CSS 5.5.1 | `https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown-light.min.css` |
@@ -429,9 +426,9 @@ docs/
 ```markdown
 # DHCP Reservations
 
-| Network | IP Address | MAC Address | Hostname | Description |
-| --- | --- | --- | --- | --- |
-| LAN | 192.168.1.50 | aa:bb:cc:dd:ee:ff | printer | Office printer |
+| Network | IP Address | MAC Address | Name | Status | Server |
+| --- | --- | --- | --- | --- | --- |
+| LAN | 192.168.1.50 | AA-BB-CC-DD-EE-FF | printer | Enabled | Gateway |
 ```
 
 ---

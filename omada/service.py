@@ -148,13 +148,15 @@ def generate_from_yaml(
     md_gen = MarkdownGenerator(output_dir)
     paths: dict[str, Path] = {}
 
+    # Load all YAML files first so cross-references can be resolved
+    all_data: dict[str, Any] = {}
     for yaml_path in sorted(input_dir.glob("*.yaml")):
-        name = yaml_path.stem
         raw = yaml_path.read_text(encoding="utf-8")
-        data = yaml.safe_load(raw)
-        if data is None:
-            data = []
-        paths[name] = md_gen.generate(name, data)
+        loaded = yaml.safe_load(raw)
+        all_data[yaml_path.stem] = loaded if loaded is not None else []
+
+    for name, data in all_data.items():
+        paths[name] = md_gen.generate(name, data, context=all_data)
         logger.info("Generated %s → %s", name, paths[name])
 
     if not paths:
