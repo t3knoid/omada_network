@@ -507,6 +507,9 @@ This project uses GitHub Actions for continuous integration and deployment.
 **Release Workflow** (`.github/workflows/release.yml`)
 
 - Triggers on version tags (e.g. `v1.0.0`) or manual dispatch.
+- Tags must use the format `vN.N.N` (e.g. `v1.0.0`, `v0.0.1`). Invalid
+  formats will cause the workflow to fail with a clear error message.
+- When using manual dispatch, the tag must already exist in the repository.
 - Builds and packages the project (sdist + wheel).
 - Creates a GitHub Release with the built artifacts.
 - Optionally publishes to PyPI when a `PYPI_API_TOKEN` secret is configured
