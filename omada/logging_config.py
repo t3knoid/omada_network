@@ -1,4 +1,4 @@
-"""Centralised logging configuration for the Omada Network tools.
+"""Centralized logging configuration for the Omada Network tools.
 
 Provides :func:`setup_logging` which configures the root logger with a
 console handler (``stderr``) and, optionally, a rotating file handler.

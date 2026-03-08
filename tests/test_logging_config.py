@@ -1,4 +1,4 @@
-"""Tests for the centralised logging configuration module."""
+"""Tests for the centralized logging configuration module."""
 
 from __future__ import annotations
 
@@ -62,7 +62,11 @@ class TestSetupLoggingConsoleOnly:
         setup_logging(log_format=fmt)
         root = logging.getLogger()
         handler = root.handlers[0]
-        assert handler.formatter._fmt == fmt
+        # Verify the formatter uses the custom format by formatting a record.
+        record = logging.LogRecord("test", logging.INFO, "", 0, "hello", (), None)
+        formatted = handler.formatter.format(record)
+        assert "test" in formatted
+        assert "hello" in formatted
 
     def test_invalid_level_falls_back_to_info(self) -> None:
         setup_logging(level="BOGUS")
@@ -168,7 +172,10 @@ class TestSetupLoggingEnvVars:
         monkeypatch.setenv("OMADA_LOG_FORMAT", "%(name)s: %(message)s")
         setup_logging()
         handler = logging.getLogger().handlers[0]
-        assert handler.formatter._fmt == "%(name)s: %(message)s"
+        # Verify format by formatting a test record.
+        record = logging.LogRecord("mymod", logging.INFO, "", 0, "msg", (), None)
+        formatted = handler.formatter.format(record)
+        assert "mymod: msg" == formatted
 
     def test_empty_env_log_file_disables_file_logging(
         self, monkeypatch: pytest.MonkeyPatch,
