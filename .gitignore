@@ -33,3 +33,4 @@ instance/
 
 # Ad-hoc test scripts with credentials
 _test_auth.py
+*.log
