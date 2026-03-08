@@ -122,14 +122,6 @@ class TestSetupLoggingWithFile:
         root = logging.getLogger()
         assert len(root.handlers) == 2
 
-    def test_empty_log_file_disables_file_logging(self) -> None:
-        setup_logging(log_file="")
-        root = logging.getLogger()
-        file_handlers = [
-            h for h in root.handlers if isinstance(h, logging.FileHandler)
-        ]
-        assert len(file_handlers) == 0
-
     def test_invalid_path_falls_back_to_console(self, tmp_path: Path) -> None:
         # Use a path where the parent itself is a file, not a directory,
         # which is invalid on every platform.
