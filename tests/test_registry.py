@@ -136,6 +136,39 @@ class TestRowFormatters:
         assert rows[0]["Network"] == "IoT"
         assert rows[0]["Status"] == "Enabled"
 
+    def test_switch_port_profile_rows(self) -> None:
+        from omada.registry import _switch_port_profile_rows
+        rows = _switch_port_profile_rows([
+            {"name": "Trunk Profile", "type": 0, "spanningTreeEnable": True, "poe": 1}
+        ])
+        assert rows[0]["Name"] == "Trunk Profile"
+        assert rows[0]["Type"] == "Trunk"
+        assert rows[0]["Spanning Tree"] == "Enabled"
+        assert rows[0]["PoE"] == "Enabled"
+        assert rows[0]["Tagged Networks"] == ""
+
+    def test_switch_port_profile_rows_resolves_tagged_networks(self) -> None:
+        from omada.registry import _switch_port_profile_rows
+        context = {
+            "networks": [
+                {"id": "net1", "name": "IoT"},
+                {"id": "net2", "name": "LAN"},
+            ]
+        }
+        rows = _switch_port_profile_rows(
+            [{"name": "Trunk Profile", "type": 0, "tagNetworkIds": ["net1", "net2"]}],
+            context=context,
+        )
+        assert rows[0]["Tagged Networks"] == "IoT, LAN"
+
+    def test_switch_port_profile_rows_no_context_shows_raw_ids(self) -> None:
+        from omada.registry import _switch_port_profile_rows
+        rows = _switch_port_profile_rows(
+            [{"name": "Profile", "type": 2, "spanningTreeEnable": False, "poe": 0,
+              "taggedNetworkIds": ["abc123"]}]
+        )
+        assert rows[0]["Tagged Networks"] == "abc123"
+
 
 class TestGenerateFromYaml:
     def _write_yaml(self, path: Path, data) -> None:
