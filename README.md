@@ -97,7 +97,7 @@ docker build -t omada_network .
 By default the container starts the web UI on port 5000:
 
 ```bash
-docker run -p 5000:5000 omada_network
+docker run -p 5000:5000 --name omada_network omada_network 
 ```
 
 Open <http://localhost:5000> in your browser to access the web UI.
@@ -110,6 +110,7 @@ All `OMADA_*` environment variables are supported. Pass them with `-e`:
 docker run -p 5000:5000 \
   -e OMADA_LOG_LEVEL=DEBUG \
   -e FLASK_SECRET_KEY=my-secret-key \
+  --name omada_network \
   omada_network
 ```
 
@@ -120,6 +121,7 @@ Mount a host directory to `/app/docs` to keep generated files on your host:
 ```bash
 docker run -p 5000:5000 \
   -v "$(pwd)/docs:/app/docs" \
+  --name omada_network \
   omada_network
 ```
 
@@ -157,6 +159,7 @@ To also enable file logging inside the container, set `OMADA_LOG_FILE`:
 docker run -p 5000:5000 \
   -e OMADA_LOG_FILE=/app/logs/omada_network.log \
   -v "$(pwd)/logs:/app/logs" \
+  --name omada_network \
   omada_network
 ```
 
@@ -164,8 +167,7 @@ docker run -p 5000:5000 \
 
 ## Configuration
 
-The application supports two authentication modes, both using the official
-Omada Open API (Northbound API):
+The application supports two authentication modes, both using the official Omada Open API (Northbound API):
 
 ### Option A — Client Credentials Mode (simplest)
 
