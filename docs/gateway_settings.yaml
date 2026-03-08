@@ -1,0 +1,29 @@
+usbPortsConfig: []
+wanPortsConfig:
+- portId: 1_f22be78f1bcc4a91bb960960f368a1c6
+  portName: WAN
+  wanPortIpv4Setting:
+    ipv4Dhcp:
+      dhcpOptions: []
+      mtu: 1500
+      unicastDhcp: false
+      wanMultipleIps: []
+    ipv4Ipoa: {}
+    ipv4L2tp: {}
+    ipv4Pppoa: {}
+    ipv4Pppoe: {}
+    ipv4Pptp: {}
+    ipv4Static: {}
+    protoType: 1
+    qosTagEnable: false
+    vlanId: 0
+    vlanPriority: 0
+  wanPortIpv6Setting:
+    enable: false
+    ipv6Dynamic: {}
+    ipv6Pppoe: {}
+    ipv6Static: {}
+    ipv6Tunnel: {}
+  wanPortMacSetting:
+    mac: 6C-5A-B0-28-3C-78
+    method: 0

@@ -132,27 +132,26 @@ class TestMarkdownGenerator:
             {
                 "name": "LAN",
                 "purpose": "user",
-                "networkIp": "192.168.1.0",
-                "prefixLen": 24,
-                "vlanId": 1,
-                "dhcpEnable": True,
+                "gatewaySubnet": "192.168.1.1/24",
+                "vlan": 1,
+                "dhcpSettings": {"enable": True},
             }
         ]
         path = gen.generate("networks", data)
         content = path.read_text()
         assert "LAN" in content
-        assert "192.168.1.0" in content
+        assert "192.168.1.1/24" in content
 
     def test_generate_vlans(self, tmp_path: Path) -> None:
         gen = MarkdownGenerator(tmp_path)
-        data = [{"name": "IoT", "vlanId": 20, "networkIp": "10.20.0.0", "prefixLen": 24}]
+        data = [{"name": "IoT", "vlan": 20, "gatewaySubnet": "10.20.0.1/24"}]
         path = gen.generate("vlans", data)
         assert "20" in path.read_text()
 
     def test_generate_ssids(self, tmp_path: Path) -> None:
         gen = MarkdownGenerator(tmp_path)
         data = [
-            {"wlanName": "Home", "ssid": "MyWifi", "security": "WPA2", "enable": True}
+            {"wlanName": "Home", "name": "MyWifi", "security": 3, "band": 7}
         ]
         path = gen.generate("ssids", data)
         assert "MyWifi" in path.read_text()
@@ -161,10 +160,12 @@ class TestMarkdownGenerator:
         gen = MarkdownGenerator(tmp_path)
         data = [
             {
-                "networkName": "LAN",
+                "netName": "LAN",
                 "ip": "192.168.1.50",
-                "mac": "aa:bb:cc:dd:ee:ff",
+                "mac": "AA-BB-CC-DD-EE-FF",
                 "name": "printer",
+                "status": True,
+                "serverName": "Gateway",
             }
         ]
         path = gen.generate("dhcp_reservations", data)
@@ -213,8 +214,8 @@ class TestMarkdownGenerator:
     def test_ssids_sorted_by_ssid_column(self, tmp_path: Path) -> None:
         gen = MarkdownGenerator(tmp_path)
         data = [
-            {"ssid": "Zulu-Net", "wlanName": "home"},
-            {"ssid": "Alpha-Net", "wlanName": "home"},
+            {"name": "Zulu-Net", "wlanName": "home"},
+            {"name": "Alpha-Net", "wlanName": "home"},
         ]
         path = gen.generate("ssids", data)
         content = path.read_text()

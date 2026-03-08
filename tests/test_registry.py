@@ -58,14 +58,53 @@ class TestRegistry:
 class TestRowFormatters:
     def test_acl_rule_rows(self) -> None:
         from omada.registry import _acl_rule_rows
-        rows = _acl_rule_rows([{"name": "rule1", "policy": "accept", "status": True}])
-        assert rows[0]["Name"] == "rule1"
-        assert rows[0]["Policy"] == "accept"
+        rows = _acl_rule_rows([{"description": "rule1", "policy": 1, "status": True}])
+        assert rows[0]["Description"] == "rule1"
+        assert rows[0]["Policy"] == "Permit"
         assert rows[0]["Status"] == "Enabled"
+
+    def test_acl_rule_rows_resolves_names(self) -> None:
+        from omada.registry import _acl_rule_rows
+        context = {
+            "ip_groups": [{"groupId": "ip1", "name": "HDHomeRun"}],
+            "port_groups": [{"groupId": "pg1", "name": "Minecraft"}],
+            "networks": [{"id": "net1", "name": "IoT Devices"}],
+        }
+        rules = [
+            {
+                "description": "Allow HDHomeRun",
+                "policy": 1,
+                "status": True,
+                "sourceType": 1,
+                "sourceIds": ["ip1"],
+                "destinationType": 1,
+                "destinationIds": ["ip1"],
+            },
+            {
+                "description": "Allow Net to Port",
+                "policy": 1,
+                "status": True,
+                "sourceType": 0,
+                "sourceIds": ["net1"],
+                "destinationType": 2,
+                "destinationIds": ["pg1"],
+            },
+        ]
+        rows = _acl_rule_rows(rules, context)
+        assert rows[0]["Source"] == "HDHomeRun"
+        assert rows[0]["Destination"] == "HDHomeRun"
+        assert rows[1]["Source"] == "IoT Devices"
+        assert rows[1]["Destination"] == "Minecraft"
+
+    def test_acl_rule_rows_no_context_shows_raw_ids(self) -> None:
+        from omada.registry import _acl_rule_rows
+        rows = _acl_rule_rows([{"description": "r", "sourceIds": ["abc123"], "destinationIds": []}])
+        assert rows[0]["Source"] == "abc123"
+        assert rows[0]["Destination"] == ""
 
     def test_ip_group_rows(self) -> None:
         from omada.registry import _ip_group_rows
-        rows = _ip_group_rows([{"name": "g1", "ipList": ["10.0.0.0/8"]}])
+        rows = _ip_group_rows([{"name": "g1", "ipList": [{"ip": "10.0.0.0", "mask": "8"}]}])
         assert rows[0]["Name"] == "g1"
         assert "10.0.0.0/8" in rows[0]["IPs / Subnets"]
 
@@ -81,17 +120,54 @@ class TestRowFormatters:
 
     def test_ssid_rows(self) -> None:
         from omada.registry import _ssid_rows
-        rows = _ssid_rows([{"ssid": "HomeNet", "wlanName": "Main", "enable": False}])
+        rows = _ssid_rows([{"name": "HomeNet", "wlanName": "Main", "band": 3, "security": 3, "broadcast": False}])
         assert rows[0]["SSID"] == "HomeNet"
-        assert rows[0]["Status"] == "Disabled"
+        assert rows[0]["Band"] == "2.4 GHz / 5 GHz"
+        assert rows[0]["Security"] == "WPA2"
+        assert rows[0]["Broadcast"] == "No"
 
     def test_dhcp_reservation_rows(self) -> None:
         from omada.registry import _dhcp_reservation_rows
         rows = _dhcp_reservation_rows(
-            [{"ip": "192.168.1.100", "mac": "aa:bb:cc:dd:ee:ff", "name": "laptop"}]
+            [{"netName": "IoT", "ip": "192.168.1.100", "mac": "AA-BB-CC-DD-EE-FF", "name": "laptop", "status": True, "serverName": "Gateway"}]
         )
         assert rows[0]["IP Address"] == "192.168.1.100"
-        assert rows[0]["Hostname"] == "laptop"
+        assert rows[0]["Name"] == "laptop"
+        assert rows[0]["Network"] == "IoT"
+        assert rows[0]["Status"] == "Enabled"
+
+    def test_switch_port_profile_rows(self) -> None:
+        from omada.registry import _switch_port_profile_rows
+        rows = _switch_port_profile_rows([
+            {"name": "Trunk Profile", "type": 0, "spanningTreeEnable": True, "poe": 1}
+        ])
+        assert rows[0]["Name"] == "Trunk Profile"
+        assert rows[0]["Type"] == "Trunk"
+        assert rows[0]["Spanning Tree"] == "Enabled"
+        assert rows[0]["PoE"] == "Enabled"
+        assert rows[0]["Tagged Networks"] == ""
+
+    def test_switch_port_profile_rows_resolves_tagged_networks(self) -> None:
+        from omada.registry import _switch_port_profile_rows
+        context = {
+            "networks": [
+                {"id": "net1", "name": "IoT"},
+                {"id": "net2", "name": "LAN"},
+            ]
+        }
+        rows = _switch_port_profile_rows(
+            [{"name": "Trunk Profile", "type": 0, "tagNetworkIds": ["net1", "net2"]}],
+            context=context,
+        )
+        assert rows[0]["Tagged Networks"] == "IoT, LAN"
+
+    def test_switch_port_profile_rows_no_context_shows_raw_ids(self) -> None:
+        from omada.registry import _switch_port_profile_rows
+        rows = _switch_port_profile_rows(
+            [{"name": "Profile", "type": 2, "spanningTreeEnable": False, "poe": 0,
+              "taggedNetworkIds": ["abc123"]}]
+        )
+        assert rows[0]["Tagged Networks"] == "abc123"
 
 
 class TestGenerateFromYaml:
@@ -101,7 +177,7 @@ class TestGenerateFromYaml:
     def test_generates_markdown_from_yaml_files(self, tmp_path: Path) -> None:
         self._write_yaml(
             tmp_path / "acl_rules.yaml",
-            [{"name": "rule1", "policy": "accept"}],
+            [{"description": "rule1", "policy": 1}],
         )
         self._write_yaml(
             tmp_path / "ip_groups.yaml",

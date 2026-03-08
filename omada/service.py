@@ -15,10 +15,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import requests
 import yaml
 
-from omada.api.client import OmadaClient
 from omada.exporters.markdown_generator import MarkdownGenerator
 from omada.exporters.yaml_exporter import YamlExporter
 from omada.registry import RESOURCES
@@ -31,18 +29,12 @@ class OmadaService:
 
     Parameters
     ----------
-    base_url:
-        Controller base URL.
-    controller_id:
-        The ``omadacId`` value.
-    token:
-        Valid API token.
+    client:
+        An authenticated :class:`~omada.api.openapi_client.OmadaOpenApiClient`.
     site_id:
         Site ID to query.
     output_dir:
         Directory where YAML and Markdown files will be written.
-    verify_ssl:
-        Whether to verify TLS certificates.
     """
 
     #: Ordered tuple of all resource names, derived from the registry.
@@ -50,21 +42,13 @@ class OmadaService:
 
     def __init__(
         self,
-        base_url: str,
-        controller_id: str,
-        token: str,
+        client: Any,
         site_id: str,
         output_dir: str | Path = "docs",
-        *,
-        verify_ssl: bool = True,
-        session: requests.Session | None = None,
     ) -> None:
         self.site_id = site_id
         self.output_dir = Path(output_dir)
-        self._client = OmadaClient(
-            base_url, controller_id, token,
-            verify_ssl=verify_ssl, session=session,
-        )
+        self._client = client
         self._yaml = YamlExporter(self.output_dir)
         self._md = MarkdownGenerator(self.output_dir)
 
@@ -76,6 +60,7 @@ class OmadaService:
         """Fetch every resource type and return a combined dict."""
         logger.info("Fetching all resources for site '%s'…", self.site_id)
         data: dict[str, Any] = {}
+        failures: list[str] = []
 
         for defn in RESOURCES:
             fetcher = getattr(self._client, defn.fetch_method)
@@ -90,8 +75,19 @@ class OmadaService:
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception as exc:  # noqa: BLE001
-                logger.warning("  ✗ %s – %s", defn.name, exc)
+                logger.error("  ✗ %s – %s", defn.name, exc)
+                logger.debug("Traceback for %s:", defn.name, exc_info=True)
                 data[defn.name] = []
+                failures.append(defn.name)
+
+        if failures:
+            logger.error(
+                "%d of %d resource(s) failed to fetch: %s. "
+                "Run with DEBUG logging (-v) for full tracebacks.",
+                len(failures),
+                len(RESOURCES),
+                ", ".join(failures),
+            )
 
         return data
 
@@ -151,13 +147,15 @@ def generate_from_yaml(
     md_gen = MarkdownGenerator(output_dir)
     paths: dict[str, Path] = {}
 
+    # Load all YAML files first so cross-references can be resolved
+    all_data: dict[str, Any] = {}
     for yaml_path in sorted(input_dir.glob("*.yaml")):
-        name = yaml_path.stem
         raw = yaml_path.read_text(encoding="utf-8")
-        data = yaml.safe_load(raw)
-        if data is None:
-            data = []
-        paths[name] = md_gen.generate(name, data)
+        loaded = yaml.safe_load(raw)
+        all_data[yaml_path.stem] = loaded if loaded is not None else []
+
+    for name, data in all_data.items():
+        paths[name] = md_gen.generate(name, data, context=all_data)
         logger.info("Generated %s → %s", name, paths[name])
 
     if not paths:

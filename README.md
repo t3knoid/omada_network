@@ -1,8 +1,13 @@
 # omada_network
 
-A Python application that uses the **Unofficial Omada SDN API** to extract
-network configuration data into YAML files (source of truth) and generate
-Markdown documentation tables.
+A Python application that uses the **Omada Open API** (Northbound API) to
+extract network configuration data into YAML files (source of truth) and
+generate Markdown documentation tables.
+
+Supports both official Open API authentication modes:
+
+- **Client Credentials Mode** — direct token exchange with Client ID + Secret
+- **Authorization Code Mode** — three-step flow with user credentials
 
 ## Features
 
@@ -32,7 +37,7 @@ Markdown documentation tables.
 omada_network/
 ├── omada/
 │   ├── api/
-│   │   └── client.py              # Omada SDN HTTP client
+│   │   └── openapi_client.py      # Official Open API (Northbound) client
 │   ├── exporters/
 │   │   ├── yaml_exporter.py       # Writes resources to YAML files
 │   │   └── markdown_generator.py  # Generates Markdown documentation
@@ -55,7 +60,8 @@ omada_network/
 ## Requirements
 
 - Python 3.10+
-- An Omada SDN Controller (v5.x / v6.x) with a valid API token or login credentials
+- An Omada SDN Controller (v5.x / v6.x) with:
+  - **Open API enabled** and a Client ID + Client Secret generated in the controller settings
 
 ---
 
@@ -77,18 +83,61 @@ pip install -r requirements-dev.txt
 
 ## Configuration
 
-The application supports two authentication modes:
+The application supports two authentication modes, both using the official
+Omada Open API (Northbound API):
 
-### Option A — Username / Password (recommended)
+### Option A — Client Credentials Mode (simplest)
 
-Provide the **controller address**, **username**, and **password**. The
-application will automatically discover the controller ID, obtain a token,
-and select the site:
+Direct token exchange using the Client ID and Client Secret only. No
+controller login credentials are needed.
+
+**Prerequisites:** Enable the Open API on your Omada controller and generate
+a Client ID and Client Secret in the controller settings.
 
 | Parameter | CLI Option | Environment Variable | Default |
 | --- | --- | --- | --- |
 | Controller IP / hostname | `--controller` | `OMADA_CONTROLLER` | |
-| Management port | `--port` | `OMADA_PORT` | `8043` |
+| Management port | `--port` | `OMADA_PORT` | `443` |
+| Controller ID | `--controller-id` | `OMADA_CONTROLLER_ID` | auto-discovered |
+| Client ID | `--client-id` | `OMADA_CLIENT_ID` | |
+| Client Secret | `--client-secret` | `OMADA_CLIENT_SECRET` | |
+| Site name | `--site-name` | `OMADA_SITE_NAME` | |
+| Output directory | `--output-dir` | `OMADA_OUTPUT_DIR` | `docs` |
+| Verify SSL cert | `--verify-ssl` | `OMADA_VERIFY_SSL` | off |
+
+```bash
+python cli.py fetch \
+  --controller 192.168.1.1 \
+  --client-id YOUR_CLIENT_ID \
+  --client-secret YOUR_CLIENT_SECRET
+
+# Multi-site controller — select by name
+python cli.py fetch \
+  --controller 192.168.1.1 \
+  --client-id YOUR_CLIENT_ID \
+  --client-secret YOUR_CLIENT_SECRET \
+  --site-name "My Office"
+
+# Using environment variables
+export OMADA_CONTROLLER=192.168.1.1
+export OMADA_CLIENT_ID=YOUR_CLIENT_ID
+export OMADA_CLIENT_SECRET=YOUR_CLIENT_SECRET
+python cli.py fetch
+```
+
+### Option B — Authorization Code Mode
+
+Three-step OAuth2 flow that additionally requires controller admin
+credentials (username and password). Use this mode when your Open API
+configuration requires user-level authorization.
+
+| Parameter | CLI Option | Environment Variable | Default |
+| --- | --- | --- | --- |
+| Controller IP / hostname | `--controller` | `OMADA_CONTROLLER` | |
+| Management port | `--port` | `OMADA_PORT` | `443` |
+| Controller ID | `--controller-id` | `OMADA_CONTROLLER_ID` | auto-discovered |
+| Client ID | `--client-id` | `OMADA_CLIENT_ID` | |
+| Client Secret | `--client-secret` | `OMADA_CLIENT_SECRET` | |
 | Username | `--username` | `OMADA_USERNAME` | |
 | Password | `--password` | `OMADA_PASSWORD` | |
 | Site name | `--site-name` | `OMADA_SITE_NAME` | |
@@ -98,130 +147,25 @@ and select the site:
 ```bash
 python cli.py fetch \
   --controller 192.168.1.1 \
+  --client-id YOUR_CLIENT_ID \
+  --client-secret YOUR_CLIENT_SECRET \
   --username admin \
-  --password secret \
-  --output-dir docs
-
-# Multi-site controller — select a site by name
-python cli.py fetch \
-  --controller 192.168.1.1 \
-  --username admin \
-  --password secret \
-  --site-name "My Office"
+  --password secret
 ```
 
-Auto-discovery steps:
+> **Note:** When `--username` and `--password` are provided alongside the
+> client credentials, the tool automatically uses Authorization Code mode.
+> Without them, it defaults to Client Credentials mode.
 
-1. **Controller ID** — `GET /api/info` → `result.omadacId`
-2. **Token** — `POST /<omadacId>/api/v2/login` with credentials → `result.token`
-   (on v6.x controllers the login automatically falls back to port 443 if the
-   management port returns an error)
-3. **Site ID** — `GET /<omadacId>/api/v2/sites` → uses the sole site
-   automatically. For controllers with multiple sites, pass `--site-name`
-   to select a site by its display name (case-insensitive), or the tool
-   prints available sites and exits.
+### Auto-discovery
 
-You can override any auto-discovered value by passing it explicitly (e.g.
-`--site-id SITE_ID` or `--site-name "My Office"`).
+Both modes automatically discover:
 
-> **Security note:** `OMADA_PASSWORD` set as an environment variable is
-> visible to other processes on the same host. The token obtained via login
-> is used only for the duration of the session and is never cached to disk.
-
-### Option B — Token (manual)
-
-Supply all four parameters directly:
-
-| Parameter | CLI Option | Environment Variable | Default |
-| --- | --- | --- | --- |
-| Controller IP / hostname | `--controller` | `OMADA_CONTROLLER` | |
-| Management port | `--port` | `OMADA_PORT` | `8043` |
-| Controller ID | `--controller-id` | `OMADA_CONTROLLER_ID` | |
-| API Token | `--token` | `OMADA_TOKEN` | |
-| Site ID | `--site-id` | `OMADA_SITE_ID` | |
-| Site name | `--site-name` | `OMADA_SITE_NAME` | |
-| Output directory | `--output-dir` | `OMADA_OUTPUT_DIR` | `docs` |
-| Verify SSL cert | `--verify-ssl` | `OMADA_VERIFY_SSL` | off |
-
-### Getting your Controller ID (omadacId)
-
-The `omadacId` can be found by navigating to
-`https://<controller-ip>:<port>/api/info` in your browser.
-
-### Getting your Site ID
-
-The Site ID can be found by logging into your Omada controller's web interface
-and navigating to a site. The Site ID appears in the URL as the path segment
-after `/site/`, for example:
-
-```text
-https://<controller-ip>:<port>/<omadacId>/site/<siteId>/dashboard
-```
-
-Alternatively, query the controller's API directly:
-
-```text
-https://<controller-ip>:<port>/<omadacId>/api/v2/sites?currentPage=1&currentPageSize=100
-```
-
-Each site object in the response contains an `"id"` field — that is your Site ID.
-
-### Getting a Token
-
-A valid API token is required to authenticate with the Omada controller. You
-can obtain one by calling the controller's login endpoint:
-
-```text
-POST https://<controller-ip>:<port>/<omadacId>/api/v2/login
-Content-Type: application/json
-
-{
-  "username": "admin",
-  "password": "your-password"
-}
-```
-
-A successful response contains a `token` field inside the `result` object:
-
-```json
-{
-  "errorCode": 0,
-  "result": {
-    "token": "your-access-token",
-    ...
-  }
-}
-```
-
-Use that `token` value with `--token` or the `OMADA_TOKEN` environment
-variable.
-
-**Programmatic retrieval (bash):**
-
-```bash
-TOKEN=$(curl -sk -X POST \
-  "https://<controller-ip>:<port>/<omadacId>/api/v2/login" \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"your-password"}' \
-  | python -c "import sys,json; print(json.load(sys.stdin)['result']['token'])")
-
-python cli.py fetch --token "$TOKEN" ...
-```
-
-**Programmatic retrieval (PowerShell):**
-
-```powershell
-$body = @{ username = "admin"; password = "your-password" } | ConvertTo-Json
-$resp = Invoke-RestMethod -Uri "https://<controller-ip>:<port>/<omadacId>/api/v2/login" `
-    -Method Post -Body $body -ContentType "application/json" -SkipCertificateCheck
-$token = $resp.result.token
-
-python cli.py fetch --token $token ...
-```
-
-> **Note:** Tokens expire after a period of inactivity. For automated
-> workflows (e.g. GitHub Actions), retrieve a fresh token at the start of
-> each run rather than storing a long-lived token in secrets.
+1. **Controller ID** — `GET /api/info` → `result.omadacId` (unless
+   `--controller-id` is explicitly provided)
+2. **Site ID** — via the Open API sites endpoint. For controllers with
+   multiple sites, pass `--site-name` to select by display name
+   (case-insensitive).
 
 ---
 
@@ -230,39 +174,32 @@ python cli.py fetch --token $token ...
 ### `fetch` — pull from the controller and generate docs
 
 ```bash
-# Username/password mode (auto-discovers controller-id, token, site-id)
+# Client Credentials mode (simplest)
 python cli.py fetch \
   --controller 192.168.1.1 \
-  --username admin \
-  --password secret
+  --client-id YOUR_CLIENT_ID \
+  --client-secret YOUR_CLIENT_SECRET
 
-# Custom management port
+# Authorization Code mode (add --username / --password)
 python cli.py fetch \
   --controller 192.168.1.1 \
-  --port 443 \
+  --client-id YOUR_CLIENT_ID \
+  --client-secret YOUR_CLIENT_SECRET \
   --username admin \
   --password secret
 
 # Multi-site controller — select by name
 python cli.py fetch \
   --controller 192.168.1.1 \
-  --username admin \
-  --password secret \
+  --client-id YOUR_CLIENT_ID \
+  --client-secret YOUR_CLIENT_SECRET \
   --site-name "My Office"
 
 # Same using environment variables (ideal for CI/CD)
 export OMADA_CONTROLLER=192.168.1.1
-export OMADA_USERNAME=admin
-export OMADA_PASSWORD=secret
+export OMADA_CLIENT_ID=YOUR_CLIENT_ID
+export OMADA_CLIENT_SECRET=YOUR_CLIENT_SECRET
 python cli.py fetch
-
-# Token mode with explicit options
-python cli.py fetch \
-  --controller  192.168.1.1 \
-  --controller-id abc123def456 \
-  --token       YOUR_TOKEN \
-  --site-id     SITE_ID \
-  --output-dir  docs
 
 # Enable SSL verification (off by default)
 python cli.py fetch --verify-ssl ...
@@ -299,10 +236,10 @@ python cli.py serve
 
 The configuration form offers two authentication tabs:
 
-- **🔑 Login** — enter your username and password; the controller ID, token,
-  and site ID are auto-discovered.
-- **🔒 Token** — supply the controller ID, token, and site ID manually
-  (existing workflow).
+- **🔒 Client Credentials** — enter your Client ID and Client Secret for a
+  direct token exchange (simplest mode).
+- **🔑 Authorization Code** — enter Client ID, Client Secret, plus your
+  controller username and password for the three-step OAuth2 flow.
 
 > **Note on SSL verification defaults:** The web UI defaults to SSL
 > verification **enabled** (checkbox checked) to encourage secure connections
@@ -344,7 +281,7 @@ If you need fully offline operation, download the three assets listed below
 and place them in a local directory (e.g. `omada/web/static/`):
 
 | Asset | CDN URL |
-|---|---|
+| --- | --- |
 | Bootstrap 5.3.3 CSS | `https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css` |
 | Bootstrap 5.3.3 JS | `https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js` |
 | GitHub Markdown CSS 5.5.1 | `https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown-light.min.css` |
@@ -382,11 +319,13 @@ your repository:
 | Secret Name | Description |
 | --- | --- |
 | `OMADA_CONTROLLER` | IP address or hostname of your Omada controller (e.g. `192.168.1.1`) |
-| `OMADA_PORT` | *(Optional)* Management port if not the default `8043` |
-| `OMADA_CONTROLLER_ID` | The `omadacId` value (see [Getting your Controller ID](#getting-your-controller-id-omadacid)) |
-| `OMADA_TOKEN` | A valid API access token |
-| `OMADA_SITE_ID` | The site ID to query |
-| `OMADA_SITE_NAME` | *(Optional)* Human-readable site name (alternative to `OMADA_SITE_ID` for multi-site controllers) |
+| `OMADA_PORT` | *(Optional)* Management port if not the default `443` |
+| `OMADA_CLIENT_ID` | Client ID from controller Open API settings |
+| `OMADA_CLIENT_SECRET` | Client Secret from controller Open API settings |
+| `OMADA_USERNAME` | *(Authorization Code mode)* Controller admin username |
+| `OMADA_PASSWORD` | *(Authorization Code mode)* Controller admin password |
+| `OMADA_CONTROLLER_ID` | *(Optional)* The `omadacId` — auto-discovered if omitted |
+| `OMADA_SITE_NAME` | *(Optional)* Human-readable site name for multi-site controllers |
 | `OMADA_VERIFY_SSL` | *(Optional)* Set to `true` if your controller has a valid (non-self-signed) certificate |
 
 To add these secrets:
@@ -402,10 +341,12 @@ To add these secrets:
 
 ```bash
 gh secret set OMADA_CONTROLLER --body "192.168.1.1"
-gh secret set OMADA_CONTROLLER_ID --body "your-controller-id"
-gh secret set OMADA_TOKEN --body "your-api-token"
-gh secret set OMADA_SITE_ID --body "your-site-id"
-# Or use site name instead of site ID:
+gh secret set OMADA_CLIENT_ID --body "your-client-id"
+gh secret set OMADA_CLIENT_SECRET --body "your-client-secret"
+# For Authorization Code mode, also set:
+# gh secret set OMADA_USERNAME --body "admin"
+# gh secret set OMADA_PASSWORD --body "your-password"
+# For multi-site controllers:
 # gh secret set OMADA_SITE_NAME --body "My Office"
 ```
 
@@ -438,9 +379,8 @@ jobs:
       - name: Generate documentation
         env:
           OMADA_CONTROLLER:     ${{ secrets.OMADA_CONTROLLER }}
-          OMADA_CONTROLLER_ID:  ${{ secrets.OMADA_CONTROLLER_ID }}
-          OMADA_TOKEN:          ${{ secrets.OMADA_TOKEN }}
-          OMADA_SITE_ID:        ${{ secrets.OMADA_SITE_ID }}
+          OMADA_CLIENT_ID:      ${{ secrets.OMADA_CLIENT_ID }}
+          OMADA_CLIENT_SECRET:  ${{ secrets.OMADA_CLIENT_SECRET }}
           OMADA_SITE_NAME:      ${{ secrets.OMADA_SITE_NAME }}
         run: python cli.py fetch --output-dir docs
 
@@ -486,9 +426,9 @@ docs/
 ```markdown
 # DHCP Reservations
 
-| Network | IP Address | MAC Address | Hostname | Description |
-| --- | --- | --- | --- | --- |
-| LAN | 192.168.1.50 | aa:bb:cc:dd:ee:ff | printer | Office printer |
+| Network | IP Address | MAC Address | Name | Status | Server |
+| --- | --- | --- | --- | --- | --- |
+| LAN | 192.168.1.50 | AA-BB-CC-DD-EE-FF | printer | Enabled | Gateway |
 ```
 
 ---
@@ -500,7 +440,7 @@ docs/
 python -m pytest tests/ -v
 
 # Run a specific test module
-python -m pytest tests/test_client.py -v
+python -m pytest tests/test_openapi_client.py -v
 ```
 
 ### Architecture
@@ -509,11 +449,11 @@ python -m pytest tests/test_client.py -v
 CLI / Web UI
      │
      ▼
-OmadaService              ← orchestrates everything
+OmadaService                ← orchestrates everything
      │
-     ├─► OmadaClient      ← HTTP calls to the controller API
-     ├─► YamlExporter     ← writes *.yaml source-of-truth files
-     └─► MarkdownGenerator ← renders *.md documentation tables
+     ├─► OmadaOpenApiClient  ← HTTP calls to the Open API
+     ├─► YamlExporter        ← writes *.yaml source-of-truth files
+     └─► MarkdownGenerator   ← renders *.md documentation tables
               │
               └─► Registry (registry.py)
                        └─ ResourceDefinition per resource type
@@ -522,7 +462,7 @@ OmadaService              ← orchestrates everything
 
 Adding a new resource type only requires:
 
-1. A new `get_*` method on `OmadaClient`
+1. A new `get_*` method on `OmadaOpenApiClient`
 2. A new `ResourceDefinition` entry in `omada/registry.py`
 
 No other files need to be modified.

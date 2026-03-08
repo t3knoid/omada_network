@@ -11,14 +11,26 @@ from omada.service import OmadaService
 
 
 @pytest.fixture()
-def service(tmp_path: Path) -> OmadaService:
+def mock_client() -> MagicMock:
+    client = MagicMock()
+    client.get_acl_rules.return_value = []
+    client.get_ip_groups.return_value = []
+    client.get_port_groups.return_value = []
+    client.get_networks.return_value = []
+    client.get_vlans.return_value = []
+    client.get_switch_port_profiles.return_value = []
+    client.get_gateway_settings.return_value = {}
+    client.get_ssids.return_value = []
+    client.get_dhcp_reservations.return_value = []
+    return client
+
+
+@pytest.fixture()
+def service(tmp_path: Path, mock_client: MagicMock) -> OmadaService:
     return OmadaService(
-        base_url="https://192.168.1.1:8043",
-        controller_id="abc123",
-        token="test-token",
+        client=mock_client,
         site_id="site001",
         output_dir=tmp_path,
-        verify_ssl=False,
     )
 
 
@@ -38,34 +50,33 @@ def _empty_data() -> dict:
 
 class TestOmadaServiceFetchAll:
     def test_fetch_all_returns_all_keys(self, service: OmadaService) -> None:
-        with patch.object(service._client, "get_acl_rules", return_value=[]), \
-             patch.object(service._client, "get_ip_groups", return_value=[]), \
-             patch.object(service._client, "get_port_groups", return_value=[]), \
-             patch.object(service._client, "get_networks", return_value=[]), \
-             patch.object(service._client, "get_vlans", return_value=[]), \
-             patch.object(service._client, "get_switch_port_profiles", return_value=[]), \
-             patch.object(service._client, "get_gateway_settings", return_value={}), \
-             patch.object(service._client, "get_ssids", return_value=[]), \
-             patch.object(service._client, "get_dhcp_reservations", return_value=[]):
-            data = service.fetch_all()
-
+        data = service.fetch_all()
         assert set(data.keys()) == set(OmadaService.RESOURCE_NAMES)
 
     def test_fetch_all_handles_partial_failures(self, service: OmadaService) -> None:
         """A failing fetcher should not crash the whole run; result = []."""
-        with patch.object(service._client, "get_acl_rules", side_effect=Exception("network error")), \
-             patch.object(service._client, "get_ip_groups", return_value=[{"name": "g1"}]), \
-             patch.object(service._client, "get_port_groups", return_value=[]), \
-             patch.object(service._client, "get_networks", return_value=[]), \
-             patch.object(service._client, "get_vlans", return_value=[]), \
-             patch.object(service._client, "get_switch_port_profiles", return_value=[]), \
-             patch.object(service._client, "get_gateway_settings", return_value={}), \
-             patch.object(service._client, "get_ssids", return_value=[]), \
-             patch.object(service._client, "get_dhcp_reservations", return_value=[]):
-            data = service.fetch_all()
-
+        service._client.get_acl_rules.side_effect = Exception("network error")
+        service._client.get_ip_groups.return_value = [{"name": "g1"}]
+        data = service.fetch_all()
         assert data["acl_rules"] == []
         assert data["ip_groups"] == [{"name": "g1"}]
+
+    def test_fetch_all_logs_error_summary_on_failures(
+        self, service: OmadaService,
+    ) -> None:
+        """When fetches fail, an error summary with resource names is logged."""
+        service._client.get_acl_rules.side_effect = Exception("timeout")
+        service._client.get_ip_groups.side_effect = Exception("timeout")
+        with patch("omada.service.logger") as mock_logger:
+            service.fetch_all()
+        error_calls = [
+            c for c in mock_logger.error.call_args_list
+            if "failed to fetch" in str(c)
+        ]
+        assert len(error_calls) == 1
+        summary_msg = str(error_calls[0])
+        assert "acl_rules" in summary_msg
+        assert "ip_groups" in summary_msg
 
 
 class TestOmadaServiceExport:
@@ -83,10 +94,12 @@ class TestOmadaServiceExport:
 
 
 class TestOmadaServiceRun:
-    def test_run_creates_output_dir(self, tmp_path: Path) -> None:
+    def test_run_creates_output_dir(self, tmp_path: Path, mock_client: MagicMock) -> None:
         output_dir = tmp_path / "output"
         service = OmadaService(
-            "https://localhost", "cid", "tok", "sid", output_dir=output_dir
+            client=mock_client,
+            site_id="sid",
+            output_dir=output_dir,
         )
         with patch.object(service, "fetch_all", return_value=_empty_data()):
             service.run()

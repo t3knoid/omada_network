@@ -63,14 +63,7 @@ def _check_csrf() -> None:
 # ---------------------------------------------------------------------------
 
 def create_app(output_dir: str | Path | None = None) -> Flask:
-    """Create and return a configured Flask application.
-
-    Parameters
-    ----------
-    output_dir:
-        Directory where YAML and Markdown files live.  Falls back to the
-        ``OUTPUT_DIR`` environment variable, then ``docs``.
-    """
+    """Create and return a configured Flask application."""
     app = Flask(__name__)
     _secret_key = os.environ.get("FLASK_SECRET_KEY")
     if _secret_key:
@@ -111,7 +104,8 @@ def create_app(output_dir: str | Path | None = None) -> Flask:
     def index():
         """Landing page with the configuration form."""
         docs = _list_docs(current_app.config["OUTPUT_DIR"])
-        return render_template("index.html", docs=docs)
+        form = session.get("_form_values", {})
+        return render_template("index.html", docs=docs, form=form)
 
     @app.route("/run", methods=["POST"])
     def run():
@@ -120,18 +114,48 @@ def create_app(output_dir: str | Path | None = None) -> Flask:
         output_dir_ = current_app.config["OUTPUT_DIR"]
 
         controller_host = request.form.get("controller", "").strip()
-        port_str = request.form.get("port", "8043").strip() or "8043"
-        controller_id = request.form.get("controller_id", "")
-        token = request.form.get("token", "")
-        site_id = request.form.get("site_id", "")
-        site_name = request.form.get("site_name", "").strip()
-        username = request.form.get("username", "")
-        password = request.form.get("password", "")
+        port_str = request.form.get("port", "443").strip() or "443"
         verify_ssl = request.form.get("verify_ssl") == "on"
-        auth_mode = request.form.get("auth_mode", "token")
+        auth_mode = request.form.get("auth_mode", "client_credentials")
 
+        # Read credentials from the correct tab's inputs based on auth_mode
+        if auth_mode == "auth_code":
+            client_id = request.form.get("ac_client_id", "").strip()
+            client_secret = request.form.get("ac_client_secret", "").strip()
+            controller_id = request.form.get("ac_controller_id", "").strip()
+            site_name = request.form.get("ac_site_name", "").strip()
+            username = request.form.get("ac_username", "").strip()
+            password = request.form.get("ac_password", "")
+        else:
+            client_id = request.form.get("client_id", "").strip()
+            client_secret = request.form.get("client_secret", "").strip()
+            controller_id = request.form.get("controller_id", "").strip()
+            site_name = request.form.get("site_name", "").strip()
+            username = ""
+            password = ""
+
+        # Persist non-sensitive form values in session (never store passwords or secrets)
+        session["_form_values"] = {
+            "controller": controller_host,
+            "port": port_str,
+            "verify_ssl": verify_ssl,
+            "auth_mode": auth_mode,
+            "client_id": client_id,
+            "client_secret": "",
+            "controller_id": controller_id,
+            "site_name": site_name,
+            "ac_client_id": client_id if auth_mode == "auth_code" else "",
+            "ac_client_secret": "",
+            "ac_controller_id": controller_id if auth_mode == "auth_code" else "",
+            "ac_site_name": site_name if auth_mode == "auth_code" else "",
+            "ac_username": username if auth_mode == "auth_code" else "",
+        }
         if not controller_host:
             flash("Missing required field: Controller IP / Hostname", "danger")
+            return redirect(url_for("index"))
+
+        if not client_id or not client_secret:
+            flash("Missing required fields: Client ID and Client Secret", "danger")
             return redirect(url_for("index"))
 
         try:
@@ -148,66 +172,54 @@ def create_app(output_dir: str | Path | None = None) -> Flask:
         base_url = f"https://{controller_host}:{port}"
 
         try:
-            # Auto-discovery when using login mode
-            if auth_mode == "login":
-                if not username or not password:
-                    flash("Missing required fields: username, password", "danger")
-                    return redirect(url_for("index"))
+            from omada.api.openapi_client import (
+                OmadaOpenApiClient,
+                discover_controller_id,
+                openapi_auth_code_login,
+                openapi_discover_site_id,
+                openapi_login,
+            )
 
-                from omada.api.client import (
-                    discover_controller_id,
-                    discover_site_id,
-                    login as omada_login,
+            if not controller_id:
+                controller_id = discover_controller_id(
+                    base_url, verify_ssl=verify_ssl,
                 )
 
-                if not controller_id:
-                    controller_id = discover_controller_id(
-                        base_url, verify_ssl=verify_ssl
-                    )
-                if not token:
-                    login_result = omada_login(
-                        base_url, controller_id, username, password,
-                        verify_ssl=verify_ssl,
-                    )
-                    token = login_result.token
-                    login_session = login_result.session
-                    base_url = login_result.base_url
-                else:
-                    login_session = None
-                if not site_id:
-                    site_id = discover_site_id(
-                        base_url, controller_id, token,
-                        verify_ssl=verify_ssl,
-                        session=login_session,
-                        site_name=site_name,
-                    )
-            else:
-                missing = []
-                if not controller_id:
-                    missing.append("controller_id")
-                if not token:
-                    missing.append("token")
-                if not site_id:
-                    missing.append("site_id")
-                if missing:
+            if auth_mode == "auth_code":
+                if not username or not password:
                     flash(
-                        f"Missing required fields: {', '.join(missing)}",
+                        "Missing required fields: Username and Password "
+                        "(required for Authorization Code mode)",
                         "danger",
                     )
                     return redirect(url_for("index"))
+                login_result = openapi_auth_code_login(
+                    base_url, controller_id, client_id, client_secret,
+                    username, password,
+                    verify_ssl=verify_ssl,
+                )
+            else:
+                login_result = openapi_login(
+                    base_url, controller_id, client_id, client_secret,
+                    verify_ssl=verify_ssl,
+                )
+
+            site_id = openapi_discover_site_id(
+                login_result.base_url, controller_id, login_result.session,
+                site_name=site_name,
+            )
+
+            api_client = OmadaOpenApiClient(
+                login_result.base_url, controller_id,
+                login_result.access_token,
+                verify_ssl=verify_ssl,
+                session=login_result.session,
+            )
 
             service = OmadaService(
-                base_url=base_url,
-                controller_id=controller_id,
-                token=token,
+                client=api_client,
                 site_id=site_id,
                 output_dir=output_dir_,
-                verify_ssl=verify_ssl,
-                session=(
-                    login_session
-                    if auth_mode == "login" and username and password
-                    else None
-                ),
             )
             paths = service.run()
             doc_count = len(paths.get("docs", {}))

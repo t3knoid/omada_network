@@ -1,0 +1,55 @@
+- count: 1
+  groupId: 696b417b44475876bac4ce1b
+  ipList:
+  - ip: 0.0.0.0
+    mask: 0
+  name: IPGroup_Any
+  type: 0
+- count: 1
+  groupId: 698cdd9c44475876bac60ecc
+  ipList:
+  - description: HDHomeRun Device
+    ip: 192.168.40.10
+    mask: 32
+  name: HDHomeRun
+  type: 0
+- count: 1
+  groupId: 698dccbf44475876bac6491d
+  ipList:
+  - description: rproxy-0
+    ip: 192.168.30.210
+    mask: 32
+  name: rproxy-0
+  type: 0
+- count: 1
+  groupId: 698dccdd44475876bac64926
+  ipList:
+  - description: rproxy-1
+    ip: 192.168.20.201
+    mask: 32
+  name: rproxy-1
+  type: 0
+- count: 1
+  groupId: 698dcd1044475876bac64a7d
+  ipList:
+  - description: rproxy-2
+    ip: 192.168.20.212
+    mask: 32
+  name: rproxy-2
+  type: 0
+- count: 1
+  groupId: 698e042d44475876bac65eae
+  ipList:
+  - description: Plex Server
+    ip: 192.168.30.220
+    mask: 32
+  name: plex-0
+  type: 0
+- count: 1
+  groupId: 69ac1f2344475876bacda65d
+  ipList:
+  - description: VPN Client IP range
+    ip: 10.0.0.0
+    mask: 24
+  name: VPN Client
+  type: 0

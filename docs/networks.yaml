@@ -1,0 +1,307 @@
+- allLan: false
+  application: 0
+  arpDetectionEnable: false
+  deviceMac: 6C-5A-B0-28-3C-77
+  deviceType: 1
+  dhcpGuard:
+    enable: false
+  dhcpL2RelayEnable: false
+  dhcpSettings:
+    dhcpns: auto
+    enable: true
+    ipRangeEnd: 3232236287
+    ipRangePool:
+    - ipaddrEnd: 192.168.2.100
+      ipaddrStart: 192.168.2.11
+    ipRangeStart: 3232236032
+    ipaddrEnd: 192.168.2.100
+    ipaddrStart: 192.168.2.11
+    leasetime: 120
+    options: []
+  dhcpv6Guard:
+    enable: false
+  existArpDetection: false
+  existCustomDhcpOption: false
+  existDhcpNextServer: false
+  existMultiVlan: false
+  existNetworkIsolation: false
+  existRA: false
+  fastLeaveEnable: false
+  gatewaySubnet: 192.168.2.1/24
+  id: 696b417b44475876bac4ce0b
+  igmpSnoopEnable: false
+  interface: true
+  interfaceIds:
+  - 2_ee272bc6f59c499c8b0b70554f240513
+  - 3_4a4fee169afb484eb54cb62acf827272
+  - 4_48c7a5cdeeed4c1f9327b8d3b82fdaeb
+  - 5_919d62a257774590bb9e663f78ff7cc9
+  isolation: false
+  lanNetworkIpv6Config:
+    enable: 0
+  mldSnoopEnable: false
+  name: Control Plane(Default)
+  origName: Control Plane
+  primary: true
+  purpose: interface
+  qosQueueEnable: false
+  resource: 0
+  site: 696b417a44475876bac4ce01
+  subnetOverrideEnable: true
+  vlan: 1
+  vlanType: 0
+- allLan: false
+  application: 0
+  arpDetectionEnable: false
+  deviceMac: 6C-5A-B0-28-3C-77
+  deviceType: 1
+  dhcpGuard:
+    enable: false
+  dhcpL2RelayEnable: false
+  dhcpSettings:
+    dhcpns: auto
+    enable: true
+    ipRangeEnd: 3232238335
+    ipRangePool:
+    - ipaddrEnd: 192.168.10.199
+      ipaddrStart: 192.168.10.50
+    ipRangeStart: 3232238080
+    ipaddrEnd: 192.168.10.199
+    ipaddrStart: 192.168.10.50
+    leasetime: 120
+    options: []
+  dhcpv6Guard:
+    enable: false
+  existArpDetection: false
+  existCustomDhcpOption: false
+  existDhcpNextServer: false
+  existMultiVlan: false
+  existNetworkIsolation: false
+  existRA: false
+  fastLeaveEnable: false
+  gatewaySubnet: 192.168.10.1/24
+  id: 698ca8e544475876bac601bc
+  igmpSnoopEnable: false
+  interface: true
+  interfaceIds:
+  - 2_ee272bc6f59c499c8b0b70554f240513
+  - 3_4a4fee169afb484eb54cb62acf827272
+  - 4_48c7a5cdeeed4c1f9327b8d3b82fdaeb
+  - 5_919d62a257774590bb9e663f78ff7cc9
+  isolation: false
+  lanNetworkIpv6Config:
+    enable: 0
+  mldSnoopEnable: false
+  name: Client
+  origName: Client
+  primary: false
+  purpose: interface
+  qosQueueEnable: false
+  resource: 0
+  site: 696b417a44475876bac4ce01
+  vlan: 10
+  vlanType: 0
+- allLan: false
+  application: 0
+  arpDetectionEnable: false
+  deviceMac: 6C-5A-B0-28-3C-77
+  deviceType: 1
+  dhcpGuard:
+    enable: false
+  dhcpL2RelayEnable: false
+  dhcpSettings:
+    dhcpns: auto
+    enable: true
+    ipRangeEnd: 3232240895
+    ipRangePool:
+    - ipaddrEnd: 192.168.20.99
+      ipaddrStart: 192.168.20.1
+    ipRangeStart: 3232240640
+    ipaddrEnd: 192.168.20.99
+    ipaddrStart: 192.168.20.1
+    leasetime: 120
+    options: []
+  dhcpv6Guard:
+    enable: false
+  existArpDetection: false
+  existCustomDhcpOption: false
+  existDhcpNextServer: false
+  existMultiVlan: false
+  existNetworkIsolation: false
+  existRA: false
+  fastLeaveEnable: false
+  gatewaySubnet: 192.168.20.1/24
+  id: 698cb32744475876bac60473
+  igmpSnoopEnable: false
+  interface: true
+  interfaceIds:
+  - 2_ee272bc6f59c499c8b0b70554f240513
+  - 3_4a4fee169afb484eb54cb62acf827272
+  - 4_48c7a5cdeeed4c1f9327b8d3b82fdaeb
+  - 5_919d62a257774590bb9e663f78ff7cc9
+  isolation: false
+  lanNetworkIpv6Config:
+    enable: 0
+  mldSnoopEnable: false
+  name: Infrastructure
+  origName: Infrastructure
+  primary: false
+  purpose: interface
+  qosQueueEnable: false
+  resource: 0
+  site: 696b417a44475876bac4ce01
+  vlan: 20
+  vlanType: 0
+- allLan: false
+  application: 0
+  arpDetectionEnable: false
+  deviceMac: 6C-5A-B0-28-3C-77
+  deviceType: 1
+  dhcpGuard:
+    enable: false
+  dhcpL2RelayEnable: false
+  dhcpSettings:
+    dhcpns: auto
+    enable: true
+    ipRangeEnd: 3232243455
+    ipRangePool:
+    - ipaddrEnd: 192.168.30.99
+      ipaddrStart: 192.168.30.50
+    ipRangeStart: 3232243200
+    ipaddrEnd: 192.168.30.99
+    ipaddrStart: 192.168.30.50
+    leasetime: 120
+    options: []
+  dhcpv6Guard:
+    enable: false
+  existArpDetection: false
+  existCustomDhcpOption: false
+  existDhcpNextServer: false
+  existMultiVlan: false
+  existNetworkIsolation: false
+  existRA: false
+  fastLeaveEnable: false
+  gatewaySubnet: 192.168.30.1/24
+  id: 698cb2a844475876bac6044e
+  igmpSnoopEnable: false
+  interface: true
+  interfaceIds:
+  - 2_ee272bc6f59c499c8b0b70554f240513
+  - 3_4a4fee169afb484eb54cb62acf827272
+  - 4_48c7a5cdeeed4c1f9327b8d3b82fdaeb
+  - 5_919d62a257774590bb9e663f78ff7cc9
+  isolation: false
+  lanNetworkIpv6Config:
+    enable: 0
+  mldSnoopEnable: false
+  name: DMZ
+  origName: DMZ
+  primary: false
+  purpose: interface
+  qosQueueEnable: false
+  resource: 0
+  site: 696b417a44475876bac4ce01
+  vlan: 30
+  vlanType: 0
+- allLan: false
+  application: 0
+  arpDetectionEnable: false
+  deviceMac: 6C-5A-B0-28-3C-77
+  deviceType: 1
+  dhcpGuard:
+    enable: false
+  dhcpL2RelayEnable: false
+  dhcpSettings:
+    dhcpns: auto
+    enable: true
+    ipRangeEnd: 3232246015
+    ipRangePool:
+    - ipaddrEnd: 192.168.40.199
+      ipaddrStart: 192.168.40.50
+    ipRangeStart: 3232245760
+    ipaddrEnd: 192.168.40.199
+    ipaddrStart: 192.168.40.50
+    leasetime: 120
+    options: []
+  dhcpv6Guard:
+    enable: false
+  existArpDetection: false
+  existCustomDhcpOption: false
+  existDhcpNextServer: false
+  existMultiVlan: false
+  existNetworkIsolation: false
+  existRA: false
+  fastLeaveEnable: false
+  gatewaySubnet: 192.168.40.1/24
+  id: 698cb19544475876bac603ee
+  igmpSnoopEnable: false
+  interface: true
+  interfaceIds:
+  - 2_ee272bc6f59c499c8b0b70554f240513
+  - 3_4a4fee169afb484eb54cb62acf827272
+  - 4_48c7a5cdeeed4c1f9327b8d3b82fdaeb
+  - 5_919d62a257774590bb9e663f78ff7cc9
+  isolation: false
+  lanNetworkIpv6Config:
+    enable: 0
+  mldSnoopEnable: false
+  name: IoT Devices
+  origName: IoT Devices
+  primary: false
+  purpose: interface
+  qosQueueEnable: false
+  resource: 0
+  site: 696b417a44475876bac4ce01
+  vlan: 40
+  vlanType: 0
+- allLan: false
+  application: 0
+  arpDetectionEnable: false
+  deviceMac: 6C-5A-B0-28-3C-77
+  deviceType: 1
+  dhcpGuard:
+    enable: false
+  dhcpL2RelayEnable: false
+  dhcpSettings:
+    dhcpns: auto
+    enable: true
+    ipRangeEnd: 3232261119
+    ipRangePool:
+    - ipaddrEnd: 192.168.99.99
+      ipaddrStart: 192.168.99.1
+    ipRangeStart: 3232260864
+    ipaddrEnd: 192.168.99.99
+    ipaddrStart: 192.168.99.1
+    leasetime: 120
+    options: []
+  dhcpv6Guard:
+    enable: false
+  existArpDetection: false
+  existCustomDhcpOption: false
+  existDhcpNextServer: false
+  existMultiVlan: false
+  existNetworkIsolation: false
+  existRA: false
+  fastLeaveEnable: false
+  gatewaySubnet: 192.168.99.1/24
+  id: 699103e844475876bac7276b
+  igmpSnoopEnable: false
+  interface: true
+  interfaceIds:
+  - 2_ee272bc6f59c499c8b0b70554f240513
+  - 3_4a4fee169afb484eb54cb62acf827272
+  - 4_48c7a5cdeeed4c1f9327b8d3b82fdaeb
+  - 5_919d62a257774590bb9e663f78ff7cc9
+  isolation: false
+  lanNetworkIpv6Config:
+    enable: 0
+  mldSnoopEnable: false
+  name: Management
+  origName: Management
+  primary: false
+  purpose: interface
+  qosQueueEnable: false
+  resource: 0
+  site: 696b417a44475876bac4ce01
+  vlan: 99
+  vlanType: 0

@@ -28,34 +28,41 @@ class TestIndexRoute:
         resp = app_client.get("/")
         html = resp.data.decode()
         assert "controller" in html
-        assert "controller_id" in html
-        assert "token" in html
-        assert "site_id" in html
+        assert "client_id" in html
+        assert "client_secret" in html
 
     def test_index_contains_csrf_token_field(self, app_client) -> None:
         resp = app_client.get("/")
         html = resp.data.decode()
         assert "_csrf_token" in html
 
+    def test_index_contains_auth_mode_tabs(self, app_client) -> None:
+        resp = app_client.get("/")
+        html = resp.data.decode()
+        assert "Client Credentials" in html
+        assert "Authorization Code" in html
+
 
 class TestRunRoute:
-    def test_run_missing_fields_flashes_error(self, app_client) -> None:
+    def test_run_missing_client_creds_flashes_error(self, app_client) -> None:
         resp = app_client.post(
             "/run",
-            data={"controller": "192.168.1.1", "auth_mode": "token"},
+            data={
+                "controller": "192.168.1.1",
+                "auth_mode": "client_credentials",
+            },
             follow_redirects=True,
         )
         assert resp.status_code == 200
         assert b"Missing required fields" in resp.data
 
-    def test_run_success_flashes_message(self, app_client, tmp_path: Path) -> None:
+    def test_run_client_credentials_success(self, app_client, tmp_path: Path) -> None:
         form_data = {
             "controller": "192.168.1.1",
             "port": "8043",
-            "controller_id": "abc123",
-            "token": "mytoken",
-            "site_id": "site001",
-            "auth_mode": "token",
+            "client_id": "my-id",
+            "client_secret": "my-secret",
+            "auth_mode": "client_credentials",
         }
 
         mock_paths = {
@@ -63,23 +70,91 @@ class TestRunRoute:
             "docs": {"acl_rules": tmp_path / "acl_rules.md"},
         }
 
-        with patch("omada.web.app.OmadaService") as MockService:
+        mock_lr = MagicMock()
+        mock_lr.access_token = "AT-tok"
+        mock_lr.session = MagicMock()
+        mock_lr.base_url = "https://192.168.1.1:8043"
+
+        with (
+            patch("omada.web.app.OmadaService") as MockService,
+            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
+            patch("omada.api.openapi_client.openapi_login", return_value=mock_lr),
+            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+        ):
             MockService.return_value.run.return_value = mock_paths
             resp = app_client.post("/run", data=form_data, follow_redirects=True)
 
         assert resp.status_code == 200
         assert b"Success" in resp.data
 
+    def test_run_auth_code_success(self, app_client, tmp_path: Path) -> None:
+        form_data = {
+            "controller": "192.168.1.1",
+            "port": "8043",
+            "ac_client_id": "my-id",
+            "ac_client_secret": "my-secret",
+            "ac_username": "admin",
+            "ac_password": "secret",
+            "auth_mode": "auth_code",
+        }
+
+        mock_paths = {
+            "yaml": {"acl_rules": tmp_path / "acl_rules.yaml"},
+            "docs": {"acl_rules": tmp_path / "acl_rules.md"},
+        }
+
+        mock_lr = MagicMock()
+        mock_lr.access_token = "AT-tok"
+        mock_lr.session = MagicMock()
+        mock_lr.base_url = "https://192.168.1.1:8043"
+
+        with (
+            patch("omada.web.app.OmadaService") as MockService,
+            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
+            patch("omada.api.openapi_client.openapi_auth_code_login", return_value=mock_lr) as mock_ac,
+            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+        ):
+            MockService.return_value.run.return_value = mock_paths
+            resp = app_client.post("/run", data=form_data, follow_redirects=True)
+
+        assert resp.status_code == 200
+        assert b"Success" in resp.data
+        mock_ac.assert_called_once()
+
+    def test_run_auth_code_missing_username_flashes_error(self, app_client) -> None:
+        form_data = {
+            "controller": "192.168.1.1",
+            "ac_client_id": "my-id",
+            "ac_client_secret": "my-secret",
+            "auth_mode": "auth_code",
+        }
+        with patch("omada.api.openapi_client.discover_controller_id", return_value="cid"):
+            resp = app_client.post("/run", data=form_data, follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"Username and Password" in resp.data
+
     def test_run_service_error_flashes_error(self, app_client) -> None:
         form_data = {
             "controller": "192.168.1.1",
             "port": "8043",
-            "controller_id": "abc123",
-            "token": "mytoken",
-            "site_id": "site001",
-            "auth_mode": "token",
+            "client_id": "my-id",
+            "client_secret": "my-secret",
+            "auth_mode": "client_credentials",
         }
-        with patch("omada.web.app.OmadaService") as MockService:
+        mock_lr = MagicMock()
+        mock_lr.access_token = "AT-tok"
+        mock_lr.session = MagicMock()
+        mock_lr.base_url = "https://192.168.1.1:8043"
+
+        with (
+            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
+            patch("omada.api.openapi_client.openapi_login", return_value=mock_lr),
+            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada.web.app.OmadaService") as MockService,
+        ):
             MockService.return_value.run.side_effect = Exception("Connection refused")
             resp = app_client.post("/run", data=form_data, follow_redirects=True)
         assert b"Error" in resp.data
@@ -88,7 +163,6 @@ class TestRunRoute:
         """Without TESTING=True a POST without _csrf_token must return 400."""
         app = create_app(output_dir=tmp_path)
         app.config["TESTING"] = False
-        # Use a fixed secret key so sessions work deterministically
         app.secret_key = "test-secret"
         with app.test_client() as client:
             resp = client.post(
@@ -96,65 +170,20 @@ class TestRunRoute:
                 data={
                     "controller": "192.168.1.1",
                     "port": "8043",
-                    "controller_id": "abc123",
-                    "token": "mytoken",
-                    "site_id": "site001",
+                    "client_id": "my-id",
+                    "client_secret": "my-secret",
                 },
             )
         assert resp.status_code == 400
 
-    def test_run_login_mode_auto_discovers(self, app_client, tmp_path: Path) -> None:
-        """Login mode should auto-discover controller-id, token, site-id."""
-        form_data = {
-            "controller": "192.168.1.1",
-            "port": "8043",
-            "username": "admin",
-            "password": "secret",
-            "auth_mode": "login",
-        }
-
-        mock_paths = {
-            "yaml": {"acl_rules": tmp_path / "acl_rules.yaml"},
-            "docs": {"acl_rules": tmp_path / "acl_rules.md"},
-        }
-
-        mock_login_result = MagicMock()
-        mock_login_result.token = "tok"
-        mock_login_result.session = MagicMock()
-        mock_login_result.base_url = "https://192.168.1.1:8043"
-
-        with (
-            patch("omada.api.client.discover_controller_id", return_value="cid"),
-            patch("omada.api.client.login", return_value=mock_login_result),
-            patch("omada.api.client.discover_site_id", return_value="sid"),
-            patch("omada.web.app.OmadaService") as MockService,
-        ):
-            MockService.return_value.run.return_value = mock_paths
-            resp = app_client.post("/run", data=form_data, follow_redirects=True)
-
-        assert resp.status_code == 200
-        assert b"Success" in resp.data
-
-    def test_run_login_mode_missing_credentials_flashes_error(self, app_client) -> None:
-        """Login mode without username/password should flash an error."""
-        form_data = {
-            "controller": "192.168.1.1",
-            "auth_mode": "login",
-        }
-        resp = app_client.post("/run", data=form_data, follow_redirects=True)
-        assert resp.status_code == 200
-        assert b"Missing required fields" in resp.data
-
     @pytest.mark.parametrize("bad_port", ["abc", "0", "65536", "-1", "3.14"])
     def test_run_invalid_port_flashes_error(self, app_client, bad_port: str) -> None:
-        """Non-numeric or out-of-range port should flash a friendly error."""
         form_data = {
             "controller": "192.168.1.1",
             "port": bad_port,
-            "auth_mode": "token",
-            "controller_id": "cid",
-            "token": "tok",
-            "site_id": "sid",
+            "auth_mode": "client_credentials",
+            "client_id": "my-id",
+            "client_secret": "my-secret",
         }
         resp = app_client.post("/run", data=form_data, follow_redirects=True)
         assert resp.status_code == 200
@@ -165,7 +194,6 @@ class TestRegenerateRoute:
     def test_regenerate_no_yaml_files_flashes_warning(
         self, app_client
     ) -> None:
-        # app_client already points to tmp_path which is empty
         resp = app_client.post("/regenerate", follow_redirects=True)
         assert resp.status_code == 200
         assert b"No *.yaml files found" in resp.data
@@ -207,10 +235,7 @@ class TestRegenerateRoute:
 
 class TestDocViewPathTraversal:
     def test_path_traversal_is_blocked(self, app_client) -> None:
-        # Attempt to traverse outside output dir
         resp = app_client.get("/docs/../../../etc/passwd", follow_redirects=True)
-        # Flask normalises the path, so the file won't exist — but should not
-        # return the contents of an arbitrary file; should redirect with error
         assert resp.status_code == 200
         assert b"not found" in resp.data or b"Access denied" in resp.data
 

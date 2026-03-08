@@ -16,69 +16,125 @@ def runner() -> CliRunner:
     return CliRunner()
 
 
+def _mock_login_result():
+    lr = MagicMock()
+    lr.access_token = "AT-tok"
+    lr.session = MagicMock()
+    lr.base_url = "https://192.168.1.1:8043"
+    return lr
+
+
 class TestFetchCommand:
     def test_missing_required_options(self, runner: CliRunner) -> None:
         result = runner.invoke(cli, ["fetch"])
         assert result.exit_code != 0
 
-    def test_fetch_calls_service(self, runner: CliRunner, tmp_path: Path) -> None:
-        mock_paths = {
-            "yaml": {"acl_rules": tmp_path / "acl_rules.yaml"},
-            "docs": {"acl_rules": tmp_path / "acl_rules.md"},
-        }
-        with patch("omada.service.OmadaService") as MockService:
+    def test_fetch_client_credentials(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Client Credentials mode: --client-id + --client-secret, no username."""
+        mock_paths = {"yaml": {}, "docs": {}}
+        lr = _mock_login_result()
+        with (
+            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
+            patch("omada.api.openapi_client.openapi_login", return_value=lr),
+            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.OmadaOpenApiClient") as MockClient,
+            patch("omada.service.OmadaService") as MockService,
+        ):
             MockService.return_value.run.return_value = mock_paths
             result = runner.invoke(
                 cli,
                 [
                     "fetch",
                     "--controller", "192.168.1.1",
-                    "--controller-id", "abc123",
-                    "--token", "mytoken",
-                    "--site-id", "site001",
+                    "--client-id", "my-id",
+                    "--client-secret", "my-secret",
                     "--output-dir", str(tmp_path),
                 ],
             )
         assert result.exit_code == 0, result.output
 
+    def test_fetch_auth_code_mode(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Authorization Code mode: --username + --password trigger 3-step."""
+        mock_paths = {"yaml": {}, "docs": {}}
+        lr = _mock_login_result()
+        with (
+            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
+            patch("omada.api.openapi_client.openapi_auth_code_login", return_value=lr) as mock_ac,
+            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada.service.OmadaService") as MockService,
+        ):
+            MockService.return_value.run.return_value = mock_paths
+            result = runner.invoke(
+                cli,
+                [
+                    "fetch",
+                    "--controller", "192.168.1.1",
+                    "--client-id", "my-id",
+                    "--client-secret", "my-secret",
+                    "--username", "admin",
+                    "--password", "secret",
+                    "--output-dir", str(tmp_path),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        mock_ac.assert_called_once()
+
     def test_fetch_reads_env_vars(self, runner: CliRunner, tmp_path: Path) -> None:
         mock_paths = {"yaml": {}, "docs": {}}
+        lr = _mock_login_result()
         env = {
             "OMADA_CONTROLLER": "192.168.1.1",
-            "OMADA_CONTROLLER_ID": "cid",
-            "OMADA_TOKEN": "tok",
-            "OMADA_SITE_ID": "sid",
+            "OMADA_CLIENT_ID": "my-id",
+            "OMADA_CLIENT_SECRET": "my-secret",
             "OMADA_OUTPUT_DIR": str(tmp_path),
         }
-        with patch("omada.service.OmadaService") as MockService:
+        with (
+            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
+            patch("omada.api.openapi_client.openapi_login", return_value=lr),
+            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada.service.OmadaService") as MockService,
+        ):
             MockService.return_value.run.return_value = mock_paths
             result = runner.invoke(cli, ["fetch"], env=env)
         assert result.exit_code == 0, result.output
 
-    def test_no_verify_ssl_flag(self, runner: CliRunner, tmp_path: Path) -> None:
+    def test_explicit_controller_id_skips_discovery(self, runner: CliRunner, tmp_path: Path) -> None:
         mock_paths = {"yaml": {}, "docs": {}}
-        with patch("omada.service.OmadaService") as MockService:
+        lr = _mock_login_result()
+        with (
+            patch("omada.api.openapi_client.discover_controller_id") as mock_disc,
+            patch("omada.api.openapi_client.openapi_login", return_value=lr),
+            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada.service.OmadaService") as MockService,
+        ):
             MockService.return_value.run.return_value = mock_paths
             result = runner.invoke(
                 cli,
                 [
                     "fetch",
                     "--controller", "192.168.1.1",
-                    "--controller-id", "abc123",
-                    "--token", "mytoken",
-                    "--site-id", "site001",
+                    "--controller-id", "explicit-cid",
+                    "--client-id", "my-id",
+                    "--client-secret", "my-secret",
                     "--output-dir", str(tmp_path),
                 ],
             )
-        assert result.exit_code == 0
-        # verify_ssl defaults to False (--verify-ssl flag not passed)
-        _, kwargs = MockService.call_args
-        assert kwargs.get("verify_ssl") is False
+        assert result.exit_code == 0, result.output
+        mock_disc.assert_not_called()
+
+    def test_missing_client_credentials_shows_error(self, runner: CliRunner) -> None:
+        result = runner.invoke(
+            cli,
+            ["fetch", "--controller", "192.168.1.1"],
+        )
+        assert result.exit_code != 0
+        assert "client" in result.output.lower()
 
 
 class TestEnvBool:
-    """Verify _env_bool parses boolean environment variables correctly."""
-
     @pytest.mark.parametrize("value", ["1", "true", "True", "TRUE", "yes", "Yes", "on", "ON"])
     def test_truthy_values(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEST_FLAG", value)
@@ -96,7 +152,6 @@ class TestEnvBool:
 
 class TestGenerateCommand:
     def test_generate_from_yaml_files(self, runner: CliRunner, tmp_path: Path) -> None:
-        """generate command should produce Markdown from YAML without API creds."""
         import yaml as _yaml
 
         (tmp_path / "acl_rules.yaml").write_text(
@@ -158,96 +213,4 @@ class TestServeCommand:
                 cli,
                 ["serve", "--host", "127.0.0.1", "--port", "5001"],
             )
-        # The runner may not block (Flask.run is patched) so just check no error
         assert result.exit_code == 0 or "Starting" in result.output
-
-
-class TestFetchWithLogin:
-    def test_login_auto_discovers_all(self, runner: CliRunner, tmp_path: Path) -> None:
-        """--username/--password should auto-discover controller-id, token, site-id."""
-        mock_paths = {"yaml": {}, "docs": {}}
-        mock_login_result = MagicMock()
-        mock_login_result.token = "tok"
-        mock_login_result.session = MagicMock()
-        mock_login_result.base_url = "https://192.168.1.1:8043"
-        with (
-            patch("omada.api.client.discover_controller_id", return_value="cid") as mock_cid,
-            patch("omada.api.client.login", return_value=mock_login_result) as mock_login,
-            patch("omada.api.client.discover_site_id", return_value="sid") as mock_sid,
-            patch("omada.service.OmadaService") as MockService,
-        ):
-            MockService.return_value.run.return_value = mock_paths
-            result = runner.invoke(
-                cli,
-                [
-                    "fetch",
-                    "--controller", "192.168.1.1",
-                    "--username", "admin",
-                    "--password", "secret",
-                    "--output-dir", str(tmp_path),
-                ],
-            )
-        assert result.exit_code == 0, result.output
-        mock_cid.assert_called_once()
-        mock_login.assert_called_once()
-        mock_sid.assert_called_once()
-
-    def test_login_env_vars(self, runner: CliRunner, tmp_path: Path) -> None:
-        """OMADA_USERNAME and OMADA_PASSWORD env vars should work."""
-        mock_paths = {"yaml": {}, "docs": {}}
-        mock_login_result = MagicMock()
-        mock_login_result.token = "tok"
-        mock_login_result.session = MagicMock()
-        mock_login_result.base_url = "https://192.168.1.1:8043"
-        env = {
-            "OMADA_CONTROLLER": "192.168.1.1",
-            "OMADA_USERNAME": "admin",
-            "OMADA_PASSWORD": "secret",
-            "OMADA_OUTPUT_DIR": str(tmp_path),
-        }
-        with (
-            patch("omada.api.client.discover_controller_id", return_value="cid"),
-            patch("omada.api.client.login", return_value=mock_login_result),
-            patch("omada.api.client.discover_site_id", return_value="sid"),
-            patch("omada.service.OmadaService") as MockService,
-        ):
-            MockService.return_value.run.return_value = mock_paths
-            result = runner.invoke(cli, ["fetch"], env=env)
-        assert result.exit_code == 0, result.output
-
-    def test_explicit_overrides_skip_discovery(self, runner: CliRunner, tmp_path: Path) -> None:
-        """Explicit --controller-id/--token/--site-id should skip auto-discovery."""
-        mock_paths = {"yaml": {}, "docs": {}}
-        with (
-            patch("omada.api.client.discover_controller_id") as mock_cid,
-            patch("omada.api.client.login") as mock_login,
-            patch("omada.api.client.discover_site_id") as mock_sid,
-            patch("omada.service.OmadaService") as MockService,
-        ):
-            MockService.return_value.run.return_value = mock_paths
-            result = runner.invoke(
-                cli,
-                [
-                    "fetch",
-                    "--controller", "192.168.1.1",
-                    "--username", "admin",
-                    "--password", "secret",
-                    "--controller-id", "explicit-cid",
-                    "--token", "explicit-tok",
-                    "--site-id", "explicit-sid",
-                    "--output-dir", str(tmp_path),
-                ],
-            )
-        assert result.exit_code == 0, result.output
-        mock_cid.assert_not_called()
-        mock_login.assert_not_called()
-        mock_sid.assert_not_called()
-
-    def test_missing_all_auth_shows_hint(self, runner: CliRunner) -> None:
-        """When no auth is provided, error should hint about --username/--password."""
-        result = runner.invoke(
-            cli,
-            ["fetch", "--controller", "192.168.1.1"],
-        )
-        assert result.exit_code != 0
-        assert "username" in result.output.lower() or "username" in str(result.exception).lower()

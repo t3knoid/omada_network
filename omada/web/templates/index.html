@@ -40,88 +40,113 @@
         <div class="card-body">
           <form action="/run" method="POST" id="configForm">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="auth_mode" id="auth_mode" value="login">
+            <input type="hidden" name="auth_mode" id="auth_mode" value="{{ form.get('auth_mode', 'client_credentials') }}">
             <div class="row g-2 mb-3">
               <div class="col-8">
                 <label class="form-label" for="controller">Controller IP / Hostname</label>
                 <input class="form-control" id="controller" name="controller"
-                       placeholder="192.168.1.1" required>
+                       placeholder="192.168.1.1" value="{{ form.get('controller', '') }}" required>
               </div>
               <div class="col-4">
                 <label class="form-label" for="port">Port</label>
                 <input class="form-control" id="port" name="port" type="number"
-                       value="8043" min="1" max="65535">
+                       value="{{ form.get('port', '443') }}" min="1" max="65535">
               </div>
             </div>
 
             <!-- Auth mode tabs -->
             <ul class="nav nav-tabs mb-3" role="tablist">
               <li class="nav-item" role="presentation">
-                <button class="nav-link active" id="login-tab" data-bs-toggle="tab"
-                        data-bs-target="#login-pane" type="button" role="tab"
-                        aria-controls="login-pane" aria-selected="true"
-                        onclick="document.getElementById('auth_mode').value='login'">
-                  🔑 Login
+                <button class="nav-link {{ 'active' if form.get('auth_mode', 'client_credentials') == 'client_credentials' else '' }}" id="cc-tab" data-bs-toggle="tab"
+                        data-bs-target="#cc-pane" type="button" role="tab"
+                        aria-controls="cc-pane" aria-selected="{{ 'true' if form.get('auth_mode', 'client_credentials') == 'client_credentials' else 'false' }}"
+                        onclick="document.getElementById('auth_mode').value='client_credentials'">
+                  🔒 Client Credentials
                 </button>
               </li>
               <li class="nav-item" role="presentation">
-                <button class="nav-link" id="token-tab" data-bs-toggle="tab"
-                        data-bs-target="#token-pane" type="button" role="tab"
-                        aria-controls="token-pane" aria-selected="false"
-                        onclick="document.getElementById('auth_mode').value='token'">
-                  🔒 Token
+                <button class="nav-link {{ 'active' if form.get('auth_mode') == 'auth_code' else '' }}" id="ac-tab" data-bs-toggle="tab"
+                        data-bs-target="#ac-pane" type="button" role="tab"
+                        aria-controls="ac-pane" aria-selected="{{ 'true' if form.get('auth_mode') == 'auth_code' else 'false' }}"
+                        onclick="document.getElementById('auth_mode').value='auth_code'">
+                  🔑 Authorization Code
                 </button>
               </li>
             </ul>
 
             <div class="tab-content">
-              <!-- Login tab -->
-              <div class="tab-pane fade show active" id="login-pane" role="tabpanel"
-                   aria-labelledby="login-tab">
+              <!-- Client Credentials tab -->
+              <div class="tab-pane fade {{ 'show active' if form.get('auth_mode', 'client_credentials') == 'client_credentials' else '' }}" id="cc-pane" role="tabpanel"
+                   aria-labelledby="cc-tab">
                 <div class="mb-3">
-                  <label class="form-label" for="username">Username</label>
-                  <input class="form-control" id="username" name="username"
-                         placeholder="admin" autocomplete="username">
+                  <label class="form-label" for="cc_client_id">Client ID</label>
+                  <input class="form-control" id="cc_client_id" name="client_id"
+                         placeholder="Open API Client ID" value="{{ form.get('client_id', '') }}">
                 </div>
                 <div class="mb-3">
-                  <label class="form-label" for="password">Password</label>
-                  <input class="form-control" id="password" name="password" type="password"
-                         placeholder="Password" autocomplete="current-password">
+                  <label class="form-label" for="cc_client_secret">Client Secret</label>
+                  <input class="form-control" id="cc_client_secret" name="client_secret"
+                         type="password" placeholder="Open API Client Secret" value="{{ form.get('client_secret', '') }}">
                 </div>
                 <div class="mb-3">
-                  <label class="form-label" for="site_name">Site Name</label>
-                  <input class="form-control" id="site_name" name="site_name"
-                         placeholder="e.g. Default (optional — required if multiple sites exist)">
+                  <label class="form-label" for="cc_controller_id">Controller ID (optional)</label>
+                  <input class="form-control" id="cc_controller_id" name="controller_id"
+                         placeholder="Auto-discovered if blank" value="{{ form.get('controller_id', '') }}">
+                </div>
+                <div class="mb-3">
+                  <label class="form-label" for="cc_site_name">Site Name</label>
+                  <input class="form-control" id="cc_site_name" name="site_name"
+                         placeholder="e.g. Default (optional — required if multiple sites exist)" value="{{ form.get('site_name', '') }}">
                 </div>
                 <div class="form-text text-muted mb-3">
-                  Controller ID, token, and site ID will be auto-discovered.
+                  Uses the Open API Client Credentials grant. Controller ID and
+                  site ID will be auto-discovered.
                 </div>
               </div>
 
-              <!-- Token tab -->
-              <div class="tab-pane fade" id="token-pane" role="tabpanel"
-                   aria-labelledby="token-tab">
+              <!-- Authorization Code tab -->
+              <div class="tab-pane fade {{ 'show active' if form.get('auth_mode') == 'auth_code' else '' }}" id="ac-pane" role="tabpanel"
+                   aria-labelledby="ac-tab">
                 <div class="mb-3">
-                  <label class="form-label" for="controller_id">Controller ID (omadacId)</label>
-                  <input class="form-control" id="controller_id" name="controller_id"
-                         placeholder="abc123def456">
+                  <label class="form-label" for="ac_client_id">Client ID</label>
+                  <input class="form-control" id="ac_client_id" name="ac_client_id"
+                         placeholder="Open API Client ID" value="{{ form.get('ac_client_id', '') }}">
                 </div>
                 <div class="mb-3">
-                  <label class="form-label" for="site_id">Site ID</label>
-                  <input class="form-control" id="site_id" name="site_id"
-                         placeholder="abcdef123456">
+                  <label class="form-label" for="ac_client_secret">Client Secret</label>
+                  <input class="form-control" id="ac_client_secret" name="ac_client_secret"
+                         type="password" placeholder="Open API Client Secret" value="{{ form.get('ac_client_secret', '') }}">
                 </div>
                 <div class="mb-3">
-                  <label class="form-label" for="token">API Token</label>
-                  <input class="form-control" id="token" name="token" type="password"
-                         placeholder="Your access token">
+                  <label class="form-label" for="ac_username">Username</label>
+                  <input class="form-control" id="ac_username" name="ac_username"
+                         placeholder="Controller admin username" autocomplete="username" value="{{ form.get('ac_username', '') }}">
+                </div>
+                <div class="mb-3">
+                  <label class="form-label" for="ac_password">Password</label>
+                  <input class="form-control" id="ac_password" name="ac_password" type="password"
+                         placeholder="Controller admin password" autocomplete="current-password">
+                </div>
+                <div class="mb-3">
+                  <label class="form-label" for="ac_controller_id">Controller ID (optional)</label>
+                  <input class="form-control" id="ac_controller_id" name="ac_controller_id"
+                         placeholder="Auto-discovered if blank" value="{{ form.get('ac_controller_id', '') }}">
+                </div>
+                <div class="mb-3">
+                  <label class="form-label" for="ac_site_name">Site Name</label>
+                  <input class="form-control" id="ac_site_name" name="ac_site_name"
+                         placeholder="e.g. Default (optional — required if multiple sites exist)" value="{{ form.get('ac_site_name', '') }}">
+                </div>
+                <div class="form-text text-muted mb-3">
+                  Uses the Open API Authorization Code grant (3-step flow).
+                  Controller ID and site ID will be auto-discovered.
                 </div>
               </div>
             </div>
 
             <div class="mb-3 form-check">
               <input class="form-check-input" id="verify_ssl" name="verify_ssl"
-                     type="checkbox" checked>
+                     type="checkbox" {{ 'checked' if form.get('verify_ssl', true) else '' }}>
               <label class="form-check-label" for="verify_ssl">
                 Verify SSL certificate (recommended; disabling may expose you to MITM attacks,
                 only skip for trusted self-signed controllers)
@@ -183,5 +208,6 @@
 </div><!-- /.container -->
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
 </body>
 </html>

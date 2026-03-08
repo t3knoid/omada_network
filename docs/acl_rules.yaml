@@ -1,0 +1,682 @@
+- aclType: gateway
+  description: Allow traffic between HDHomeRun Device and Plex Server
+  destinationIds:
+  - 698e042d44475876bac65eae
+  destinationType: 1
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698e046a44475876bac65eb7
+  index: 1
+  policy: 1
+  protocols:
+  - 6
+  - 17
+  sourceIds:
+  - 698cdd9c44475876bac60ecc
+  sourceType: 1
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow traffic between HDHomeRun Device and Plex Server_reverse
+  destinationIds:
+  - 698cdd9c44475876bac60ecc
+  destinationType: 1
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698e046a44475876bac65eb8
+  index: 2
+  policy: 1
+  protocols:
+  - 6
+  - 17
+  sourceIds:
+  - 698e042d44475876bac65eae
+  sourceType: 1
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow traffic between HDHomeRun Device and Client VLAN
+  destinationIds:
+  - 696b417b44475876bac4ce0b
+  - 698ca8e544475876bac601bc
+  destinationType: 0
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698ce70f44475876bac61221
+  index: 3
+  policy: 1
+  protocols:
+  - 6
+  - 17
+  sourceIds:
+  - 698cdd9c44475876bac60ecc
+  sourceType: 1
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow traffic between HDHomeRun Device and Client VLAN_reverse
+  destinationIds:
+  - 698cdd9c44475876bac60ecc
+  destinationType: 1
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698ce71044475876bac6122a
+  index: 4
+  policy: 1
+  protocols:
+  - 6
+  - 17
+  sourceIds:
+  - 696b417b44475876bac4ce0b
+  - 698ca8e544475876bac601bc
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow https from rproxy-0 to backend proxy servers
+  destinationIds:
+  - 698e60e244475876bac6790f
+  - 698e67b944475876bac67de2
+  destinationType: 2
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698dcd9644475876bac64c38
+  index: 5
+  policy: 1
+  protocols:
+  - 6
+  sourceIds:
+  - 698dccbf44475876bac6491d
+  sourceType: 1
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow traffic from DMZ network  to DNS servers
+  destinationIds:
+  - 698e814844475876bac68593
+  destinationType: 2
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698dcfa344475876bac64d2d
+  index: 6
+  policy: 1
+  protocols:
+  - 6
+  - 17
+  sourceIds:
+  - 698cb2a844475876bac6044e
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow traffic from Client network  to DNS servers
+  destinationIds:
+  - 698e814844475876bac68593
+  destinationType: 2
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698e8b3f44475876bac68967
+  index: 7
+  policy: 0
+  protocols:
+  - 6
+  - 17
+  sourceIds:
+  - 696b417b44475876bac4ce0b
+  - 698ca8e544475876bac601bc
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow traffic from Client network to Bedrock server
+  destinationIds:
+  - 698e581144475876bac675ab
+  destinationType: 2
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698e0afc44475876bac6616d
+  index: 8
+  policy: 1
+  protocols:
+  - 17
+  sourceIds:
+  - 698ca8e544475876bac601bc
+  - 696b417b44475876bac4ce0b
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow SSH from Client to DMZ network
+  destinationIds:
+  - 698e69c844475876bac67e46
+  destinationType: 2
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698e696f44475876bac67e32
+  index: 9
+  policy: 1
+  protocols:
+  - 6
+  sourceIds:
+  - 698ca8e544475876bac601bc
+  - 696b417b44475876bac4ce0b
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow SSH from Client to Infrastructure network
+  destinationIds:
+  - 698f4f9844475876bac6b7de
+  destinationType: 2
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698f509444475876bac6b818
+  index: 10
+  policy: 1
+  protocols:
+  - 6
+  sourceIds:
+  - 698ca8e544475876bac601bc
+  - 696b417b44475876bac4ce0b
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow SSH from Infrastructure to DMZ
+  destinationIds:
+  - 698e69c844475876bac67e46
+  destinationType: 2
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 699119d544475876bac72ca0
+  index: 11
+  policy: 1
+  protocols:
+  - 6
+  sourceIds:
+  - 698cb32744475876bac60473
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow access for Plex to TrueNAS NFS
+  destinationIds:
+  - 698f45da44475876bac6b589
+  destinationType: 2
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698f5ead44475876bac6bb8a
+  index: 12
+  policy: 1
+  protocols:
+  - 6
+  - 17
+  sourceIds:
+  - 698e042d44475876bac65eae
+  sourceType: 1
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow HTTPS access from Client to Infrastructure
+  destinationIds:
+  - 698f606744475876bac6bcd3
+  destinationType: 2
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698f617544475876bac6bd27
+  index: 13
+  policy: 1
+  protocols:
+  - 6
+  sourceIds:
+  - 698ca8e544475876bac601bc
+  - 696b417b44475876bac4ce0b
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow VLAN20 access to Synology NFS shares
+  destinationIds:
+  - 698fd18644475876bac6da32
+  destinationType: 2
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698fd20d44475876bac6da6d
+  index: 14
+  policy: 1
+  protocols:
+  - 6
+  - 17
+  sourceIds:
+  - 696b417b44475876bac4ce0b
+  - 698ca8e544475876bac601bc
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow access from VLAN20 to TrueNAS NFS
+  destinationIds:
+  - 698f45da44475876bac6b589
+  destinationType: 2
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 69909cb044475876bac70b01
+  index: 15
+  policy: 1
+  protocols:
+  - 256
+  sourceIds:
+  - 698cb32744475876bac60473
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow access from VLAN20 to TrueNAS NFS_reverse
+  destinationIds:
+  - 698cb32744475876bac60473
+  destinationType: 0
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 69909cb144475876bac70b02
+  index: 16
+  policy: 1
+  protocols:
+  - 256
+  sourceIds:
+  - 698f45da44475876bac6b589
+  sourceType: 2
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow VLAN20 to Default network
+  destinationIds:
+  - 698cb32744475876bac60473
+  destinationType: 0
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 69909d8744475876bac70bc4
+  index: 17
+  policy: 1
+  protocols:
+  - 6
+  - 17
+  - 1
+  sourceIds:
+  - 696b417b44475876bac4ce0b
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow VLAN20 to Default network_reverse
+  destinationIds:
+  - 696b417b44475876bac4ce0b
+  destinationType: 0
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 69909d8744475876bac70bc5
+  index: 18
+  policy: 1
+  protocols:
+  - 6
+  - 17
+  - 1
+  sourceIds:
+  - 698cb32744475876bac60473
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Deny traffic from IoT VLAN to Client VLAN
+  destinationIds:
+  - 696b417b44475876bac4ce0b
+  - 698ca8e544475876bac601bc
+  destinationType: 0
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698ce77144475876bac6125f
+  index: 19
+  policy: 0
+  protocols:
+  - 256
+  sourceIds:
+  - 698cb19544475876bac603ee
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Deny traffic from IoT VLAN to DMZ VLAN
+  destinationIds:
+  - 698cb2a844475876bac6044e
+  destinationType: 0
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698cf52e44475876bac61620
+  index: 20
+  policy: 0
+  protocols:
+  - 256
+  sourceIds:
+  - 698cb19544475876bac603ee
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Deny traffic from IoT VLAN to Infrastructure VLAN
+  destinationIds:
+  - 698cb32744475876bac60473
+  destinationType: 0
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698cf58144475876bac61654
+  index: 21
+  policy: 0
+  protocols:
+  - 256
+  sourceIds:
+  - 698cb19544475876bac603ee
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Deny traffic from DMZ VLAN to IoT VLAN
+  destinationIds:
+  - 698cb19544475876bac603ee
+  destinationType: 0
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698cf5b344475876bac61657
+  index: 22
+  policy: 0
+  protocols:
+  - 256
+  sourceIds:
+  - 698cb2a844475876bac6044e
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Deny traffic from Infrastructure VLAN to IoT VLAN
+  destinationIds:
+  - 698cb19544475876bac603ee
+  destinationType: 0
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698cf5df44475876bac6165a
+  index: 23
+  policy: 0
+  protocols:
+  - 256
+  sourceIds:
+  - 698cb32744475876bac60473
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Deny traffic from Client VLAN to IoT VLAN
+  destinationIds:
+  - 698cb19544475876bac603ee
+  destinationType: 0
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698cf62144475876bac6165d
+  index: 24
+  policy: 0
+  protocols:
+  - 256
+  sourceIds:
+  - 698ca8e544475876bac601bc
+  - 696b417b44475876bac4ce0b
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Deny traffic from DMZ VLAN to Infrastructure VLAN
+  destinationIds:
+  - 698cb32744475876bac60473
+  destinationType: 0
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698e4ffe44475876bac672fb
+  index: 25
+  policy: 0
+  protocols:
+  - 256
+  sourceIds:
+  - 698cb2a844475876bac6044e
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Deny traffic from DMZ VLAN to Infrastructure VLAN_reverse
+  destinationIds:
+  - 698cb2a844475876bac6044e
+  destinationType: 0
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 698e4ffe44475876bac672fc
+  index: 26
+  policy: 0
+  protocols:
+  - 256
+  sourceIds:
+  - 698cb32744475876bac60473
+  sourceType: 0
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: gateway
+  description: Allow VPN client to access client network
+  destinationIds:
+  - 698ca8e544475876bac601bc
+  destinationType: 0
+  direction:
+    lanToLan: true
+    lanToWan: false
+    vpnInIds: []
+    wanInIds: []
+  id: 69ac1f5d44475876bacda67a
+  index: 27
+  policy: 1
+  protocols:
+  - 256
+  sourceIds:
+  - 69ac1f2344475876bacda65d
+  sourceType: 1
+  stateMode: 0
+  status: true
+  syslog: false
+- aclType: switch
+  bindingType: 0
+  description: Allow HDHomerun Access to Client VLAN
+  destinationIds:
+  - 696b417b44475876bac4ce0b
+  - 698ca8e544475876bac601bc
+  destinationType: 0
+  etherType:
+    enable: false
+  id: 698ce08844475876bac60fc3
+  index: 1
+  policy: 1
+  protocols:
+  - 256
+  sourceIds:
+  - 698cdd9c44475876bac60ecc
+  sourceType: 1
+  status: false
+- aclType: switch
+  bindingType: 0
+  description: Allow HDHomerun Access to Client VLAN_reverse
+  destinationIds:
+  - 698cdd9c44475876bac60ecc
+  destinationType: 1
+  etherType:
+    enable: false
+  id: 698ce08944475876bac60fc4
+  index: 2
+  policy: 1
+  protocols:
+  - 256
+  sourceIds:
+  - 696b417b44475876bac4ce0b
+  - 698ca8e544475876bac601bc
+  sourceType: 0
+  status: false
+- aclType: switch
+  bindingType: 0
+  description: Deny IOT access to other networks
+  destinationIds:
+  - 696b417b44475876bac4ce0b
+  - 698ca8e544475876bac601bc
+  - 698cb32744475876bac60473
+  - 698cb2a844475876bac6044e
+  destinationType: 0
+  etherType:
+    enable: false
+  id: 698cdfa144475876bac60f72
+  index: 3
+  policy: 0
+  protocols:
+  - 256
+  sourceIds:
+  - 698cb19544475876bac603ee
+  sourceType: 0
+  status: false
+- aclType: switch
+  bindingType: 0
+  description: Allow traffic between client and IoT networks
+  destinationIds:
+  - 698cb19544475876bac603ee
+  destinationType: 0
+  etherType:
+    enable: false
+  id: 698ce1ce44475876bac61053
+  index: 4
+  policy: 1
+  protocols:
+  - 256
+  sourceIds:
+  - 696b417b44475876bac4ce0b
+  - 698ca8e544475876bac601bc
+  sourceType: 0
+  status: false
+- aclType: switch
+  bindingType: 0
+  description: Allow traffic between client and IoT networks_reverse
+  destinationIds:
+  - 696b417b44475876bac4ce0b
+  - 698ca8e544475876bac601bc
+  destinationType: 0
+  etherType:
+    enable: false
+  id: 698ce1ce44475876bac61054
+  index: 5
+  policy: 1
+  protocols:
+  - 256
+  sourceIds:
+  - 698cb19544475876bac603ee
+  sourceType: 0
+  status: false

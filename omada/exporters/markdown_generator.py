@@ -91,13 +91,16 @@ class MarkdownGenerator:
     def __init__(self, output_dir: str | Path) -> None:
         self.output_dir = Path(output_dir)
 
-    def generate(self, name: str, data: Any) -> Path:
+    def generate(self, name: str, data: Any, context: dict[str, Any] | None = None) -> Path:
         """Generate a Markdown file for *name* and return the path."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         defn = REGISTRY.get(name)
         if defn is not None:
-            rows = defn.row_formatter(data)
+            if defn.needs_context:
+                rows = defn.row_formatter(data, context)
+            else:
+                rows = defn.row_formatter(data)
             # Sort rows by the configured stable key
             if defn.sort_key and rows:
                 rows = sorted(
@@ -121,5 +124,5 @@ class MarkdownGenerator:
 
     def generate_all(self, data: dict[str, Any]) -> dict[str, Path]:
         """Generate Markdown for every key in *data*."""
-        return {name: self.generate(name, value) for name, value in data.items()}
+        return {name: self.generate(name, value, context=data) for name, value in data.items()}
 
