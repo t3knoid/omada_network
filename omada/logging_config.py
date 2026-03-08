@@ -70,7 +70,10 @@ def setup_logging(
 
     # Remove any pre-existing handlers (e.g. from basicConfig) so that
     # calling setup_logging() multiple times doesn't duplicate output.
-    root.handlers.clear()
+    # Close each handler first to release file descriptors / locks.
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+        handler.close()
 
     # --- Console handler (always present) ---
     console = logging.StreamHandler(sys.stderr)
