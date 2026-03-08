@@ -51,4 +51,4 @@ echo.
 REM Open the browser after a short delay so the server has time to start
 start "" cmd /c "timeout /t 2 /nobreak >nul & start %URL%"
 
-python cli.py serve --host %HOST% --port %PORT% --log-file omada_network.log %REMAINING%
+python cli.py --log-file omada_network.log serve --host %HOST% --port %PORT% %REMAINING%
