@@ -182,17 +182,32 @@ def _build_client(
         controller_id = discover_controller_id(base_url, verify_ssl=verify_ssl)
 
     # Choose auth mode
+    if username and not password:
+        raise click.UsageError(
+            "Missing required value: --password / OMADA_PASSWORD for Authorization Code mode"
+        )
+    if password and not username:
+        raise click.UsageError(
+            "Missing required value: --username / OMADA_USERNAME for Authorization Code mode"
+        )
     if username and password:
         # Authorization Code Mode
         login_result = openapi_auth_code_login(
-            base_url, controller_id, client_id, client_secret,
-            username, password,
+            base_url,
+            controller_id,
+            client_id,
+            client_secret,
+            username,
+            password,
             verify_ssl=verify_ssl,
         )
     else:
         # Client Credentials Mode
         login_result = openapi_login(
-            base_url, controller_id, client_id, client_secret,
+            base_url,
+            controller_id,
+            client_id,
+            client_secret,
             verify_ssl=verify_ssl,
         )
 
