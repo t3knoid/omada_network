@@ -58,7 +58,8 @@ def setup_logging(
     """
     # Resolve effective values.
     level = (level or "").upper()
-    numeric_level = getattr(logging, level, None)
+    level_name = (level or "").upper()
+    numeric_level = getattr(logging, level_name, None)
     if not isinstance(numeric_level, int):
         numeric_level = logging.INFO
 
