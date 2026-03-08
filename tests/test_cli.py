@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import click
 import pytest
 from click.testing import CliRunner
 
-from cli import _env_bool, cli
+from cli import _build_client, _env_bool, cli
 
 
 @pytest.fixture()
@@ -214,3 +215,104 @@ class TestServeCommand:
                 ["serve", "--host", "127.0.0.1", "--port", "5001"],
             )
         assert result.exit_code == 0 or "Starting" in result.output
+
+
+class TestPasswordPromptBehaviour:
+    """Tests for password prompt suppression and non-TTY guard."""
+
+    def test_client_credentials_no_password_prompt(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Client Credentials mode must not prompt for a password."""
+        mock_paths = {"yaml": {}, "docs": {}}
+        lr = _mock_login_result()
+        with (
+            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
+            patch("omada.api.openapi_client.openapi_login", return_value=lr) as mock_login,
+            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada.service.OmadaService") as MockService,
+        ):
+            MockService.return_value.run.return_value = mock_paths
+            result = runner.invoke(
+                cli,
+                [
+                    "fetch",
+                    "--controller", "192.168.1.1",
+                    "--client-id", "my-id",
+                    "--client-secret", "my-secret",
+                    "--output-dir", str(tmp_path),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert "Password" not in result.output
+        mock_login.assert_called_once()
+
+    def test_password_prompt_when_username_provided_tty(self) -> None:
+        """When --username is set but --password is missing, prompt interactively."""
+        lr = _mock_login_result()
+        with (
+            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
+            patch("omada.api.openapi_client.openapi_auth_code_login", return_value=lr) as mock_ac,
+            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("sys.stdin") as mock_stdin,
+            patch("click.prompt", return_value="secret") as mock_prompt,
+        ):
+            mock_stdin.isatty.return_value = True
+            _build_client(
+                controller="192.168.1.1",
+                port=443,
+                controller_id="cid",
+                client_id="my-id",
+                client_secret="my-secret",
+                username="admin",
+                password="",
+                site_name="",
+                verify_ssl=False,
+            )
+        mock_prompt.assert_called_once_with("Password", hide_input=True)
+        mock_ac.assert_called_once()
+
+    def test_non_tty_raises_usage_error(self) -> None:
+        """Non-TTY stdin must raise UsageError, not Click Abort."""
+        with (
+            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
+            patch("sys.stdin") as mock_stdin,
+        ):
+            mock_stdin.isatty.return_value = False
+            with pytest.raises(click.UsageError, match="Password required.*stdin is not a TTY"):
+                _build_client(
+                    controller="192.168.1.1",
+                    port=443,
+                    controller_id="cid",
+                    client_id="my-id",
+                    client_secret="my-secret",
+                    username="admin",
+                    password="",
+                    site_name="",
+                    verify_ssl=False,
+                )
+
+    def test_password_via_env_var(self, runner: CliRunner, tmp_path: Path) -> None:
+        """OMADA_PASSWORD env var should be used without prompting."""
+        mock_paths = {"yaml": {}, "docs": {}}
+        lr = _mock_login_result()
+        env = {
+            "OMADA_CONTROLLER": "192.168.1.1",
+            "OMADA_CLIENT_ID": "my-id",
+            "OMADA_CLIENT_SECRET": "my-secret",
+            "OMADA_USERNAME": "admin",
+            "OMADA_PASSWORD": "env-secret",
+            "OMADA_OUTPUT_DIR": str(tmp_path),
+        }
+        with (
+            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
+            patch("omada.api.openapi_client.openapi_auth_code_login", return_value=lr) as mock_ac,
+            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada.service.OmadaService") as MockService,
+        ):
+            MockService.return_value.run.return_value = mock_paths
+            result = runner.invoke(cli, ["fetch"], env=env)
+        assert result.exit_code == 0, result.output
+        assert "Password" not in result.output
+        mock_ac.assert_called_once()
