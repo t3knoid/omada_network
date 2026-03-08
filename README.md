@@ -81,6 +81,87 @@ pip install -r requirements-dev.txt
 
 ---
 
+## Docker
+
+A Docker image lets you run the application without installing Python or any
+dependencies on your host.
+
+### Build
+
+```bash
+docker build -t omada_network .
+```
+
+### Run
+
+By default the container starts the web UI on port 5000:
+
+```bash
+docker run -p 5000:5000 omada_network
+```
+
+Open <http://localhost:5000> in your browser to access the web UI.
+
+### Environment Variables
+
+All `OMADA_*` environment variables are supported. Pass them with `-e`:
+
+```bash
+docker run -p 5000:5000 \
+  -e OMADA_LOG_LEVEL=DEBUG \
+  -e FLASK_SECRET_KEY=my-secret-key \
+  omada_network
+```
+
+### Persisting Output
+
+Mount a host directory to `/app/docs` to keep generated files on your host:
+
+```bash
+docker run -p 5000:5000 \
+  -v "$(pwd)/docs:/app/docs" \
+  omada_network
+```
+
+### Running CLI Commands
+
+You can run any CLI command instead of the default web server:
+
+```bash
+# Fetch and generate documentation
+docker run \
+  -e OMADA_CONTROLLER=192.168.1.1 \
+  -e OMADA_CLIENT_ID=YOUR_CLIENT_ID \
+  -e OMADA_CLIENT_SECRET=YOUR_CLIENT_SECRET \
+  -v "$(pwd)/docs:/app/docs" \
+  omada_network python cli.py fetch
+
+# Regenerate Markdown from existing YAML
+docker run \
+  -v "$(pwd)/docs:/app/docs" \
+  omada_network python cli.py generate --input-dir docs
+```
+
+### Logs
+
+Application logs are written to **stdout/stderr** by default and are visible
+with:
+
+```bash
+docker logs <container>
+```
+
+To also enable file logging inside the container, set `OMADA_LOG_FILE`:
+
+```bash
+docker run -p 5000:5000 \
+  -e OMADA_LOG_FILE=/app/logs/omada_network.log \
+  -v "$(pwd)/logs:/app/logs" \
+  omada_network
+```
+
+---
+
 ## Configuration
 
 The application supports two authentication modes, both using the official
