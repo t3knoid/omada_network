@@ -92,10 +92,10 @@ class TestRunRoute:
         form_data = {
             "controller": "192.168.1.1",
             "port": "8043",
-            "client_id": "my-id",
-            "client_secret": "my-secret",
-            "username": "admin",
-            "password": "secret",
+            "ac_client_id": "my-id",
+            "ac_client_secret": "my-secret",
+            "ac_username": "admin",
+            "ac_password": "secret",
             "auth_mode": "auth_code",
         }
 
@@ -126,8 +126,8 @@ class TestRunRoute:
     def test_run_auth_code_missing_username_flashes_error(self, app_client) -> None:
         form_data = {
             "controller": "192.168.1.1",
-            "client_id": "my-id",
-            "client_secret": "my-secret",
+            "ac_client_id": "my-id",
+            "ac_client_secret": "my-secret",
             "auth_mode": "auth_code",
         }
         with patch("omada.api.openapi_client.discover_controller_id", return_value="cid"):

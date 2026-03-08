@@ -115,25 +115,40 @@ def create_app(output_dir: str | Path | None = None) -> Flask:
 
         controller_host = request.form.get("controller", "").strip()
         port_str = request.form.get("port", "443").strip() or "443"
-        controller_id = request.form.get("controller_id", "").strip()
-        client_id = request.form.get("client_id", "").strip()
-        client_secret = request.form.get("client_secret", "").strip()
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
-        site_name = request.form.get("site_name", "").strip()
         verify_ssl = request.form.get("verify_ssl") == "on"
         auth_mode = request.form.get("auth_mode", "client_credentials")
+
+        # Read credentials from the correct tab's inputs based on auth_mode
+        if auth_mode == "auth_code":
+            client_id = request.form.get("ac_client_id", "").strip()
+            client_secret = request.form.get("ac_client_secret", "").strip()
+            controller_id = request.form.get("ac_controller_id", "").strip()
+            site_name = request.form.get("ac_site_name", "").strip()
+            username = request.form.get("ac_username", "").strip()
+            password = request.form.get("ac_password", "")
+        else:
+            client_id = request.form.get("client_id", "").strip()
+            client_secret = request.form.get("client_secret", "").strip()
+            controller_id = request.form.get("controller_id", "").strip()
+            site_name = request.form.get("site_name", "").strip()
+            username = ""
+            password = ""
 
         # Persist non-sensitive form values in session (never store passwords or secrets)
         session["_form_values"] = {
             "controller": controller_host,
             "port": port_str,
-            "controller_id": controller_id,
-            "client_id": client_id,
-            "username": username,
-            "site_name": site_name,
             "verify_ssl": verify_ssl,
             "auth_mode": auth_mode,
+            "client_id": client_id,
+            "client_secret": "",
+            "controller_id": controller_id,
+            "site_name": site_name,
+            "ac_client_id": client_id if auth_mode == "auth_code" else "",
+            "ac_client_secret": "",
+            "ac_controller_id": controller_id if auth_mode == "auth_code" else "",
+            "ac_site_name": site_name if auth_mode == "auth_code" else "",
+            "ac_username": username if auth_mode == "auth_code" else "",
         }
         if not controller_host:
             flash("Missing required field: Controller IP / Hostname", "danger")
