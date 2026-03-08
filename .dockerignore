@@ -12,6 +12,7 @@ dist
 build
 .eggs
 tests
+requirements-dev.txt
 docs
 logs
 *.log
