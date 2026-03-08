@@ -347,98 +347,13 @@ Repeat for the Bootstrap JS bundle and the GitHub Markdown CSS file.
 
 ---
 
-## GitHub Actions Integration
-
-Store your controller credentials as **repository secrets** and use them in a
-workflow.
-
-### Adding Repository Secrets
-
-The GitHub Actions workflow requires the following secrets to be configured in
-your repository:
-
-| Secret Name | Description |
-| --- | --- |
-| `OMADA_CONTROLLER` | IP address or hostname of your Omada controller (e.g. `192.168.1.1`) |
-| `OMADA_PORT` | *(Optional)* Management port if not the default `443` |
-| `OMADA_CLIENT_ID` | Client ID from controller Open API settings |
-| `OMADA_CLIENT_SECRET` | Client Secret from controller Open API settings |
-| `OMADA_USERNAME` | *(Authorization Code mode)* Controller admin username |
-| `OMADA_PASSWORD` | *(Authorization Code mode)* Controller admin password |
-| `OMADA_CONTROLLER_ID` | *(Optional)* The `omadacId` — auto-discovered if omitted |
-| `OMADA_SITE_NAME` | *(Optional)* Human-readable site name for multi-site controllers |
-| `OMADA_VERIFY_SSL` | *(Optional)* Set to `true` if your controller has a valid (non-self-signed) certificate |
-
-To add these secrets:
-
-1. Navigate to your repository on GitHub.
-2. Click **Settings** → **Secrets and variables** → **Actions**.
-3. Click **New repository secret**.
-4. Enter the **Name** (e.g. `OMADA_CONTROLLER`) and **Secret** value.
-5. Click **Add secret**.
-6. Repeat for each secret listed above.
-
-**Tip:** You can also add secrets via the GitHub CLI:
-
-```bash
-gh secret set OMADA_CONTROLLER --body "192.168.1.1"
-gh secret set OMADA_CLIENT_ID --body "your-client-id"
-gh secret set OMADA_CLIENT_SECRET --body "your-client-secret"
-# For Authorization Code mode, also set:
-# gh secret set OMADA_USERNAME --body "admin"
-# gh secret set OMADA_PASSWORD --body "your-password"
-# For multi-site controllers:
-# gh secret set OMADA_SITE_NAME --body "My Office"
-```
-
-### Workflow Configuration
-
-```yaml
-# .github/workflows/generate-docs.yml
-name: Generate Omada Network Documentation
-
-on:
-  schedule:
-    - cron: "0 2 * * *"   # Run nightly at 02:00 UTC
-  workflow_dispatch:        # Allow manual trigger
-
-jobs:
-  generate:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Generate documentation
-        env:
-          OMADA_CONTROLLER:     ${{ secrets.OMADA_CONTROLLER }}
-          OMADA_CLIENT_ID:      ${{ secrets.OMADA_CLIENT_ID }}
-          OMADA_CLIENT_SECRET:  ${{ secrets.OMADA_CLIENT_SECRET }}
-          OMADA_SITE_NAME:      ${{ secrets.OMADA_SITE_NAME }}
-        run: python cli.py fetch --output-dir docs
-
-      - name: Commit generated docs
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/
-          git diff --cached --quiet || git commit -m "docs: update network documentation [skip ci]"
-          git push
-```
-
----
-
 ## Output
 
 After a successful run the `docs/` directory contains:
+
+> **Note:** The `docs/` directory is excluded from version control via
+> `.gitignore`.  Generated output is local to each environment — run
+> `python cli.py fetch` to populate it.
 
 ```text
 docs/

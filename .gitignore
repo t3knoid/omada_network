@@ -34,6 +34,9 @@ instance/
 # Ad-hoc test scripts with credentials
 _test_auth.py
 
+# Generated docs and YAML output
+docs/
+
 # Log files
 logs/
 *.log
