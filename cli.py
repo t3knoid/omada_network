@@ -7,7 +7,7 @@ GitHub Actions secrets) or as command-line options.
 Environment variable mapping
 -----------------------------
 OMADA_CONTROLLER      → --controller
-OMADA_PORT            → --port  (default: 8043)
+OMADA_PORT            → --port  (default: 443)
 OMADA_CONTROLLER_ID   → --controller-id
 OMADA_CLIENT_ID       → --client-id
 OMADA_CLIENT_SECRET   → --client-secret
