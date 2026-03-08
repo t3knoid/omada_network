@@ -143,11 +143,8 @@ def _openapi_options(fn):
     )(fn)
     fn = click.option(
         "--password",
-        envvar="OMADA_PASSWORD",
-        prompt=True,
-        hide_input=True,
-        prompt_required=False,
-        show_default=False,
+        default=lambda: _env("OMADA_PASSWORD"),
+        show_default="$OMADA_PASSWORD",
         help="Controller login password (Authorization Code mode).",
     )(fn)
     fn = click.option(
@@ -203,9 +200,12 @@ def _build_client(
 
     # Choose auth mode
     if username and not password:
-        raise click.UsageError(
-            "Missing required value: --password / OMADA_PASSWORD for Authorization Code mode"
-        )
+        if not sys.stdin.isatty():
+            raise click.UsageError(
+                "Password required: set --password or OMADA_PASSWORD "
+                "(interactive prompt unavailable — stdin is not a TTY)"
+            )
+        password = click.prompt("Password", hide_input=True)
     if password and not username:
         raise click.UsageError(
             "Missing required value: --username / OMADA_USERNAME for Authorization Code mode"
