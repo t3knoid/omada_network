@@ -27,8 +27,9 @@ The official API documentation is available at:
 
 | Step | Method | Endpoint | Notes |
 | --- | --- | --- | --- |
-| 1. Login | `POST` | `/openapi/authorize/login?client_id={clientId}` | Username and password in JSON body; returns authorization code |
-| 2. Exchange code | `POST` | `/openapi/authorize/token?grant_type=authorization_code` | Authorization code, Client ID, and Secret in JSON body |
+| 1. Login | `POST` | `/openapi/authorize/login?client_id={clientId}` | Username and password in JSON body; establishes login session (does **not** return authorization code) |
+| 2. Get authorization code | `POST` | `/openapi/authorize/code?client_id={clientId}` | Uses active login session; returns authorization code |
+| 3. Exchange code | `POST` | `/openapi/authorize/token?grant_type=authorization_code` | Authorization code, Client ID, and Secret in JSON body |
 
 > **API docs:** Authentication endpoints are documented under the
 > [Authorize](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Authorize) tag.
