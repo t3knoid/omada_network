@@ -1,5 +1,8 @@
 # omada_network
 
+[![Build](https://github.com/t3knoid/omada_network/actions/workflows/build.yml/badge.svg)](https://github.com/t3knoid/omada_network/actions/workflows/build.yml)
+[![Release](https://github.com/t3knoid/omada_network/actions/workflows/release.yml/badge.svg)](https://github.com/t3knoid/omada_network/actions/workflows/release.yml)
+
 A Python application that uses the **Omada Open API** (Northbound API) to
 extract network configuration data into YAML files (source of truth) and
 generate Markdown documentation tables.
@@ -475,12 +478,44 @@ docs/
 ## Development
 
 ```bash
+# Install dev dependencies
+pip install -r requirements-dev.txt
+
 # Run tests
 python -m pytest tests/ -v
 
 # Run a specific test module
 python -m pytest tests/test_openapi_client.py -v
+
+# Lint
+flake8 . --max-line-length=120
+
+# Build package
+pip install build
+python -m build
 ```
+
+### CI/CD
+
+This project uses GitHub Actions for continuous integration and deployment.
+
+**Build Workflow** (`.github/workflows/build.yml`)
+
+- Triggers on pull requests and pushes to `main`.
+- Runs a matrix build across Python 3.10, 3.11, and 3.12.
+- Installs dependencies, lints with flake8, runs tests, and builds the package.
+- Uploads test results and build artifacts.
+
+**Release Workflow** (`.github/workflows/release.yml`)
+
+- Triggers on version tags (e.g. `v1.0.0`) or manual dispatch.
+- Tags must use the format `vN.N.N` (e.g. `v1.0.0`, `v0.0.1`). Invalid
+  formats will cause the workflow to fail with a clear error message.
+- When using manual dispatch, the tag must already exist in the repository.
+- Builds and packages the project (sdist + wheel).
+- Creates a GitHub Release with the built artifacts.
+- Optionally publishes to PyPI when a `PYPI_API_TOKEN` secret is configured
+  in a `pypi` environment.
 
 ### Architecture
 
