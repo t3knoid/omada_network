@@ -38,24 +38,41 @@ Supports both official Open API authentication modes:
 
 ```text
 omada_network/
+├── .github/
+│   └── workflows/
+│       ├── build.yml              # CI build workflow
+│       └── release.yml            # Release workflow
+├── docs/                          # Generated YAML + Markdown output
 ├── omada/
 │   ├── api/
 │   │   └── openapi_client.py      # Official Open API (Northbound) client
 │   ├── exporters/
-│   │   ├── yaml_exporter.py       # Writes resources to YAML files
-│   │   └── markdown_generator.py  # Generates Markdown documentation
+│   │   ├── markdown_generator.py  # Generates Markdown documentation
+│   │   └── yaml_exporter.py       # Writes resources to YAML files
 │   ├── web/
 │   │   ├── app.py                 # Flask application factory
 │   │   └── templates/
-│   │       ├── index.html         # Main configuration form
-│   │       └── doc_view.html      # Document viewer
+│   │       ├── doc_view.html      # Document viewer
+│   │       └── index.html         # Main configuration form
+│   ├── logging_config.py          # Logging configuration
 │   ├── registry.py                # Resource registry (single place to add a resource)
 │   └── service.py                 # Orchestration service layer
+├── tests/
+│   ├── test_cli.py
+│   ├── test_exporters.py
+│   ├── test_logging_config.py
+│   ├── test_openapi_client.py
+│   ├── test_registry.py
+│   ├── test_service.py
+│   └── test_web.py
+├── api_reference.md               # API reference documentation
 ├── cli.py                         # Click CLI entry-point
-├── tests/                         # pytest test suite
+├── Dockerfile                     # Docker container definition
+├── pyproject.toml
 ├── requirements.txt
 ├── requirements-dev.txt
-└── pyproject.toml
+├── start_web.bat                  # Windows web UI launcher
+└── start_web.sh                   # Linux/macOS web UI launcher
 ```
 
 ---
@@ -519,27 +536,8 @@ This project uses GitHub Actions for continuous integration and deployment.
 
 ### Architecture
 
-```text
-CLI / Web UI
-     │
-     ▼
-OmadaService                ← orchestrates everything
-     │
-     ├─► OmadaOpenApiClient  ← HTTP calls to the Open API
-     ├─► YamlExporter        ← writes *.yaml source-of-truth files
-     └─► MarkdownGenerator   ← renders *.md documentation tables
-              │
-              └─► Registry (registry.py)
-                       └─ ResourceDefinition per resource type
-                          (title, fetch_method, row_formatter, sort_key)
-```
-
-Adding a new resource type only requires:
-
-1. A new `get_*` method on `OmadaOpenApiClient`
-2. A new `ResourceDefinition` entry in `omada/registry.py`
-
-No other files need to be modified.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a comprehensive overview of the
+system design, component details, data flows, and extensibility guide.
 
 ---
 
