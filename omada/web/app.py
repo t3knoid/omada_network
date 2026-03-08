@@ -82,7 +82,7 @@ def create_app(
     """
     if configure_logging:
         setup_logging(
-            level=os.environ.get("OMADA_LOG_LEVEL", "INFO").strip().upper() or "INFO",
+            level=os.environ.get("OMADA_LOG_LEVEL", "INFO").strip() or "INFO",
             log_file=os.environ.get("OMADA_LOG_FILE", "").strip() or None,
             log_format=os.environ.get("OMADA_LOG_FORMAT", "").strip() or None,
         )
