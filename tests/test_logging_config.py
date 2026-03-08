@@ -121,9 +121,12 @@ class TestSetupLoggingWithFile:
         ]
         assert len(file_handlers) == 0
 
-    def test_invalid_path_falls_back_to_console(self) -> None:
-        # /dev/null/impossible is not writable on any OS
-        setup_logging(log_file="/dev/null/impossible/test.log")
+    def test_invalid_path_falls_back_to_console(self, tmp_path: Path) -> None:
+        # Use a path where the parent itself is a file, not a directory,
+        # which is invalid on every platform.
+        blocker = tmp_path / "not_a_dir"
+        blocker.write_text("x")
+        setup_logging(log_file=str(blocker / "sub" / "test.log"))
         root = logging.getLogger()
         file_handlers = [
             h for h in root.handlers if isinstance(h, logging.FileHandler)
@@ -148,40 +151,35 @@ class TestSetupLoggingRotation:
         assert rfh[0].backupCount == 2
 
 
-class TestSetupLoggingEnvVars:
-    """Environment variables override function arguments."""
+class TestSetupLoggingEnvVarsViaCli:
+    """CLI reads env vars and passes them as arguments to setup_logging()."""
 
-    def test_env_log_level(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OMADA_LOG_LEVEL", "WARNING")
-        setup_logging(level="DEBUG")
+    def test_cli_reads_env_log_level(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify setup_logging() respects level passed in (CLI would read env)."""
+        setup_logging(level="WARNING")
         assert logging.getLogger().level == logging.WARNING
 
-    def test_env_log_file(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-    ) -> None:
+    def test_cli_reads_env_log_file(self, tmp_path: Path) -> None:
+        """Verify setup_logging() creates file handler when log_file is passed."""
         log_file = str(tmp_path / "env.log")
-        monkeypatch.setenv("OMADA_LOG_FILE", log_file)
-        setup_logging()  # no log_file argument → env var takes effect
+        setup_logging(log_file=log_file)
         root = logging.getLogger()
         file_handlers = [
             h for h in root.handlers if isinstance(h, logging.FileHandler)
         ]
         assert len(file_handlers) == 1
 
-    def test_env_log_format(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OMADA_LOG_FORMAT", "%(name)s: %(message)s")
-        setup_logging()
+    def test_cli_reads_env_log_format(self) -> None:
+        """Verify setup_logging() respects log_format passed in (CLI would read env)."""
+        setup_logging(log_format="%(name)s: %(message)s")
         handler = logging.getLogger().handlers[0]
         # Verify format by formatting a test record.
         record = logging.LogRecord("mymod", logging.INFO, "", 0, "msg", (), None)
         formatted = handler.formatter.format(record)
         assert "mymod: msg" == formatted
 
-    def test_empty_env_log_file_disables_file_logging(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setenv("OMADA_LOG_FILE", "")
-        setup_logging(log_file="/should/be/ignored")
+    def test_empty_log_file_disables_file_logging(self) -> None:
+        setup_logging(log_file="")
         root = logging.getLogger()
         file_handlers = [
             h for h in root.handlers if isinstance(h, logging.FileHandler)

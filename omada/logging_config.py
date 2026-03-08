@@ -3,12 +3,9 @@
 Provides :func:`setup_logging` which configures the root logger with a
 console handler (``stderr``) and, optionally, a rotating file handler.
 
-Configuration may be driven by CLI options, environment variables, or
-direct function arguments.  Environment variable mapping:
-
-    OMADA_LOG_LEVEL   → log level (DEBUG, INFO, WARNING, ERROR)
-    OMADA_LOG_FILE    → path to the log file (empty = file logging disabled)
-    OMADA_LOG_FORMAT  → custom format string for log messages
+Configuration is driven by explicit function arguments — environment
+variables (``OMADA_LOG_LEVEL``, ``OMADA_LOG_FILE``, ``OMADA_LOG_FORMAT``)
+are read by the CLI layer and passed in as arguments.
 
 See :func:`setup_logging` for the full list of parameters and their defaults.
 """
@@ -48,33 +45,18 @@ def setup_logging(
     ----------
     level:
         Logging level name (``DEBUG``, ``INFO``, ``WARNING``, ``ERROR``).
-        Overridden by the ``OMADA_LOG_LEVEL`` environment variable when set.
     log_file:
         Path to the log file.  When *not* ``None`` and not empty, a
         :class:`~logging.handlers.RotatingFileHandler` is attached to the
-        root logger.  Overridden by ``OMADA_LOG_FILE`` when set.
+        root logger.
         Pass an empty string to explicitly disable file logging.
     log_format:
-        :mod:`logging` format string.  Overridden by ``OMADA_LOG_FORMAT``
-        when set.  Defaults to :data:`DEFAULT_FORMAT`.
+        :mod:`logging` format string.  Defaults to :data:`DEFAULT_FORMAT`.
     max_bytes:
         Maximum size (in bytes) of the log file before rotation.
     backup_count:
         Number of rotated backup files to retain.
     """
-    # Environment variables take precedence over function arguments.
-    env_level = os.environ.get("OMADA_LOG_LEVEL", "").strip().upper()
-    if env_level:
-        level = env_level
-
-    env_file = os.environ.get("OMADA_LOG_FILE")
-    if env_file is not None:
-        log_file = env_file.strip()
-
-    env_fmt = os.environ.get("OMADA_LOG_FORMAT")
-    if env_fmt is not None:
-        log_format = env_fmt
-
     # Resolve effective values.
     numeric_level = getattr(logging, level, None)
     if not isinstance(numeric_level, int):

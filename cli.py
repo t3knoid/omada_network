@@ -40,7 +40,7 @@ import sys
 
 import click
 
-from omada.logging_config import DEFAULT_LOG_FILE, setup_logging
+from omada.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +78,7 @@ def _env_bool(name: str) -> bool:
     show_default="$OMADA_LOG_FILE (default: disabled)",
     help=(
         "Path to the log file.  When provided, logs are also written to "
-        "this file using rotating file handling.  "
-        f"Example: {DEFAULT_LOG_FILE}"
+        "this file using rotating file handling."
     ),
 )
 @click.pass_context
@@ -90,7 +89,11 @@ def cli(ctx: click.Context, verbose: bool, log_level: str, log_file: str) -> Non
     running the ``fetch`` sub-command with default options).
     """
     effective_level = "DEBUG" if verbose else log_level.upper()
-    setup_logging(level=effective_level, log_file=log_file or None)
+    setup_logging(
+        level=effective_level,
+        log_file=log_file or None,
+        log_format=_env("OMADA_LOG_FORMAT") or None,
+    )
     if ctx.invoked_subcommand is None:
         ctx.invoke(fetch)
 
