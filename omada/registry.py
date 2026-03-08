@@ -217,8 +217,9 @@ def _vlan_rows(data: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _switch_port_profile_rows(data: Any) -> list[dict[str, Any]]:
+def _switch_port_profile_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     items = data if isinstance(data, list) else []
+    lookup = _build_id_lookup(context)
     rows = []
     for p in items:
         type_raw = p.get("type", "")
@@ -232,8 +233,9 @@ def _switch_port_profile_rows(data: Any) -> list[dict[str, Any]]:
         else:
             poe = str(poe_raw)
 
-        tagged = p.get("tagNetworkIds", p.get("taggedNetworkIds",
-                 p.get("taggedVlans", [])))
+        tagged_ids = p.get("tagNetworkIds", p.get("taggedNetworkIds",
+                     p.get("taggedVlans", [])))
+        tagged = _resolve_ids(tagged_ids, lookup)
 
         rows.append({
             "Name": p.get("name", ""),
@@ -241,6 +243,7 @@ def _switch_port_profile_rows(data: Any) -> list[dict[str, Any]]:
             "Spanning Tree": "Enabled" if p.get("spanningTreeEnable") else "Disabled",
             "Loopback Detect": "Enabled" if p.get("loopbackDetectEnable") else "Disabled",
             "PoE": poe,
+            "Tagged Networks": tagged,
         })
     return rows
 
@@ -390,6 +393,7 @@ RESOURCES: list[ResourceDefinition] = [
         fetch_method="get_switch_port_profiles",
         row_formatter=_switch_port_profile_rows,
         sort_key="Name",
+        needs_context=True,
     ),
     ResourceDefinition(
         name="gateway_settings",
