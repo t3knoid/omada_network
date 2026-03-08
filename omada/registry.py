@@ -4,14 +4,14 @@ Each :class:`ResourceDefinition` describes one resource category:
 
 * **name** – snake_case identifier used as file stem (``acl_rules``, …)
 * **title** – human-readable Markdown heading
-* **fetch_method** – method name on :class:`~omada.api.client.OmadaClient`
+* **fetch_method** – method name on :class:`~omada.api.openapi_client.OmadaOpenApiClient`
 * **row_formatter** – callable that converts raw API/YAML data to a list of
   display-row dicts (used by :class:`~omada.exporters.markdown_generator.MarkdownGenerator`)
 * **sort_key** – column header to sort rows by; ``""`` disables sorting
 
 Adding a new resource category requires only:
 
-1. A new ``get_*`` method on ``OmadaClient``
+1. A new ``get_*`` method on ``OmadaOpenApiClient``
 2. A new :class:`ResourceDefinition` appended to :data:`RESOURCES`
 
 No other files need to be modified.
@@ -72,8 +72,12 @@ def _format_ip_entry(entry: Any) -> str:
     if isinstance(entry, dict):
         ip = entry.get("ip", "")
         mask = entry.get("mask", "")
-        if mask and int(mask) != 32:
-            return f"{ip}/{mask}"
+        if mask:
+            try:
+                if int(mask) != 32:
+                    return f"{ip}/{mask}"
+            except (ValueError, TypeError):
+                return f"{ip}/{mask}"
         return ip
     return str(entry)
 
@@ -188,6 +192,7 @@ def _network_rows(data: Any) -> list[dict[str, Any]]:
         if not subnet:
             subnet = n.get("networkIp", "")
             prefix = n.get("prefixLen", "")
+        gw_display = gw or (f"{subnet}/{prefix}" if subnet and prefix else subnet)
         dhcp_settings = n.get("dhcpSettings")
         dhcp_enabled = False
         if isinstance(dhcp_settings, dict):
@@ -197,7 +202,7 @@ def _network_rows(data: Any) -> list[dict[str, Any]]:
         rows.append({
             "Name": n.get("name", ""),
             "Purpose": n.get("purpose", ""),
-            "Gateway / Subnet": n.get("gatewaySubnet", ""),
+            "Gateway / Subnet": gw_display,
             "VLAN ID": n.get("vlan", n.get("vlanId", "")),
             "DHCP": "Enabled" if dhcp_enabled else "Disabled",
         })
