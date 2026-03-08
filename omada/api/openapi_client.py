@@ -364,9 +364,8 @@ def openapi_discover_site_id(
 class OmadaOpenApiClient:
     """HTTP client for the Omada Open API (Northbound API).
 
-    Provides the same ``get_*`` method interface as
-    :class:`~omada.api.client.OmadaClient` so it can be used as a
-    drop-in replacement in :class:`~omada.service.OmadaService`.
+    Provides ``get_*`` methods consumed by
+    :class:`~omada.service.OmadaService`.
 
     Parameters
     ----------
