@@ -196,7 +196,7 @@ def openapi_auth_code_login(
     login_url = f"{base}/openapi/authorize/login"
     login_resp = sess.post(
         login_url,
-        params={"client_id": client_id, "omadac_id": omadac_id},
+        params={"client_id": client_id, "omadacId": omadac_id},
         json={"username": username, "password": password},
         timeout=timeout,
     )
