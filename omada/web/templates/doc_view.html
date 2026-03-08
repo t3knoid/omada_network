@@ -56,6 +56,13 @@
         {% endfor %}
       {% endwith %}
 
+      <div class="d-flex justify-content-end mb-2">
+        <a class="btn btn-sm btn-outline-primary"
+           href="{{ url_for('download_doc', filename=filename) }}">
+          ⬇ Download
+        </a>
+      </div>
+
       <article class="markdown-body shadow-sm">
         {{ content | markdown }}
       </article>

@@ -10,9 +10,11 @@ fresh :class:`~flask.Flask` instance — no module-level singletons.
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import secrets
+import zipfile
 from pathlib import Path
 
 import markdown as _markdown
@@ -24,6 +26,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_file,
     session,
     url_for,
 )
@@ -315,6 +318,73 @@ def create_app(
             docs=_list_docs(output_dir_),
         )
 
+    @app.route("/download/<path:filename>")
+    def download_doc(filename: str):
+        """Download a single generated Markdown file."""
+        output_dir_ = current_app.config["OUTPUT_DIR"]
+        try:
+            doc_path = (output_dir_ / filename).resolve()
+            doc_path.relative_to(output_dir_.resolve())
+        except ValueError:
+            flash("Access denied.", "danger")
+            return redirect(url_for("index"))
+
+        if not doc_path.is_file():
+            flash(f"Document '{filename}' not found.", "warning")
+            return redirect(url_for("index"))
+
+        return send_file(
+            doc_path,
+            as_attachment=True,
+            download_name=filename,
+        )
+
+    @app.route("/download", methods=["POST"])
+    def download_selected():
+        """Download selected files; ZIP if multiple."""
+        _check_csrf()
+        output_dir_ = current_app.config["OUTPUT_DIR"]
+        filenames = request.form.getlist("filenames")
+
+        if not filenames:
+            flash("No files selected for download.", "warning")
+            return redirect(url_for("index"))
+
+        # Validate all paths before proceeding
+        valid_paths: list[tuple[str, Path]] = []
+        for fname in filenames:
+            try:
+                doc_path = (output_dir_ / fname).resolve()
+                doc_path.relative_to(output_dir_.resolve())
+            except ValueError:
+                flash("Access denied.", "danger")
+                return redirect(url_for("index"))
+            if not doc_path.is_file():
+                flash(f"Document '{fname}' not found.", "warning")
+                return redirect(url_for("index"))
+            valid_paths.append((fname, doc_path))
+
+        if len(valid_paths) == 1:
+            fname, doc_path = valid_paths[0]
+            return send_file(
+                doc_path,
+                as_attachment=True,
+                download_name=fname,
+            )
+
+        # Multiple files: create a ZIP archive in memory
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for fname, doc_path in valid_paths:
+                zf.write(doc_path, arcname=fname)
+        buf.seek(0)
+        return send_file(
+            buf,
+            as_attachment=True,
+            download_name="omada_docs.zip",
+            mimetype="application/zip",
+        )
+
     return app
 
 
@@ -323,4 +393,3 @@ def _list_docs(output_dir: Path) -> list[str]:
     if not output_dir.is_dir():
         return []
     return sorted(p.name for p in output_dir.glob("*.md"))
-
