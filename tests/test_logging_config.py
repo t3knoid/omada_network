@@ -1,0 +1,198 @@
+"""Tests for the centralised logging configuration module."""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from omada.logging_config import (
+    DEFAULT_BACKUP_COUNT,
+    DEFAULT_FORMAT,
+    DEFAULT_LOG_FILE,
+    DEFAULT_MAX_BYTES,
+    setup_logging,
+)
+
+
+@pytest.fixture(autouse=True)
+def _reset_root_logger():
+    """Ensure each test starts with a clean root logger."""
+    root = logging.getLogger()
+    original_handlers = root.handlers[:]
+    original_level = root.level
+    yield
+    root.handlers = original_handlers
+    root.setLevel(original_level)
+
+
+class TestSetupLoggingConsoleOnly:
+    """Console-only logging (default, no log file)."""
+
+    def test_default_level_is_info(self) -> None:
+        setup_logging()
+        root = logging.getLogger()
+        assert root.level == logging.INFO
+
+    def test_console_handler_attached(self) -> None:
+        setup_logging()
+        root = logging.getLogger()
+        stream_handlers = [
+            h for h in root.handlers if isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.FileHandler)
+        ]
+        assert len(stream_handlers) == 1
+
+    def test_no_file_handler_by_default(self) -> None:
+        setup_logging()
+        root = logging.getLogger()
+        file_handlers = [
+            h for h in root.handlers if isinstance(h, logging.FileHandler)
+        ]
+        assert len(file_handlers) == 0
+
+    def test_custom_level(self) -> None:
+        setup_logging(level="DEBUG")
+        assert logging.getLogger().level == logging.DEBUG
+
+    def test_custom_format(self) -> None:
+        fmt = "%(asctime)s %(name)s %(message)s"
+        setup_logging(log_format=fmt)
+        root = logging.getLogger()
+        handler = root.handlers[0]
+        assert handler.formatter._fmt == fmt
+
+    def test_invalid_level_falls_back_to_info(self) -> None:
+        setup_logging(level="BOGUS")
+        assert logging.getLogger().level == logging.INFO
+
+    def test_no_duplicate_handlers_on_repeat_calls(self) -> None:
+        setup_logging()
+        setup_logging()
+        root = logging.getLogger()
+        assert len(root.handlers) == 1
+
+
+class TestSetupLoggingWithFile:
+    """File logging (RotatingFileHandler)."""
+
+    def test_file_handler_created(self, tmp_path: Path) -> None:
+        log_file = str(tmp_path / "test.log")
+        setup_logging(log_file=log_file)
+        root = logging.getLogger()
+        file_handlers = [
+            h for h in root.handlers if isinstance(h, logging.FileHandler)
+        ]
+        assert len(file_handlers) == 1
+
+    def test_log_file_written(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "app.log"
+        setup_logging(log_file=str(log_file), level="INFO")
+        logging.getLogger("test").info("hello from test")
+        # Flush handlers
+        for h in logging.getLogger().handlers:
+            h.flush()
+        assert log_file.exists()
+        content = log_file.read_text(encoding="utf-8")
+        assert "hello from test" in content
+
+    def test_log_directory_created(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "nested" / "dir" / "app.log"
+        setup_logging(log_file=str(log_file))
+        assert log_file.parent.exists()
+
+    def test_both_console_and_file_handlers(self, tmp_path: Path) -> None:
+        log_file = str(tmp_path / "test.log")
+        setup_logging(log_file=log_file)
+        root = logging.getLogger()
+        assert len(root.handlers) == 2
+
+    def test_empty_log_file_disables_file_logging(self) -> None:
+        setup_logging(log_file="")
+        root = logging.getLogger()
+        file_handlers = [
+            h for h in root.handlers if isinstance(h, logging.FileHandler)
+        ]
+        assert len(file_handlers) == 0
+
+    def test_invalid_path_falls_back_to_console(self) -> None:
+        # /dev/null/impossible is not writable on any OS
+        setup_logging(log_file="/dev/null/impossible/test.log")
+        root = logging.getLogger()
+        file_handlers = [
+            h for h in root.handlers if isinstance(h, logging.FileHandler)
+        ]
+        assert len(file_handlers) == 0
+        # Console handler should still be present
+        assert len(root.handlers) >= 1
+
+
+class TestSetupLoggingRotation:
+    """Rotation parameters are forwarded to RotatingFileHandler."""
+
+    def test_rotation_params(self, tmp_path: Path) -> None:
+        from logging.handlers import RotatingFileHandler
+
+        log_file = str(tmp_path / "rot.log")
+        setup_logging(log_file=log_file, max_bytes=1024, backup_count=2)
+        root = logging.getLogger()
+        rfh = [h for h in root.handlers if isinstance(h, RotatingFileHandler)]
+        assert len(rfh) == 1
+        assert rfh[0].maxBytes == 1024
+        assert rfh[0].backupCount == 2
+
+
+class TestSetupLoggingEnvVars:
+    """Environment variables override function arguments."""
+
+    def test_env_log_level(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OMADA_LOG_LEVEL", "WARNING")
+        setup_logging(level="DEBUG")
+        assert logging.getLogger().level == logging.WARNING
+
+    def test_env_log_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        log_file = str(tmp_path / "env.log")
+        monkeypatch.setenv("OMADA_LOG_FILE", log_file)
+        setup_logging()  # no log_file argument → env var takes effect
+        root = logging.getLogger()
+        file_handlers = [
+            h for h in root.handlers if isinstance(h, logging.FileHandler)
+        ]
+        assert len(file_handlers) == 1
+
+    def test_env_log_format(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OMADA_LOG_FORMAT", "%(name)s: %(message)s")
+        setup_logging()
+        handler = logging.getLogger().handlers[0]
+        assert handler.formatter._fmt == "%(name)s: %(message)s"
+
+    def test_empty_env_log_file_disables_file_logging(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("OMADA_LOG_FILE", "")
+        setup_logging(log_file="/should/be/ignored")
+        root = logging.getLogger()
+        file_handlers = [
+            h for h in root.handlers if isinstance(h, logging.FileHandler)
+        ]
+        assert len(file_handlers) == 0
+
+
+class TestDefaults:
+    """Verify module-level defaults are sensible."""
+
+    def test_default_format(self) -> None:
+        assert DEFAULT_FORMAT == "%(levelname)s %(message)s"
+
+    def test_default_log_file_path(self) -> None:
+        assert "omada_network.log" in DEFAULT_LOG_FILE
+
+    def test_default_max_bytes(self) -> None:
+        assert DEFAULT_MAX_BYTES == 5 * 1024 * 1024
+
+    def test_default_backup_count(self) -> None:
+        assert DEFAULT_BACKUP_COUNT == 3
