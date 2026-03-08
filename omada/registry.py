@@ -261,22 +261,30 @@ def _gateway_rows(data: Any) -> list[dict[str, Any]]:
     else:
         items = []
 
-    # If the data is in the Open API format with wanPortsConfig
-    if items and isinstance(items[0], dict) and "wanPortsConfig" not in items[0]:
-        # Legacy flat format
-        return [
-            {
-                "WAN Mode": r.get("wanMode", ""),
-                "WAN1 IP": r.get("wan1Ip", ""),
-                "WAN1 Type": r.get("wan1Type", ""),
-                "WAN2 IP": r.get("wan2Ip", ""),
-                "WAN2 Type": r.get("wan2Type", ""),
-                "Load Balancing": "Enabled" if r.get("loadBalance") else "Disabled",
-            }
-            for r in items
-            if isinstance(r, dict)
-        ]
+    if items and isinstance(items[0], dict):
+        first = items[0]
+        legacy_keys = ("wanMode", "wan1Ip", "wan1Type", "wan2Ip", "wan2Type", "loadBalance")
+        has_legacy = any(key in first for key in legacy_keys)
+        has_wan_ports = "wanPortsConfig" in first
 
+        if has_legacy:
+            # Legacy flat format
+            return [
+                {
+                    "WAN Mode": r.get("wanMode", ""),
+                    "WAN1 IP": r.get("wan1Ip", ""),
+                    "WAN1 Type": r.get("wan1Type", ""),
+                    "WAN2 IP": r.get("wan2Ip", ""),
+                    "WAN2 Type": r.get("wan2Type", ""),
+                    "Load Balancing": "Enabled" if r.get("loadBalance") else "Disabled",
+                }
+                for r in items
+                if isinstance(r, dict)
+            ]
+
+        if not has_wan_ports:
+            # Unknown format (e.g. OpenAPI fallback shapes) – return raw dicts
+            return [r for r in items if isinstance(r, dict)]
     # Open API format — extract WAN port details
     rows = []
     for item in items:
