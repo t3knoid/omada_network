@@ -608,7 +608,7 @@ class OmadaOpenApiClient:
             pass
         # Fallback to basic internet info
         try:
-            return self._get(f"sites/{site_id}/internet/basic")
+            return self._get(f"sites/{site_id}/internet/basic-info")
         except OmadaAPIError:
             pass
         # Virtual WANs
