@@ -124,19 +124,17 @@ def create_app(output_dir: str | Path | None = None) -> Flask:
         verify_ssl = request.form.get("verify_ssl") == "on"
         auth_mode = request.form.get("auth_mode", "client_credentials")
 
-        # Persist form values in session (never store passwords)
+        # Persist non-sensitive form values in session (never store passwords or secrets)
         session["_form_values"] = {
             "controller": controller_host,
             "port": port_str,
             "controller_id": controller_id,
             "client_id": client_id,
-            "client_secret": client_secret,
             "username": username,
             "site_name": site_name,
             "verify_ssl": verify_ssl,
             "auth_mode": auth_mode,
         }
-
         if not controller_host:
             flash("Missing required field: Controller IP / Hostname", "danger")
             return redirect(url_for("index"))
