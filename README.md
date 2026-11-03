@@ -26,6 +26,7 @@ Supports both official Open API authentication modes:
 | SSIDs | ✓ | ✓ |
 | DHCP Reservations | ✓ | ✓ |
 | Devices | ✓ | ✓ |
+| Device Ports (switches & gateways) | ✓ | ✓ |
 
 ---
 
@@ -506,7 +507,9 @@ docs/
     ├── dhcp_reservations.yaml
     ├── dhcp_reservations.md
     ├── devices.yaml
-    └── devices.md
+    ├── devices.md
+    ├── device_ports.yaml
+    └── device_ports.md
 ```
 
 ### Example – DHCP Reservations Markdown

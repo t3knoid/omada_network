@@ -23,6 +23,7 @@ def mock_client() -> MagicMock:
     client.get_ssids.return_value = []
     client.get_dhcp_reservations.return_value = []
     client.get_devices.return_value = []
+    client.get_device_ports.return_value = []
     return client
 
 
@@ -48,6 +49,7 @@ def _empty_data() -> dict:
         "ssids": [],
         "dhcp_reservations": [],
         "devices": [],
+        "device_ports": [],
     }
 
 

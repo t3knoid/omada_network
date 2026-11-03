@@ -128,6 +128,14 @@ list is returned.
 
 Attempts multiple endpoints with fallback.
 
+The Markdown output has a summary table (type, native / untagged / tagged
+networks, PoE, spanning tree, loopback detect) followed by one section per
+profile listing every property, grouped as General, VLAN, Switching,
+QoS & Bandwidth, and Spanning Tree. Fields without a dedicated mapping are
+listed under **Other**, so no profile property is left out. Profile `type` follows
+the API definition: 0 = built-in *All*, 1 = built-in *Disable*, 2 = any other
+(*Standard*) profile.
+
 | Priority | Method | Endpoint | Notes |
 | --- | --- | --- | --- |
 | 1 | `GET` | `sites/{siteId}/lan-profiles` | v1 API (paginated) |
@@ -188,6 +196,42 @@ Returns the adopted devices for the selected site.
 | Method | Endpoint | Notes |
 | --- | --- | --- |
 | `GET` | `sites/{siteId}/devices` | Paginated |
-| `GET` | `sites/{siteId}/devices/{deviceMac}/ports` | Paginated; queried for each device with a MAC address |
 
 > **API docs:** See the [Device](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Device) tag.
+
+---
+
+### Device Ports
+
+Port configuration for every switch and gateway in the site, exported as one
+record per port. Each record is tagged with `deviceName`, `deviceMac`,
+`deviceType`, and `deviceModel`. Other device types (e.g. access points) are
+skipped.
+
+| Device type | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| — | `GET` | `sites/{siteId}/devices` | Device list (paginated) |
+| Switch | `GET` | `sites/{siteId}/switches/ports/overview` | One site-wide paginated call: label, connection, type, operation, profile, native network |
+| Switch (fallback) | `GET` | `sites/{siteId}/switches/{switchMac}` | `portList`; used only for switches missing from the overview |
+| Gateway | `GET` | `sites/{siteId}/gateways/{gatewayMac}` | `portConfigs`: link speed, duplex, mirroring, PVID, flow control, enabled |
+| Gateway | `GET` | `sites/{siteId}/gateways/{gatewayMac}/ports` | `osgPortInfos`: name, type, physical type, mode |
+| Gateway | `GET` | `sites/{siteId}/gateways/{gatewayMac}/wan-status` | Link status, speed, duplex — stored as `portStatus` |
+
+Gateway sources are merged by port number; if some fail, the rest are still
+used. Failures for a device are logged as warnings and the remaining devices
+are still exported.
+
+The Markdown table mirrors the controller's port list:
+
+| Column | Switch | Gateway |
+| --- | --- | --- |
+| Label | `tagName` | — |
+| Connection | `connectedStatus` + negotiated speed/duplex from `portStatus` | `portStatus.linkStatus` + speed/duplex; `Disabled` when `status` is 0 |
+| Type | `type`: 1 Copper, 2 Combo, 3 SFP | `type`: 0 WAN, 1 WAN/LAN, 2 LAN |
+| Operation | `operation`: Switching, Mirroring, Aggregating | `mode`: 0 WAN, 1 LAN (`Mirroring` when mirroring is enabled) |
+| Profile | `profileName` | — |
+| Native Network | `nativeNetworkId` resolved to the network name | LAN-mode ports: `pvid` resolved to the network with that VLAN |
+
+> **API docs:** See the [Device](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Device) tag —
+> *Get the switches ports overview*, *Get switch info*, *Get gateway info*,
+> *Get gateway ports*, *Get gateway wan status*.

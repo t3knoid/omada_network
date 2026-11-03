@@ -8,6 +8,8 @@ Each :class:`ResourceDefinition` describes one resource category:
 * **row_formatter** – callable that converts raw API/YAML data to a list of
   display-row dicts (used by :class:`~omada.exporters.markdown_generator.MarkdownGenerator`)
 * **sort_key** – column header to sort rows by; ``""`` disables sorting
+* **detail_formatter** – optional callable returning ``(title, rows)`` pairs;
+  each pair is rendered as its own ``##`` section below the summary table
 
 Adding a new resource category requires only:
 
@@ -19,6 +21,7 @@ No other files need to be modified.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -37,6 +40,7 @@ class ResourceDefinition:
     row_formatter: Callable[..., list[dict[str, Any]]]
     sort_key: str = "Name"
     needs_context: bool = False
+    detail_formatter: Callable[..., list[tuple[str, list[dict[str, Any]]]]] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +55,51 @@ _POLICY_MAP: dict[int, str] = {0: "Deny", 1: "Permit"}
 
 _SOURCE_TYPE_MAP: dict[int, str] = {0: "Network", 1: "IP Group", 2: "IP-Port Group"}
 
-_PROFILE_TYPE_MAP: dict[int, str] = {0: "Trunk", 1: "Disabled", 2: "Access"}
+# Port (LAN) profile codes, per the Open API LanProfileInfoOpenApiVO schema.
+_PROFILE_TYPE_MAP: dict[int, str] = {0: "All", 1: "Disable", 2: "Standard"}
+_PROFILE_FLAG_MAP: dict[int, str] = {0: "Default", 1: "Network-generated", 2: "User-created"}
+_PROFILE_POE_MAP: dict[int, str] = {0: "Disabled", 1: "Enabled", 2: "Use Device Setting"}
+_DOT1X_MAP: dict[int, str] = {0: "Force Unauthorized", 1: "Force Authorized", 2: "Auto"}
+_NETWORK_TAGS_MAP: dict[int, str] = {0: "Allow All", 1: "Block All", 2: "Custom"}
+_BANDWIDTH_CTRL_MAP: dict[int, str] = {0: "Off", 1: "Rate Limit", 2: "Storm Control"}
+_RATE_UNIT_MAP: dict[int, str] = {1: "Kbps", 2: "Mbps"}
+_STORM_ACTION_MAP: dict[int, str] = {0: "Drop", 1: "Shutdown"}
+_TRUST_MODE_MAP: dict[int, str] = {0: "Untrusted", 1: "Trust 802.1p", 2: "Trust DSCP"}
+_RELAY_FORMAT_MAP: dict[int, str] = {0: "Normal", 1: "Private"}
+# The spec only gives the 0-2 range; labels follow the controller UI order.
+_P2P_LINK_MAP: dict[int, str] = {0: "Auto", 1: "Open (True)", 2: "Closed (False)"}
+
+_UNTAGGED_KEYS = ("untagNetworkIds", "untaggedNetworkIds")
+_TAGGED_KEYS = ("tagNetworkIds", "taggedNetworkIds", "taggedVlans")
+
+_SWITCHING_FLAGS: tuple[tuple[str, str], ...] = (
+    ("portIsolationEnable", "Port Isolation"),
+    ("lldpMedEnable", "LLDP-MED"),
+    ("topoNotifyEnable", "Topology Change Notification"),
+    ("loopbackDetectEnable", "Loopback Detect (Port Based)"),
+    ("loopbackDetectVlanBasedEnable", "Loopback Detect (VLAN Based)"),
+    ("eeeEnable", "EEE"),
+    ("flowControlEnable", "Flow Control"),
+    ("fastLeaveEnable", "IGMP Snooping Fast Leave"),
+    ("igmpFastLeaveEnable", "IGMP Fast Leave"),
+    ("mldFastLeaveEnable", "MLD Fast Leave"),
+    ("esEnable", "ES (Easy Managed Switch)"),
+)
+
+# Keys rendered explicitly (or deliberately hidden as internal bookkeeping);
+# anything else a profile carries is listed under "Other".
+_PROFILE_HANDLED_KEYS: frozenset[str] = frozenset({
+    "id", "name", "type", "flag", "prohibitModify", "poe", "poeEnable", "dot1x",
+    "nativeNetworkId", "networkTagsSetting", "networkConflict",
+    *_UNTAGGED_KEYS, *_TAGGED_KEYS,
+    "voiceNetworkEnable", "voiceNetworkId", "voiceDscpEnable", "voiceDscp",
+    *(key for key, _ in _SWITCHING_FLAGS), "dhcpL2RelaySettings",
+    "dot1pPriority", "trustMode", "bandWidthCtrlType", "bandCtrl", "stormCtrl",
+    "spanningTreeEnable", "spanningTreeSetting", "supportESEnable",
+    # internal
+    "nativeBridgeVlan", "tagBridgeVlanMap", "untagBridgeVlanMap", "voiceBridgeVlan",
+    "esEnableTagBridgeVlanMap", "createByNewUI", "resource",
+})
 
 _PROTO_TYPE_MAP: dict[int, str] = {1: "DHCP", 2: "Static", 3: "PPPoE"}
 
@@ -222,35 +270,200 @@ def _vlan_rows(data: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _enabled(value: Any) -> str:
+    return "Enabled" if value else "Disabled"
+
+
+def _profile_poe(value: Any) -> str:
+    if isinstance(value, bool):
+        return _enabled(value)
+    if isinstance(value, int):
+        return _PROFILE_POE_MAP.get(value, str(value))
+    return _flatten(value)
+
+
+def _profile_code(value: Any, mapping: dict[int, str]) -> str:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return mapping.get(value, str(value))
+    return _flatten(value)
+
+
+def _profile_networks(profile: dict[str, Any], keys: tuple[str, ...], lookup: dict[str, str]) -> str:
+    ids = next((profile[k] for k in keys if profile.get(k) is not None), [])
+    return _resolve_ids(ids if isinstance(ids, list) else [ids], lookup)
+
+
+def _profile_native(profile: dict[str, Any], lookup: dict[str, str]) -> str:
+    native = profile.get("nativeNetworkId")
+    return lookup.get(str(native), str(native)) if native else ""
+
+
 def _switch_port_profile_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Summary table: one row per port profile."""
     items = data if isinstance(data, list) else []
     lookup = _build_id_lookup(context)
     rows = []
     for p in items:
-        type_raw = p.get("type", "")
-        profile_type = _PROFILE_TYPE_MAP.get(type_raw, type_raw) if isinstance(type_raw, int) else type_raw
-
-        poe_raw = p.get("poe", p.get("poeEnable", ""))
-        if isinstance(poe_raw, bool):
-            poe = "Enabled" if poe_raw else "Disabled"
-        elif isinstance(poe_raw, int):
-            poe = {0: "Disabled", 1: "Enabled", 2: "Use Device Setting"}.get(poe_raw, str(poe_raw))
-        else:
-            poe = str(poe_raw)
-
-        tagged_ids = p.get("tagNetworkIds", p.get("taggedNetworkIds",
-                     p.get("taggedVlans", [])))
-        tagged = _resolve_ids(tagged_ids, lookup)
-
+        if not isinstance(p, dict):
+            continue
         rows.append({
             "Name": p.get("name", ""),
-            "Type": profile_type,
-            "Spanning Tree": "Enabled" if p.get("spanningTreeEnable") else "Disabled",
-            "Loopback Detect": "Enabled" if p.get("loopbackDetectEnable") else "Disabled",
-            "PoE": poe,
-            "Tagged Networks": tagged,
+            "Type": _profile_code(p.get("type", ""), _PROFILE_TYPE_MAP),
+            "Native Network": _profile_native(p, lookup),
+            "Untagged Networks": _profile_networks(p, _UNTAGGED_KEYS, lookup),
+            "Tagged Networks": _profile_networks(p, _TAGGED_KEYS, lookup),
+            "PoE": _profile_poe(p.get("poe", p.get("poeEnable", ""))),
+            "Spanning Tree": _enabled(p.get("spanningTreeEnable")),
+            "Loopback Detect": _enabled(p.get("loopbackDetectEnable")),
         })
     return rows
+
+
+def _bandwidth_rows(p: dict[str, Any]) -> list[tuple[str, str]]:
+    ctrl_type = p.get("bandWidthCtrlType")
+    rows = [("Bandwidth Control", _profile_code(ctrl_type, _BANDWIDTH_CTRL_MAP))]
+    if ctrl_type == 1 and isinstance(p.get("bandCtrl"), dict):
+        band = p["bandCtrl"]
+        for direction in ("ingress", "egress"):
+            if band.get(f"{direction}Enable"):
+                unit = _profile_code(band.get(f"{direction}Unit"), _RATE_UNIT_MAP)
+                value = f"{band.get(f'{direction}Limit', '')} {unit}".strip()
+            else:
+                value = "Disabled"
+            rows.append((f"{direction.title()} Rate Limit", value))
+    elif ctrl_type == 2 and isinstance(p.get("stormCtrl"), dict):
+        storm = p["stormCtrl"]
+        unit = "%" if storm.get("rateMode") == 0 else " kbps"
+        for key, label in (
+            ("unknownUnicast", "Unknown Unicast"),
+            ("multicast", "Multicast"),
+            ("broadcast", "Broadcast"),
+        ):
+            value = f"{storm.get(key, '')}{unit}" if storm.get(f"{key}Enable") else "Disabled"
+            rows.append((f"Storm Control: {label}", value))
+        rows.append(("Storm Control: Action", _profile_code(storm.get("action"), _STORM_ACTION_MAP)))
+        if storm.get("action") == 1 and storm.get("recoverTime") is not None:
+            rows.append(("Storm Control: Recover Time", f"{storm['recoverTime']} s"))
+    return rows
+
+
+def _spanning_tree_rows(p: dict[str, Any]) -> list[tuple[str, str]]:
+    rows = [("Spanning Tree", _enabled(p.get("spanningTreeEnable")))]
+    stp = p.get("spanningTreeSetting")
+    if not p.get("spanningTreeEnable") or not isinstance(stp, dict):
+        return rows
+    for key, label in (("priority", "Priority"), ("extPathCost", "External Path Cost"),
+                       ("intPathCost", "Internal Path Cost")):
+        if key in stp:
+            rows.append((label, _flatten(stp[key])))
+    if "p2pLink" in stp:
+        rows.append(("P2P Link", _profile_code(stp["p2pLink"], _P2P_LINK_MAP)))
+    for key, label in (
+        ("edgePort", "Edge Port"), ("mcheck", "MCheck"), ("loopProtect", "Loop Protect"),
+        ("rootProtect", "Root Protect"), ("tcGuard", "TC Guard"),
+        ("bpduProtect", "BPDU Protect"), ("bpduFilter", "BPDU Filter"),
+        ("bpduForward", "BPDU Forward"),
+    ):
+        if key in stp:
+            rows.append((label, _enabled(stp[key])))
+    for inst in stp.get("instances") or []:
+        if isinstance(inst, dict):
+            kind = "RPVST" if inst.get("stp") == 1 else "MSTP"
+            ident = inst.get("vlan") if inst.get("stp") == 1 else inst.get("id")
+            cost = "Auto" if inst.get("costMode", 0) == 0 else _flatten(inst.get("cost"))
+            rows.append((f"{kind} Instance {ident}", f"Priority {inst.get('priority', '')}, Cost {cost}"))
+    return rows
+
+
+def _humanize_key(key: str) -> str:
+    """``vlanConfigEnable`` → ``Vlan Config Enable``; keeps acronyms (``ES``)."""
+    words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", key).split()
+    return " ".join(w if w.isupper() else w.capitalize() for w in words)
+
+
+def _switch_port_profile_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Per-profile detail tables: (profile name, [Category/Setting/Value rows])."""
+    items = data if isinstance(data, list) else []
+    lookup = _build_id_lookup(context)
+    details = []
+    for p in items:
+        if not isinstance(p, dict):
+            continue
+        groups: list[tuple[str, list[tuple[str, str]]]] = []
+
+        general = [
+            ("Type", _profile_code(p.get("type", ""), _PROFILE_TYPE_MAP)),
+            ("Origin", _profile_code(p.get("flag", ""), _PROFILE_FLAG_MAP)),
+            ("Profile ID", _flatten(p.get("id", ""))),
+        ]
+        if "prohibitModify" in p:
+            general.append(("Modifiable", "No" if p["prohibitModify"] else "Yes"))
+        general += [
+            ("PoE", _profile_poe(p.get("poe", p.get("poeEnable", "")))),
+            ("802.1X", _profile_code(p.get("dot1x", ""), _DOT1X_MAP)),
+        ]
+        groups.append(("General", general))
+
+        vlan = [
+            ("Native Network", _profile_native(p, lookup)),
+            ("Untagged Networks", _profile_networks(p, _UNTAGGED_KEYS, lookup)),
+            ("Tagged Networks", _profile_networks(p, _TAGGED_KEYS, lookup)),
+        ]
+        if "networkTagsSetting" in p:
+            vlan.append(("Network Tags Setting",
+                         _profile_code(p["networkTagsSetting"], _NETWORK_TAGS_MAP)))
+        if "voiceNetworkEnable" in p:
+            voice = "Disabled"
+            if p["voiceNetworkEnable"]:
+                voice = lookup.get(str(p.get("voiceNetworkId", "")), _flatten(p.get("voiceNetworkId", "")))
+            vlan.append(("Voice Network", voice))
+            if p["voiceNetworkEnable"] and "voiceDscpEnable" in p:
+                vlan.append(("Voice DSCP", _flatten(p.get("voiceDscp")) if p["voiceDscpEnable"] else "Disabled"))
+        if "networkConflict" in p:
+            vlan.append(("Network Conflict", "Yes" if p["networkConflict"] else "No"))
+        groups.append(("VLAN", vlan))
+
+        switching = []
+        for key, label in _SWITCHING_FLAGS:
+            if key in p:
+                switching.append((label, _enabled(p[key])))
+        relay = p.get("dhcpL2RelaySettings")
+        if isinstance(relay, dict):
+            value = _enabled(relay.get("enable"))
+            if relay.get("enable") and "format" in relay:
+                value += f" ({_profile_code(relay['format'], _RELAY_FORMAT_MAP)})"
+            switching.append(("DHCP L2 Relay", value))
+        if "supportESEnable" in p:
+            switching.append(("ES Supported", "Yes" if p["supportESEnable"] else "No"))
+        groups.append(("Switching", switching))
+
+        qos = []
+        if "dot1pPriority" in p:
+            qos.append(("802.1p Priority", _flatten(p["dot1pPriority"])))
+        if "trustMode" in p:
+            qos.append(("Trust Mode", _profile_code(p["trustMode"], _TRUST_MODE_MAP)))
+        qos += _bandwidth_rows(p)
+        groups.append(("QoS & Bandwidth", qos))
+
+        groups.append(("Spanning Tree", _spanning_tree_rows(p)))
+
+        other = [
+            (_humanize_key(key), ("Yes" if value else "No") if isinstance(value, bool) else _flatten(value))
+            for key, value in p.items()
+            if key not in _PROFILE_HANDLED_KEYS
+        ]
+        if other:
+            groups.append(("Other", other))
+
+        rows = [
+            {"Category": category, "Setting": setting, "Value": value}
+            for category, settings in groups
+            for setting, value in settings
+        ]
+        details.append((_flatten(p.get("name", "")) or _flatten(p.get("id", "")), rows))
+    return details
 
 
 def _gateway_rows(data: Any) -> list[dict[str, Any]]:
@@ -359,42 +572,124 @@ def _dhcp_reservation_rows(data: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _device_ports_summary(ports: Any) -> str:
-    if not isinstance(ports, list):
+_SWITCH_PORT_TYPE_MAP: dict[int, str] = {1: "Copper", 2: "Combo", 3: "SFP"}
+
+_GATEWAY_PORT_TYPE_MAP: dict[int, str] = {0: "WAN", 1: "WAN/LAN", 2: "LAN"}
+
+_GATEWAY_PORT_MODE_MAP: dict[int, str] = {0: "WAN", 1: "LAN"}
+
+_SWITCH_CONNECTED_MAP: dict[int, str] = {0: "Connected", 1: "Disconnected", 2: "Disabled"}
+
+# Negotiated speed as reported in port status (not the configured speed).
+_STATUS_SPEED_MAP: dict[int, str] = {1: "10M", 2: "100M", 3: "1000M", 4: "10G"}
+
+_STATUS_DUPLEX_MAP: dict[int, str] = {1: "Half Duplex", 2: "Full Duplex"}
+
+
+def _map_code(value: Any, mapping: dict[int, str]) -> str:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return mapping.get(value, str(value))
+    return _flatten(value)
+
+
+def _link_detail(status: Any) -> str:
+    """Return e.g. ``"1000M Full Duplex"`` from a port-status dict."""
+    if not isinstance(status, dict):
         return ""
+    parts = [
+        _map_code(status[key], mapping)
+        for key, mapping in (("linkSpeed", _STATUS_SPEED_MAP), ("duplex", _STATUS_DUPLEX_MAP))
+        if status.get(key) not in (None, 0)
+    ]
+    return " ".join(p for p in parts if p)
 
-    summaries = []
-    fields = (
-        ("Status", ("status", "portStatus", "linkStatus")),
-        ("Speed", ("speed", "portSpeed", "linkSpeed")),
-        ("PoE", ("poeStatus", "poeEnable", "poe")),
-        ("VLAN", ("vlan", "vlanId")),
-        ("Profile", ("profileName",)),
-    )
-    for port in ports:
-        if not isinstance(port, dict):
-            summaries.append(_flatten(port))
-            continue
 
-        name = next(
-            (port[key] for key in ("name", "portName", "port", "portId") if port.get(key) is not None),
-            "",
-        )
-        details = []
-        for label, keys in fields:
-            value = next((port[key] for key in keys if port.get(key) is not None), "")
-            if value != "":
-                details.append(f"{label}: {_flatten(value)}")
-
-        if name != "":
-            summary = _flatten(name)
-            if details:
-                summary += f" ({', '.join(details)})"
+def _port_connection(p: dict[str, Any]) -> str:
+    """Connection state, with negotiated speed/duplex when connected."""
+    status = p.get("portStatus") if isinstance(p.get("portStatus"), dict) else {}
+    if p.get("deviceType") == "gateway":
+        if p.get("status") == 0:
+            return "Disabled"
+        link = status.get("linkStatus")
+        if link is None:
+            return ""
+        state = "Connected" if link == 1 else "Disconnected"
+    else:
+        if p.get("disable") is True:
+            return "Disabled"
+        if "connectedStatus" in p:
+            state = _map_code(p["connectedStatus"], _SWITCH_CONNECTED_MAP)
+        elif "linkStatus" in status:
+            state = "Connected" if status["linkStatus"] == 1 else "Disconnected"
+        elif p.get("status") == 0:
+            return "Disabled"
         else:
-            summary = ", ".join(details) or _flatten(port)
-        summaries.append(summary)
+            return ""
+    detail = _link_detail(status) if state == "Connected" else ""
+    return f"{state} ({detail})" if detail else state
 
-    return "; ".join(summaries)
+
+def _port_operation(p: dict[str, Any]) -> str:
+    if p.get("deviceType") == "gateway":
+        if p.get("mirrorEnable"):
+            return "Mirroring"
+        return _map_code(p.get("mode", ""), _GATEWAY_PORT_MODE_MAP)
+    operation = p.get("operation", "")
+    return str(operation).title() if isinstance(operation, str) else _flatten(operation)
+
+
+def _network_lookups(context: dict[str, Any] | None) -> tuple[dict[str, str], dict[str, str]]:
+    """Return (network id → name, VLAN id → name) from the networks context."""
+    by_id: dict[str, str] = {}
+    by_vlan: dict[str, str] = {}
+    for net in (context or {}).get("networks") or []:
+        if not isinstance(net, dict):
+            continue
+        name = net.get("name", "")
+        if net.get("id"):
+            by_id[str(net["id"])] = name or str(net["id"])
+        vlan = net.get("vlan", net.get("vlanId"))
+        if vlan is not None and name:
+            by_vlan.setdefault(str(vlan), name)
+    return by_id, by_vlan
+
+
+def _port_native_network(
+    p: dict[str, Any], by_id: dict[str, str], by_vlan: dict[str, str],
+) -> str:
+    network_id = p.get("nativeNetworkId")
+    if network_id:
+        return by_id.get(str(network_id), str(network_id))
+    # Gateway LAN ports: the PVID is the untagged (native) VLAN.
+    pvid = p.get("pvid")
+    if p.get("deviceType") == "gateway" and pvid is not None and p.get("mode") != 0:
+        return by_vlan.get(str(pvid), f"VLAN {pvid}")
+    return ""
+
+
+def _device_port_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """One row per switch/gateway port, mirroring the controller's port table."""
+    items = data if isinstance(data, list) else []
+    by_id, by_vlan = _network_lookups(context)
+    rows = []
+    for p in items:
+        if not isinstance(p, dict):
+            continue
+        type_map = (
+            _GATEWAY_PORT_TYPE_MAP if p.get("deviceType") == "gateway" else _SWITCH_PORT_TYPE_MAP
+        )
+        rows.append({
+            "Device": _flatten(p.get("deviceName", "")),
+            "Port": _flatten(p.get("port", "")),
+            "Name": _flatten(p.get("name", p.get("portName", ""))),
+            "Label": _flatten(p.get("tagName", "")),
+            "Connection": _port_connection(p),
+            "Type": _map_code(p.get("type", ""), type_map),
+            "Operation": _port_operation(p),
+            "Profile": _flatten(p.get("profileName", "")),
+            "Native Network": _port_native_network(p, by_id, by_vlan),
+        })
+    return rows
 
 
 def _device_rows(data: Any) -> list[dict[str, Any]]:
@@ -408,7 +703,6 @@ def _device_rows(data: Any) -> list[dict[str, Any]]:
             "IP Address": _flatten(d.get("ip", d.get("ipAddress", ""))),
             "Status": _flatten(d.get("status", "")),
             "Firmware": _flatten(d.get("firmwareVersion", d.get("version", ""))),
-            "Ports": _device_ports_summary(d.get("ports", [])),
         }
         for d in items
         if isinstance(d, dict)
@@ -426,6 +720,14 @@ RESOURCES: list[ResourceDefinition] = [
         fetch_method="get_devices",
         row_formatter=_device_rows,
         sort_key="Name",
+    ),
+    ResourceDefinition(
+        name="device_ports",
+        title="Device Ports",
+        fetch_method="get_device_ports",
+        row_formatter=_device_port_rows,
+        sort_key="Device",  # stable sort keeps each device's port order
+        needs_context=True,
     ),
     ResourceDefinition(
         name="acl_rules",
@@ -470,6 +772,7 @@ RESOURCES: list[ResourceDefinition] = [
         row_formatter=_switch_port_profile_rows,
         sort_key="Name",
         needs_context=True,
+        detail_formatter=_switch_port_profile_details,
     ),
     ResourceDefinition(
         name="gateway_settings",

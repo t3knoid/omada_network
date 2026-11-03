@@ -108,6 +108,13 @@ class MarkdownGenerator:
                     key=lambda r: str(r.get(defn.sort_key, "")).lower(),
                 )
             content = _header(defn.title) + _table(rows)
+            if defn.detail_formatter is not None:
+                details = sorted(
+                    defn.detail_formatter(data, context),
+                    key=lambda item: str(item[0]).lower(),
+                )
+                for title, detail_rows in details:
+                    content += f"\n## {title}\n\n" + _table(detail_rows)
         else:
             # Generic fallback for unknown resource types:
             # apply column-header formatting to raw snake_case keys.

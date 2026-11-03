@@ -221,3 +221,16 @@ class TestMarkdownGenerator:
         content = path.read_text()
         assert content.index("Alpha-Net") < content.index("Zulu-Net")
 
+    def test_generate_switch_port_profiles_has_detail_sections(self, tmp_path: Path) -> None:
+        gen = MarkdownGenerator(tmp_path)
+        data = [
+            {"name": "Zeta", "type": 2, "lldpMedEnable": True},
+            {"name": "Alpha", "type": 0, "poe": 2},
+        ]
+        content = gen.generate("switch_port_profiles", data).read_text(encoding="utf-8")
+        assert content.startswith("# Switch Port Profiles")
+        assert "| Name | Type |" in content
+        # One detail section per profile, sorted like the summary
+        assert content.index("## Alpha") < content.index("## Zeta")
+        assert "| Category | Setting | Value |" in content
+        assert "| Switching | LLDP-MED | Enabled |" in content

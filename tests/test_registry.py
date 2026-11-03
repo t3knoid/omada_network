@@ -12,11 +12,12 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_ten_resources_defined(self) -> None:
+    def test_all_eleven_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
             "devices",
+            "device_ports",
             "ip_groups",
             "port_groups",
             "networks",
@@ -69,10 +70,6 @@ class TestRowFormatters:
                 "ip": "192.168.1.20",
                 "status": "Connected",
                 "firmwareVersion": "1.2.3",
-                "ports": [
-                    {"port": 1, "status": "Connected", "speed": "1000M"},
-                    {"port": 2, "status": "Disconnected"},
-                ],
             },
         ])
 
@@ -83,9 +80,67 @@ class TestRowFormatters:
         assert rows[0]["IP Address"] == "192.168.1.20"
         assert rows[0]["Status"] == "Connected"
         assert rows[0]["Firmware"] == "1.2.3"
-        assert rows[0]["Ports"] == (
-            "1 (Status: Connected, Speed: 1000M); 2 (Status: Disconnected)"
-        )
+        assert "Ports" not in rows[0]
+
+    def test_device_port_rows_switch(self) -> None:
+        from omada.registry import _device_port_rows
+
+        context = {"networks": [{"id": "net-iot", "name": "IoT Devices", "vlan": 40}]}
+        rows = _device_port_rows([
+            {
+                "deviceName": "Main Switch", "deviceType": "switch", "port": 8,
+                "portName": "Synology LAN 1", "tagName": "NAS", "connectedStatus": 0,
+                "portStatus": {"linkStatus": 1, "linkSpeed": 3, "duplex": 2},
+                "type": 1, "operation": "SWITCHING", "profileName": "All",
+                "nativeNetworkId": "net-iot",
+            },
+            {
+                "deviceName": "Main Switch", "deviceType": "switch", "port": 25,
+                "name": "Port25", "connectedStatus": 1, "type": 3,
+                "operation": "AGGREGATING", "nativeNetworkId": "unknown-id",
+            },
+            {
+                "deviceName": "Main Switch", "deviceType": "switch", "port": 3,
+                "name": "Port3", "disable": True, "connectedStatus": 2,
+            },
+        ], context)
+        assert rows[0] == {
+            "Device": "Main Switch", "Port": "8", "Name": "Synology LAN 1",
+            "Label": "NAS", "Connection": "Connected (1000M Full Duplex)",
+            "Type": "Copper", "Operation": "Switching", "Profile": "All",
+            "Native Network": "IoT Devices",
+        }
+        assert rows[1]["Connection"] == "Disconnected"
+        assert rows[1]["Type"] == "SFP"
+        assert rows[1]["Operation"] == "Aggregating"
+        assert rows[1]["Native Network"] == "unknown-id"
+        assert rows[2]["Connection"] == "Disabled"
+
+    def test_device_port_rows_gateway_er605(self) -> None:
+        """ER605: port 1 WAN only, ports 2-4 WAN/LAN, port 5 LAN only."""
+        from omada.registry import _device_port_rows
+
+        context = {"networks": [{"id": "n1", "name": "Default", "vlan": 1}]}
+        gw = {"deviceName": "GW", "deviceType": "gateway", "status": 1}
+        rows = _device_port_rows([
+            {**gw, "port": 1, "name": "WAN", "type": 0, "mode": 0,
+             "portStatus": {"linkStatus": 1, "linkSpeed": 3, "duplex": 2}},
+            {**gw, "port": 2, "name": "WAN/LAN1", "type": 1, "mode": 1, "pvid": 1,
+             "portStatus": {"linkStatus": 0}},
+            {**gw, "port": 3, "name": "WAN/LAN2", "type": 1, "mode": 0, "pvid": 1},
+            {**gw, "port": 4, "name": "WAN/LAN3", "type": 1, "mode": 1, "pvid": 99,
+             "status": 0},
+            {**gw, "port": 5, "name": "LAN", "type": 2, "mode": 1, "pvid": 1,
+             "mirrorEnable": True},
+        ], context)
+        assert [r["Type"] for r in rows] == ["WAN", "WAN/LAN", "WAN/LAN", "WAN/LAN", "LAN"]
+        assert [r["Operation"] for r in rows] == ["WAN", "LAN", "WAN", "LAN", "Mirroring"]
+        assert [r["Connection"] for r in rows] == [
+            "Connected (1000M Full Duplex)", "Disconnected", "", "Disabled", "",
+        ]
+        # Native network only for LAN-mode ports, resolved from the PVID
+        assert [r["Native Network"] for r in rows] == ["", "Default", "", "VLAN 99", "Default"]
+        assert all(r["Label"] == "" and r["Profile"] == "" for r in rows)
 
     def test_acl_rule_rows(self) -> None:
         from omada.registry import _acl_rule_rows
@@ -173,7 +228,7 @@ class TestRowFormatters:
             {"name": "Trunk Profile", "type": 0, "spanningTreeEnable": True, "poe": 1}
         ])
         assert rows[0]["Name"] == "Trunk Profile"
-        assert rows[0]["Type"] == "Trunk"
+        assert rows[0]["Type"] == "All"
         assert rows[0]["Spanning Tree"] == "Enabled"
         assert rows[0]["PoE"] == "Enabled"
         assert rows[0]["Tagged Networks"] == ""
@@ -199,6 +254,89 @@ class TestRowFormatters:
               "taggedNetworkIds": ["abc123"]}]
         )
         assert rows[0]["Tagged Networks"] == "abc123"
+
+    def test_switch_port_profile_rows_vlan_columns(self) -> None:
+        from omada.registry import _switch_port_profile_rows
+        context = {"networks": [{"id": "n1", "name": "Default"}, {"id": "n2", "name": "IoT"}]}
+        rows = _switch_port_profile_rows(
+            [{"name": "P", "type": 2, "nativeNetworkId": "n1",
+              "untagNetworkIds": ["n1"], "tagNetworkIds": ["n2"]}],
+            context=context,
+        )
+        assert rows[0]["Type"] == "Standard"
+        assert rows[0]["Native Network"] == "Default"
+        assert rows[0]["Untagged Networks"] == "Default"
+        assert rows[0]["Tagged Networks"] == "IoT"
+
+    def test_switch_port_profile_details_lists_all_properties(self) -> None:
+        from omada.registry import _switch_port_profile_details
+        context = {"networks": [{"id": "n1", "name": "Default"}, {"id": "v1", "name": "Voice"}]}
+        profile = {
+            "id": "prof-1", "name": "Cameras", "flag": 2, "type": 2, "poe": 1, "dot1x": 2,
+            "nativeNetworkId": "n1", "untagNetworkIds": [], "tagNetworkIds": [],
+            "networkTagsSetting": 2, "voiceNetworkEnable": True, "voiceNetworkId": "v1",
+            "voiceDscpEnable": True, "voiceDscp": 46, "networkConflict": False,
+            "portIsolationEnable": True, "lldpMedEnable": True,
+            "dhcpL2RelaySettings": {"enable": True, "format": 1},
+            "dot1pPriority": 5, "trustMode": 2,
+            "bandWidthCtrlType": 1,
+            "bandCtrl": {"ingressEnable": True, "ingressLimit": 100, "ingressUnit": 2,
+                         "egressEnable": False},
+            "spanningTreeEnable": True,
+            "spanningTreeSetting": {"priority": 128, "p2pLink": 0, "edgePort": True},
+            "supportESEnable": False,
+            "vlanConfigEnable": True,
+            "nativeBridgeVlan": 1,
+        }
+        [(title, rows)] = _switch_port_profile_details([profile], context)
+        assert title == "Cameras"
+        values = {(r["Category"], r["Setting"]): r["Value"] for r in rows}
+        assert values[("General", "Origin")] == "User-created"
+        assert values[("General", "Profile ID")] == "prof-1"
+        assert values[("General", "PoE")] == "Enabled"
+        assert values[("General", "802.1X")] == "Auto"
+        assert values[("VLAN", "Native Network")] == "Default"
+        assert values[("VLAN", "Network Tags Setting")] == "Custom"
+        assert values[("VLAN", "Voice Network")] == "Voice"
+        assert values[("VLAN", "Voice DSCP")] == "46"
+        assert values[("Switching", "Port Isolation")] == "Enabled"
+        assert values[("Switching", "DHCP L2 Relay")] == "Enabled (Private)"
+        assert values[("Switching", "ES Supported")] == "No"
+        assert values[("QoS & Bandwidth", "Trust Mode")] == "Trust DSCP"
+        assert values[("QoS & Bandwidth", "Bandwidth Control")] == "Rate Limit"
+        assert values[("QoS & Bandwidth", "Ingress Rate Limit")] == "100 Mbps"
+        assert values[("QoS & Bandwidth", "Egress Rate Limit")] == "Disabled"
+        assert values[("Spanning Tree", "Priority")] == "128"
+        assert values[("Spanning Tree", "P2P Link")] == "Auto"
+        assert values[("Spanning Tree", "Edge Port")] == "Enabled"
+        # Unmapped keys are still listed; internal bridge-VLAN bookkeeping is not
+        assert values[("Other", "Vlan Config Enable")] == "Yes"
+        assert not any("Bridge" in r["Setting"] for r in rows)
+
+    def test_switch_port_profile_details_storm_control(self) -> None:
+        from omada.registry import _switch_port_profile_details
+        [(_, rows)] = _switch_port_profile_details([{
+            "name": "Storm", "bandWidthCtrlType": 2,
+            "stormCtrl": {"rateMode": 0, "broadcastEnable": True, "broadcast": 10,
+                          "multicastEnable": False, "unknownUnicastEnable": False,
+                          "action": 1, "recoverTime": 600},
+            "spanningTreeEnable": False,
+            "spanningTreeSetting": {"priority": 128},
+        }])
+        values = {r["Setting"]: r["Value"] for r in rows}
+        assert values["Bandwidth Control"] == "Storm Control"
+        assert values["Storm Control: Broadcast"] == "10%"
+        assert values["Storm Control: Multicast"] == "Disabled"
+        assert values["Storm Control: Action"] == "Shutdown"
+        assert values["Storm Control: Recover Time"] == "600 s"
+        # STP sub-settings are omitted when spanning tree is off
+        assert values["Spanning Tree"] == "Disabled"
+        assert "Priority" not in values
+
+    def test_switch_port_profile_details_empty_input(self) -> None:
+        from omada.registry import _switch_port_profile_details
+        assert _switch_port_profile_details([]) == []
+        assert _switch_port_profile_details({}) == []
 
 
 class TestGenerateFromYaml:

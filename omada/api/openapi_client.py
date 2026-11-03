@@ -376,6 +376,19 @@ def openapi_discover_site_id(
     return site_id
 
 
+def _sort_ports(ports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sort port dicts numerically by their ``port`` field when possible."""
+    def key(port: dict[str, Any]) -> tuple[int, Any]:
+        value = port.get("port")
+        return (0, value) if isinstance(value, int) else (1, str(value))
+    return sorted(ports, key=key)
+
+
+def _normalize_mac(mac: Any) -> str:
+    """Normalize a MAC address for comparison (``aa:bb`` → ``AA-BB``)."""
+    return str(mac).strip().upper().replace(":", "-")
+
+
 # ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
@@ -536,21 +549,145 @@ class OmadaOpenApiClient:
     # ------------------------------------------------------------------
 
     def get_devices(self, site_id: str) -> list[dict[str, Any]]:
-        """Return site devices, including port data when available."""
-        devices = self._get_paged(f"sites/{site_id}/devices")
+        """Return the adopted devices for the given site."""
+        return self._get_paged(f"sites/{site_id}/devices")
+
+    def get_device_ports(self, site_id: str) -> list[dict[str, Any]]:
+        """Return port configuration for every switch and gateway in the site.
+
+        Each returned record is a port dict tagged with its owning device
+        (``deviceName``, ``deviceMac``, ``deviceType``, ``deviceModel``).
+
+        * Switches: ``GET sites/{siteId}/switches/ports/overview`` (one
+          site-wide call: label, connection, type, operation, profile, native
+          network).  Falls back to ``portList`` from
+          ``GET sites/{siteId}/switches/{mac}`` for any switch missing there.
+        * Gateways: ``portConfigs`` from ``GET sites/{siteId}/gateways/{mac}``,
+          ``osgPortInfos`` from ``GET sites/{siteId}/gateways/{mac}/ports`` and
+          link status from ``GET sites/{siteId}/gateways/{mac}/wan-status``,
+          merged by port number.
+
+        Devices of other types (e.g. access points) are skipped.  A failure
+        for one device is logged and does not prevent the others.
+        """
+        fetchers = {
+            "switch": self._get_switch_ports,
+            "gateway": self._get_gateway_ports,
+        }
+        devices = self.get_devices(site_id)
+        overview = self._get_switch_port_overview(site_id, devices)
+        all_ports: list[dict[str, Any]] = []
         for device in devices:
+            device_type = str(device.get("type", device.get("deviceType", ""))).lower()
+            fetcher = fetchers.get(device_type)
             device_mac = device.get("mac", device.get("deviceMac", ""))
-            if not device_mac:
+            if fetcher is None or not device_mac:
                 continue
+            device_name = device.get("name", device.get("deviceName", ""))
             try:
-                device["ports"] = self._get_paged(
-                    f"sites/{site_id}/devices/{quote(str(device_mac), safe='')}/ports",
-                )
+                if device_type == "switch" and _normalize_mac(device_mac) in overview:
+                    ports = _sort_ports(overview[_normalize_mac(device_mac)])
+                else:
+                    ports = fetcher(site_id, str(device_mac))
             except (OmadaAPIError, requests.RequestException) as exc:
-                logger.debug(
-                    "Device ports unavailable for %s: %s", device_mac, exc,
+                logger.warning(
+                    "Unable to enumerate ports for %s %s (%s): %s",
+                    device_type, device_name or "unknown", device_mac, exc,
                 )
-        return devices
+                continue
+            for port in ports:
+                all_ports.append({
+                    "deviceName": device_name,
+                    "deviceMac": device_mac,
+                    "deviceType": device_type,
+                    "deviceModel": device.get("model", ""),
+                    **port,
+                })
+        return all_ports
+
+    def _get_switch_port_overview(
+        self, site_id: str, devices: list[dict[str, Any]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Return site-wide switch port overview grouped by normalized MAC.
+
+        Returns an empty mapping when the site has no switches or the
+        endpoint is unavailable (callers then fall back per switch).
+        """
+        has_switch = any(
+            str(d.get("type", d.get("deviceType", ""))).lower() == "switch"
+            for d in devices
+        )
+        if not has_switch:
+            return {}
+        try:
+            records = self._get_paged(f"sites/{site_id}/switches/ports/overview")
+        except (OmadaAPIError, requests.RequestException) as exc:
+            logger.warning(
+                "Switch port overview unavailable; falling back to "
+                "per-switch lookup: %s", exc,
+            )
+            return {}
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for record in records:
+            if isinstance(record, dict) and record.get("switchMac"):
+                grouped.setdefault(_normalize_mac(record["switchMac"]), []).append(record)
+        return grouped
+
+    def _get_switch_ports(self, site_id: str, mac: str) -> list[dict[str, Any]]:
+        """Return the ``portList`` of a switch."""
+        info = self._get(f"sites/{site_id}/switches/{quote(mac, safe='')}")
+        ports = info.get("portList", []) if isinstance(info, dict) else []
+        return _sort_ports([p for p in ports or [] if isinstance(p, dict)])
+
+    def _get_gateway_ports(self, site_id: str, mac: str) -> list[dict[str, Any]]:
+        """Return gateway port configs merged with gateway port info."""
+        base = f"sites/{site_id}/gateways/{quote(mac, safe='')}"
+        merged: dict[Any, dict[str, Any]] = {}
+        errors: list[Exception] = []
+
+        try:
+            info = self._get(base)
+            configs = info.get("portConfigs", []) if isinstance(info, dict) else []
+            for cfg in configs or []:
+                if isinstance(cfg, dict):
+                    merged.setdefault(cfg.get("port"), {}).update(cfg)
+        except (OmadaAPIError, requests.RequestException) as exc:
+            errors.append(exc)
+
+        try:
+            result = self._get(f"{base}/ports")
+            infos = result.get("osgPortInfos", []) if isinstance(result, dict) else result
+            for item in infos or []:
+                if isinstance(item, dict):
+                    entry = merged.setdefault(item.get("port"), {})
+                    for key, value in item.items():
+                        entry.setdefault(key, value)
+        except (OmadaAPIError, requests.RequestException) as exc:
+            errors.append(exc)
+
+        # Link status per port.  Its ``status`` means connected/disconnected
+        # (unlike portConfigs' enabled/disabled), so it is stored under
+        # ``portStatus`` in the same shape the switch overview uses.
+        try:
+            result = self._get(f"{base}/wan-status")
+            for item in result if isinstance(result, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                entry = merged.setdefault(item.get("port"), {"port": item.get("port")})
+                for key in ("name", "type", "mode"):
+                    if item.get(key) is not None:
+                        entry.setdefault(key, item[key])
+                entry["portStatus"] = {
+                    "linkStatus": item.get("status"),
+                    "linkSpeed": item.get("speed"),
+                    "duplex": item.get("duplex"),
+                }
+        except (OmadaAPIError, requests.RequestException) as exc:
+            errors.append(exc)
+
+        if len(errors) == 3:
+            raise errors[0]
+        return _sort_ports(list(merged.values()))
 
     def get_acl_rules(self, site_id: str) -> list[dict[str, Any]]:
         """Return all ACL rules (gateway + switch) for the given site."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -529,39 +530,179 @@ class TestOpenApiResourceMethods:
 
     def test_get_devices(self, openapi_client: OmadaOpenApiClient) -> None:
         devices = [{"name": "Switch 1", "mac": "AA-BB-CC-DD-EE-FF"}]
-        ports = [{"port": 1, "status": "Connected"}]
-        with patch.object(openapi_client, "_get_paged") as mock:
-            mock.side_effect = [devices, ports]
-            result = openapi_client.get_devices("site-001")
-
-        assert result[0]["ports"] == ports
-        assert mock.call_args_list[0].args == ("sites/site-001/devices",)
-        assert mock.call_args_list[1].args == (
-            "sites/site-001/devices/AA-BB-CC-DD-EE-FF/ports",
-        )
-
-    def test_get_devices_skips_port_lookup_without_mac(
-        self, openapi_client: OmadaOpenApiClient,
-    ) -> None:
-        devices = [{"name": "Unknown device"}]
         with patch.object(openapi_client, "_get_paged", return_value=devices) as mock:
             result = openapi_client.get_devices("site-001")
 
         assert result == devices
         mock.assert_called_once_with("sites/site-001/devices")
 
-    def test_get_devices_continues_when_ports_are_unavailable(
+    def test_get_device_ports_switch_uses_overview(
         self, openapi_client: OmadaOpenApiClient,
     ) -> None:
-        devices = [{"name": "Switch 1", "mac": "AA-BB-CC-DD-EE-FF"}]
-        with patch.object(openapi_client, "_get_paged") as mock:
-            mock.side_effect = [
-                devices,
-                OmadaAPIError(-1600, "Unsupported"),
-            ]
-            result = openapi_client.get_devices("site-001")
+        devices = [{"name": "Switch 1", "type": "switch", "mac": "AA-BB", "model": "SG2008"}]
+        overview = [
+            {"switchMac": "aa:bb", "port": 2, "portName": "Port2", "tagName": "NAS"},
+            {"switchMac": "AA-BB", "port": 1, "portName": "Port1", "operation": "SWITCHING"},
+            {"switchMac": "CC-DD", "port": 1, "portName": "Other"},
+        ]
+        with (
+            patch.object(openapi_client, "_get_paged", side_effect=[devices, overview]) as mock_paged,
+            patch.object(openapi_client, "_get") as mock_get,
+        ):
+            result = openapi_client.get_device_ports("site-001")
 
-        assert result == devices
+        assert mock_paged.call_args_list[1].args == ("sites/site-001/switches/ports/overview",)
+        mock_get.assert_not_called()
+        assert [p["port"] for p in result] == [1, 2]
+        assert result[0]["deviceName"] == "Switch 1"
+        assert result[0]["deviceMac"] == "AA-BB"
+        assert result[0]["deviceType"] == "switch"
+        assert result[0]["deviceModel"] == "SG2008"
+        assert result[1]["tagName"] == "NAS"
+
+    def test_get_device_ports_switch_falls_back_when_overview_fails(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        devices = [{"name": "Switch 1", "type": "switch", "mac": "AA-BB"}]
+        switch_info = {"mac": "AA-BB", "portList": [
+            {"port": 2, "name": "Port2"},
+            {"port": 1, "name": "Port1", "profileName": "Default"},
+        ]}
+        with (
+            patch.object(
+                openapi_client, "_get_paged",
+                side_effect=[devices, OmadaAPIError(-1600, "Unsupported")],
+            ),
+            patch.object(openapi_client, "_get", return_value=switch_info) as mock_get,
+        ):
+            result = openapi_client.get_device_ports("site-001")
+
+        mock_get.assert_called_once_with("sites/site-001/switches/AA-BB")
+        assert [p["port"] for p in result] == [1, 2]
+        assert result[0]["profileName"] == "Default"
+
+    def test_get_device_ports_gateway_merges_sources(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        devices = [{"name": "GW", "type": "gateway", "mac": "11-22"}]
+        responses = {
+            "sites/site-001/gateways/11-22": {"portConfigs": [
+                {"port": 1, "linkSpeed": 0, "status": 1},
+                {"port": 2, "linkSpeed": 3, "status": 0},
+            ]},
+            "sites/site-001/gateways/11-22/ports": {"osgPortInfos": [
+                {"port": 1, "name": "WAN", "type": 0, "mode": 0},
+                {"port": 2, "name": "WAN/LAN1", "type": 1, "mode": 1},
+            ]},
+            "sites/site-001/gateways/11-22/wan-status": [
+                {"port": 1, "name": "WAN", "status": 1, "speed": 3, "duplex": 2},
+                {"port": 2, "name": "WAN/LAN1", "status": 0},
+            ],
+        }
+        with (
+            patch.object(openapi_client, "_get_paged", return_value=devices),
+            patch.object(openapi_client, "_get", side_effect=responses.__getitem__),
+        ):
+            result = openapi_client.get_device_ports("site-001")
+
+        assert len(result) == 2
+        assert result[0]["name"] == "WAN"
+        assert result[0]["linkSpeed"] == 0
+        assert result[0]["status"] == 1  # enabled flag from portConfigs is kept
+        assert result[0]["portStatus"] == {"linkStatus": 1, "linkSpeed": 3, "duplex": 2}
+        assert result[1]["name"] == "WAN/LAN1"
+        assert result[1]["status"] == 0
+        assert result[1]["portStatus"]["linkStatus"] == 0
+
+    def test_get_device_ports_gateway_partial_failure(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        devices = [{"name": "GW", "type": "gateway", "mac": "11-22"}]
+
+        def fake_get(path: str) -> dict:
+            if path.endswith(("/ports", "/wan-status")):
+                raise OmadaAPIError(-1600, "Unsupported")
+            return {"portConfigs": [{"port": 1, "status": 1}]}
+
+        with (
+            patch.object(openapi_client, "_get_paged", return_value=devices),
+            patch.object(openapi_client, "_get", side_effect=fake_get),
+        ):
+            result = openapi_client.get_device_ports("site-001")
+
+        assert result == [{
+            "deviceName": "GW", "deviceMac": "11-22", "deviceType": "gateway",
+            "deviceModel": "", "port": 1, "status": 1,
+        }]
+
+    def test_get_device_ports_gateway_all_sources_fail(
+        self,
+        openapi_client: OmadaOpenApiClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        devices = [{"name": "GW", "type": "gateway", "mac": "11-22"}]
+        with (
+            patch.object(openapi_client, "_get_paged", return_value=devices),
+            patch.object(openapi_client, "_get", side_effect=OmadaAPIError(-1, "x")),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = openapi_client.get_device_ports("site-001")
+
+        assert result == []
+        assert "Unable to enumerate ports for gateway GW" in caplog.text
+
+    def test_get_device_ports_skips_aps_and_missing_mac(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        devices = [
+            {"name": "AP", "type": "ap", "mac": "AA"},
+            {"name": "Switch without MAC", "type": "switch"},
+        ]
+        with (
+            patch.object(openapi_client, "_get_paged", side_effect=[devices, []]),
+            patch.object(openapi_client, "_get") as mock_get,
+        ):
+            result = openapi_client.get_device_ports("site-001")
+
+        assert result == []
+        mock_get.assert_not_called()
+
+    def test_get_device_ports_skips_overview_without_switches(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        devices = [{"name": "AP", "type": "ap", "mac": "AA"}]
+        with patch.object(openapi_client, "_get_paged", return_value=devices) as mock_paged:
+            openapi_client.get_device_ports("site-001")
+
+        mock_paged.assert_called_once_with("sites/site-001/devices")
+
+    def test_get_device_ports_continues_when_device_fails(
+        self,
+        openapi_client: OmadaOpenApiClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        devices = [
+            {"name": "Switch 1", "type": "switch", "mac": "AA"},
+            {"name": "Switch 2", "type": "switch", "mac": "BB"},
+        ]
+
+        def fake_get(path: str) -> dict:
+            if path.endswith("/AA"):
+                raise OmadaAPIError(-1600, "Unsupported")
+            return {"portList": [{"port": 1}]}
+
+        with (
+            patch.object(
+                openapi_client, "_get_paged",
+                side_effect=[devices, OmadaAPIError(-1600, "Unsupported")],
+            ),
+            patch.object(openapi_client, "_get", side_effect=fake_get),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = openapi_client.get_device_ports("site-001")
+
+        assert [p["deviceName"] for p in result] == ["Switch 2"]
+        assert "Unable to enumerate ports for switch Switch 1" in caplog.text
 
     def test_get_switch_port_profiles(self, openapi_client: OmadaOpenApiClient) -> None:
         profiles = [{"name": "Default"}]
@@ -657,6 +798,7 @@ class TestServiceWithOpenApiClient:
         mock_client.get_ssids.return_value = []
         mock_client.get_dhcp_reservations.return_value = []
         mock_client.get_devices.return_value = []
+        mock_client.get_device_ports.return_value = []
 
         service = OmadaService(
             client=mock_client,

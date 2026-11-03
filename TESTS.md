@@ -107,6 +107,7 @@ YAML exporter and Markdown generator tests.
 | | `test_unknown_resource_fallback` | Falls back to generic table for unknown resources |
 | | `test_rows_sorted_by_name` | Rows are sorted alphabetically by sort key |
 | | `test_ssids_sorted_by_ssid_column` | SSIDs are sorted by SSID name |
+| | `test_generate_switch_port_profiles_has_detail_sections` | Port profiles get a summary table plus one sorted detail section per profile |
 
 ---
 
@@ -197,7 +198,7 @@ Resource registry and `generate_from_yaml` tests.
 
 | Class | Test | Description |
 | --- | --- | --- |
-| `TestRegistry` | `test_all_nine_resources_defined` | All 9 resource types are registered |
+| `TestRegistry` | `test_all_eleven_resources_defined` | All 11 resource types are registered |
 | | `test_registry_lookup_matches_resources` | Registry lookup matches `RESOURCES` list |
 | | `test_all_definitions_are_resource_definition` | All entries are `ResourceDefinition` instances |
 | | `test_all_row_formatters_callable` | All row formatters are callable |
@@ -213,6 +214,12 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_ssid_rows` | Formats SSID rows with band and security labels |
 | | `test_dhcp_reservation_rows` | Formats DHCP reservation rows |
 | | `test_switch_port_profile_rows` | Formats switch port profile rows |
+| | `test_switch_port_profile_rows_vlan_columns` | Resolves native, untagged, and tagged networks in the profile summary |
+| | `test_switch_port_profile_details_lists_all_properties` | Per-profile detail rows cover every property group, plus unmapped keys |
+| | `test_switch_port_profile_details_storm_control` | Storm-control and disabled spanning-tree details |
+| | `test_switch_port_profile_details_empty_input` | Detail formatter handles empty list/dict input |
+| | `test_device_port_rows_switch` | Formats switch port rows (label, connection, type, operation, profile, native network) |
+| | `test_device_port_rows_gateway_er605` | Formats ER605 gateway port rows (WAN / WAN-LAN / LAN type, mode, PVID native network) |
 | | `test_switch_port_profile_rows_resolves_tagged_networks` | Resolves tagged network IDs to names |
 | | `test_switch_port_profile_rows_no_context_shows_raw_ids` | Shows raw IDs without context |
 | `TestGenerateFromYaml` | `test_generates_markdown_from_yaml_files` | Generates Markdown from YAML files |
