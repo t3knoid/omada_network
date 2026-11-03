@@ -164,17 +164,88 @@ Attempts multiple endpoints with fallback.
 
 ### SSIDs
 
-A two-step process: first fetch all WLANs, then fetch SSIDs for each WLAN.
+The SSID list is only a summary, so each SSID is merged with its detail.
 
 | Step | Method | Endpoint | Notes |
 | --- | --- | --- | --- |
 | 1. List WLANs | `GET` | `sites/{siteId}/wireless-network/wlans` | Paginated |
 | 2. List SSIDs | `GET` | `sites/{siteId}/wireless-network/wlans/{wlanId}/ssids` | Paginated; called per WLAN |
+| 3. SSID detail | `GET` | `sites/{siteId}/wireless-network/ssids/{ssidId}` | Falls back to `…/wlans/{wlanId}/ssids/{ssidId}`; best-effort |
+| 4. AP overrides | `GET` | `sites/{siteId}/wireless-network/ssids/{ssidId}/overrides` | Paginated; stored as `apOverrides`; best-effort |
 
-Each SSID is enriched with the parent WLAN's `name` as `wlanName`.
+Each SSID is enriched with the parent WLAN's `name` / ID as `wlanName` /
+`wlanId`. The detail adds security (PSK / Enterprise / PPSK settings, RADIUS
+profile, PMF, 802.11r, OWE, MLO), VLAN, client and SSID rate limits, WLAN
+schedule, band steering, data/management rate control, MAC filter,
+multicast, DHCP option 82, and Hotspot 2.0. The WPA passphrase and AP
+override passwords are redacted.
+
+The Markdown summary resolves the referenced RADIUS, rate limit, and schedule
+profiles, networks, and the portal bound to each SSID by name. Each SSID then
+gets a detail section, plus an **AP overrides** table when any AP overrides
+the SSID name, VLAN, or password.
+
+> `security` codes follow the API: 0 Open, 2 WPA-Enterprise, 3 WPA-Personal,
+> 4 PPSK, 5 PPSK + RADIUS. Earlier versions mislabelled 3 as "WPA2". The
+> SSID band-steer setting appears in the spec under a field named
+> `ssidDhcpOption`; both that and `bandSteer` are read.
 
 > **API docs:** Documented under the [Wireless Network](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Wireless%20Network) tag —
-> *Get WLAN group list*, *Get SSID list*.
+> *Get WLAN group list*, *Get SSID list*, *Get SSID detail info*, *Get Ssid override details*.
+
+### RADIUS Profiles
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GET` | `sites/{siteId}/profiles/radius` | Auth / accounting servers (with RadSec), interim updates, VLAN assignment, CoA, Message-Authenticator, built-in server |
+
+Auth, accounting, CoA, and built-in server secrets are redacted.
+
+### Guest Portals
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GET` | `sites/{siteId}/portals` | Portal list |
+| `GET` | `sites/{siteId}/portal/{portalId}` | Per-portal detail, merged; best-effort |
+
+Summary: status, authentication (No Auth, Simple Password, External RADIUS,
+External Portal Server, Hotspot with its methods, LDAP, Social Login), bound
+SSIDs and networks, auth timeout, landing page, HTTPS redirect. Each portal
+gets a detail section for its method (RADIUS profile, PAP/CHAP, NAS ID,
+disconnect requests, external portal server, LDAP profile, Google client ID,
+Twilio account SID and sender). Portal passwords, OAuth client secrets, and
+SMS auth tokens are redacted.
+
+### Schedules and Rate Limit Profiles
+
+| Resource | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| `time_range_profiles` | `GET` | `sites/{siteId}/time-range-profiles` | Day mode (every day / weekdays / weekends / custom days) and time slots |
+| `rate_limit_profiles` | `GET` | `sites/{siteId}/rate-limit-profiles` | Download / upload limit (Kbps), default profile |
+
+SSIDs reference both by ID; the SSID tables show their names.
+
+### Wireless Site Settings
+
+| Method | Endpoint | Stored as |
+| --- | --- | --- |
+| `GET` | `sites/{siteId}/band-steering` | `bandSteering` (Disabled / Prefer 5GHz/6GHz / Balance) |
+| `GET` | `sites/{siteId}/roaming` | `roaming` (fast, AI, non-stick roaming) |
+| `GET` | `sites/{siteId}/mesh` | `mesh` (mesh, auto failover, connectivity detection, full-sector DFS) |
+| `GET` | `sites/{siteId}/multicast-rate-limit` | `multicastRateLimit` (per-protocol packets per second) |
+
+Each part is best-effort; the resource fails only if all four fail.
+
+### AP Radio Settings
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GET` | `sites/{siteId}/aps/{apMac}/radio-config` | Per AP (`type: ap`); unavailable APs are logged and skipped |
+
+One row per AP radio (2.4 GHz, 5 GHz, 5 GHz-1/-2, 6 GHz): radio on/off,
+channel (`0` = Auto), channel width, Tx power level (custom power shown in
+dBm), wireless mode, and channel limit. These are the per-AP radio overrides
+configured on the controller.
 
 ---
 
@@ -342,9 +413,12 @@ fails over to another WAN when the bound one is down.
 
 ### VPN
 
-> **Secrets are redacted in the client**, before data reaches YAML or
-> Markdown: `preSharedKey`, `presharedKey`, `password`, `clientPassword`, and
-> `privateKey` string values become `<redacted>` (this covers SSL VPN users too). Markdown shows only
+> **Secrets are redacted by default** before data reaches YAML or Markdown,
+> both in the client and again for every resource in `OmadaService.fetch_all`
+> (`omada/redaction.py`): any non-empty string whose field name contains
+> password, pwd, secret, token, security key, pre-shared key, or private key
+> becomes `<redacted>`. `--include-secrets` (or the web UI checkbox) turns
+> this off; Markdown then shows the values and flags each affected file. Markdown shows only
 > `Configured` / `Not set`.
 
 | Resource | Method | Endpoint | Notes |

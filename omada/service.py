@@ -20,6 +20,7 @@ import yaml
 
 from omada.exporters.markdown_generator import MarkdownGenerator
 from omada.exporters.yaml_exporter import YamlExporter
+from omada.redaction import redact_secrets
 from omada.registry import RESOURCES
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,11 @@ class OmadaService:
     output_dir:
         Base directory where site-specific YAML and Markdown files will be
         written.
+    include_secrets:
+        When True, credentials (Wi-Fi passphrases, RADIUS / VPN secrets,
+        passwords, keys) are exported in plaintext instead of ``<redacted>``,
+        e.g. for a restorable backup.  Off by default.  Also applied to the
+        client so its getters stop redacting at the source.
     """
 
     #: Ordered tuple of all resource names, derived from the registry.
@@ -51,8 +57,17 @@ class OmadaService:
         site_id: str,
         output_dir: str | Path = "docs",
         site_name: str | None = None,
+        include_secrets: bool = False,
     ) -> None:
         self.site_id = site_id
+        self.include_secrets = include_secrets
+        if hasattr(client, "include_secrets"):
+            client.include_secrets = include_secrets
+        if include_secrets:
+            logger.warning(
+                "Secrets will be exported in PLAINTEXT (include_secrets is on). "
+                "Treat the output directory as sensitive.",
+            )
         self.output_dir = Path(output_dir)
         self.site_name = site_name or site_id
         self.site_output_dir = self.output_dir / _safe_site_directory(
@@ -75,7 +90,9 @@ class OmadaService:
         for defn in RESOURCES:
             fetcher = getattr(self._client, defn.fetch_method)
             try:
-                data[defn.name] = fetcher(self.site_id)
+                result = fetcher(self.site_id)
+                # Credentials never reach YAML/Markdown unless explicitly requested.
+                data[defn.name] = result if self.include_secrets else redact_secrets(result)
                 count = (
                     len(data[defn.name])
                     if isinstance(data[defn.name], list)

@@ -142,6 +142,7 @@ def create_app(
         controller_host = request.form.get("controller", "").strip()
         port_str = request.form.get("port", "443").strip() or "443"
         verify_ssl = request.form.get("verify_ssl") == "on"
+        include_secrets = request.form.get("include_secrets") == "on"
         auth_mode = request.form.get("auth_mode", "client_credentials")
 
         # Read credentials from the correct tab's inputs based on auth_mode
@@ -247,6 +248,7 @@ def create_app(
                 site_id=site_id,
                 output_dir=output_dir_,
                 site_name=resolved_site_name,
+                include_secrets=include_secrets,
             )
             paths = service.run()
             session["_resolved_site_name"] = resolved_site_name
@@ -257,6 +259,12 @@ def create_app(
                 f"{yaml_count} YAML file(s) in '{service.site_output_dir}'.",
                 "success",
             )
+            if include_secrets:
+                flash(
+                    "Secrets were included: Wi-Fi passphrases, RADIUS/VPN secrets and other "
+                    "credentials are stored in plaintext in the generated files.",
+                    "warning",
+                )
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as exc:  # noqa: BLE001

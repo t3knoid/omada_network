@@ -750,6 +750,145 @@ class TestOpenApiResourceMethods:
         assert result[0]["name"] == "MySSID"
         assert result[0]["wlanName"] == "WLAN Group 1"
 
+    def test_get_ssids_merges_detail_and_overrides_and_redacts(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        wlans = [{"wlanId": "w1", "name": "Default"}]
+        listed = [{"id": "s1", "name": "FROGGY", "security": 3}]
+        overrides = [{"name": "Office AP", "overrideName": "FROGGY-OFFICE", "overridePassword": "ovr-pw"}]
+
+        def fake_paged(path: str) -> list:
+            return {
+                "sites/site-001/wireless-network/wlans": wlans,
+                "sites/site-001/wireless-network/wlans/w1/ssids": listed,
+                "sites/site-001/wireless-network/ssids/s1/overrides": overrides,
+            }[path]
+
+        detail = {"id": "s1", "name": "FROGGY", "security": 3,
+                  "pskSetting": {"securityKey": "wifi-passphrase", "versionPsk": 4},
+                  "wlanSchedule": {"wlanScheduleEnable": True, "scheduleId": "t1"}}
+        with (
+            patch.object(openapi_client, "_get_paged", side_effect=fake_paged),
+            patch.object(openapi_client, "_get", return_value=detail) as mock_get,
+        ):
+            result = openapi_client.get_ssids("site-001")
+
+        mock_get.assert_called_once_with("sites/site-001/wireless-network/ssids/s1")
+        ssid = result[0]
+        assert ssid["wlanName"] == "Default" and ssid["wlanId"] == "w1"
+        assert ssid["pskSetting"] == {"securityKey": "<redacted>", "versionPsk": 4}
+        assert ssid["wlanSchedule"]["scheduleId"] == "t1"
+        assert ssid["apOverrides"][0]["overrideName"] == "FROGGY-OFFICE"
+        assert ssid["apOverrides"][0]["overridePassword"] == "<redacted>"
+        assert "wifi-passphrase" not in repr(result) and "ovr-pw" not in repr(result)
+
+    def test_get_ssids_detail_falls_back_to_wlan_path(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        wlans = [{"wlanId": "w1", "name": "Default"}]
+        listed = [{"id": "s1", "name": "Legacy"}]
+
+        def fake_get(path: str) -> dict:
+            if path == "sites/site-001/wireless-network/ssids/s1":
+                raise OmadaAPIError(-1600, "Unsupported")
+            return {"id": "s1", "enable11r": True}
+
+        with (
+            patch.object(openapi_client, "_get_paged",
+                         side_effect=[wlans, listed, OmadaAPIError(-1, "no overrides")]),
+            patch.object(openapi_client, "_get", side_effect=fake_get) as mock_get,
+        ):
+            result = openapi_client.get_ssids("site-001")
+        assert mock_get.call_args_list[-1].args == ("sites/site-001/wireless-network/wlans/w1/ssids/s1",)
+        assert result[0]["enable11r"] is True
+        assert "apOverrides" not in result[0]
+
+    def test_get_radius_profiles_redacts_all_secrets(self, openapi_client: OmadaOpenApiClient) -> None:
+        profiles = [{
+            "radiusProfileId": "r1", "name": "Corp",
+            "authServer": [{"radiusServerIp": "10.0.0.5", "radiusPort": 1812, "radiusPwd": "auth-secret"}],
+            "acctServer": [{"accountingServerIp": "10.0.0.5", "accountingServerPwd": "acct-secret"}],
+            "coaPassword": "coa-secret", "builtInServerSecret": "builtin-secret",
+        }]
+        with patch.object(openapi_client, "_get", return_value=profiles) as mock:
+            result = openapi_client.get_radius_profiles("site-001")
+        mock.assert_called_once_with("sites/site-001/profiles/radius")
+        text = repr(result)
+        for secret in ("auth-secret", "acct-secret", "coa-secret", "builtin-secret"):
+            assert secret not in text
+        assert result[0]["authServer"][0]["radiusServerIp"] == "10.0.0.5"
+
+    def test_get_portals_merges_detail_and_redacts(self, openapi_client: OmadaOpenApiClient) -> None:
+        def fake_get(path: str):
+            if path == "sites/site-001/portals":
+                return [{"id": "p1", "name": "Guest", "authType": 1}, {"id": "p2", "name": "Broken"}]
+            if path == "sites/site-001/portal/p1":
+                return {"id": "p1", "simplePassword": {"password": "guest-pw"},
+                        "google": {"clientId": "cid", "clientSecret": "g-secret"},
+                        "sms": {"sid": "AC123", "authToken": "twilio-token"}}
+            raise OmadaAPIError(-1, "detail unavailable")
+
+        with patch.object(openapi_client, "_get", side_effect=fake_get):
+            result = openapi_client.get_portals("site-001")
+        assert [p["name"] for p in result] == ["Guest", "Broken"]
+        assert result[0]["authType"] == 1  # list fields kept
+        assert result[0]["sms"]["sid"] == "AC123"  # account identifier kept
+        assert result[0]["google"]["clientId"] == "cid"
+        for secret in ("guest-pw", "g-secret", "twilio-token"):
+            assert secret not in repr(result)
+
+    def test_get_time_range_and_rate_limit_profiles(self, openapi_client: OmadaOpenApiClient) -> None:
+        with patch.object(openapi_client, "_get", return_value=[{"name": "Office hours"}]) as mock:
+            assert openapi_client.get_time_range_profiles("site-001") == [{"name": "Office hours"}]
+        mock.assert_called_once_with("sites/site-001/time-range-profiles")
+        with patch.object(openapi_client, "_get", return_value=[{"name": "Guest 10M"}]) as mock:
+            assert openapi_client.get_rate_limit_profiles("site-001") == [{"name": "Guest 10M"}]
+        mock.assert_called_once_with("sites/site-001/rate-limit-profiles")
+
+    def test_get_wireless_settings_partial_and_total_failure(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        def fake_get(path: str) -> dict:
+            if path.endswith("/mesh"):
+                raise OmadaAPIError(-1600, "Unsupported")
+            return {"path": path}
+
+        with patch.object(openapi_client, "_get", side_effect=fake_get):
+            result = openapi_client.get_wireless_settings("site-001")
+        assert set(result) == {"bandSteering", "roaming", "multicastRateLimit"}
+        assert result["bandSteering"] == {"path": "sites/site-001/band-steering"}
+        with patch.object(openapi_client, "_get", side_effect=OmadaAPIError(-1, "x")):
+            with pytest.raises(OmadaAPIError):
+                openapi_client.get_wireless_settings("site-001")
+
+    def test_get_ap_radios(self, openapi_client: OmadaOpenApiClient, caplog: pytest.LogCaptureFixture) -> None:
+        devices = [
+            {"name": "Lower AP", "type": "ap", "mac": "AA", "model": "EAP620 HD"},
+            {"name": "Broken AP", "type": "ap", "mac": "BB"},
+            {"name": "Switch", "type": "switch", "mac": "CC"},
+        ]
+
+        def fake_get(path: str) -> dict:
+            if "/BB/" in path:
+                raise OmadaAPIError(-1, "offline")
+            return {"radioSetting2g": {"radioEnable": True, "channel": "6"},
+                    "radioSetting5g": {"radioEnable": False}, "unrelated": 1}
+
+        with (
+            patch.object(openapi_client, "_get_paged", return_value=devices),
+            patch.object(openapi_client, "_get", side_effect=fake_get) as mock_get,
+            caplog.at_level(logging.WARNING),
+        ):
+            result = openapi_client.get_ap_radios("site-001")
+        assert [c.args[0] for c in mock_get.call_args_list] == [
+            "sites/site-001/aps/AA/radio-config", "sites/site-001/aps/BB/radio-config",
+        ]
+        assert result == [{
+            "deviceName": "Lower AP", "deviceMac": "AA", "deviceModel": "EAP620 HD",
+            "radios": {"2g": {"radioEnable": True, "channel": "6"}, "5g": {"radioEnable": False}},
+        }]
+        assert "Radio config unavailable for AP Broken AP" in caplog.text
+
     def test_get_ssids_no_wlans(self, openapi_client: OmadaOpenApiClient) -> None:
         with patch.object(openapi_client, "_get_paged") as mock:
             mock.side_effect = OmadaAPIError(-1600, "Unsupported")
@@ -1065,6 +1204,12 @@ class TestServiceWithOpenApiClient:
         mock_client.get_ipsec_failover.return_value = []
         mock_client.get_dhcp_scopes.return_value = []
         mock_client.get_dhcp_leases.return_value = []
+        mock_client.get_radius_profiles.return_value = []
+        mock_client.get_portals.return_value = []
+        mock_client.get_time_range_profiles.return_value = []
+        mock_client.get_rate_limit_profiles.return_value = []
+        mock_client.get_wireless_settings.return_value = {}
+        mock_client.get_ap_radios.return_value = []
 
         service = OmadaService(
             client=mock_client,

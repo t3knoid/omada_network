@@ -30,6 +30,8 @@ from urllib.parse import quote, urljoin
 import requests
 import urllib3
 
+from omada.redaction import REDACTED, redact_secrets  # noqa: F401  (REDACTED re-exported)
+
 logger = logging.getLogger(__name__)
 
 
@@ -394,27 +396,9 @@ _DHCP_SCOPE_KEYS: tuple[str, ...] = (
 )
 
 
-#: Keys whose string values are credentials; never written to exports.
-_SECRET_KEYS = frozenset({
-    "preSharedKey", "presharedKey", "password", "clientPassword", "privateKey",
-})
-
-REDACTED = "<redacted>"
-
-
-def _redact_secrets(data: Any) -> Any:
-    """Recursively replace non-empty secret string values with ``<redacted>``.
-
-    The key is kept so exports still show that a secret is configured.
-    """
-    if isinstance(data, dict):
-        return {
-            k: (REDACTED if k in _SECRET_KEYS and isinstance(v, str) and v else _redact_secrets(v))
-            for k, v in data.items()
-        }
-    if isinstance(data, list):
-        return [_redact_secrets(v) for v in data]
-    return data
+# Credential redaction lives in omada.redaction; these aliases keep the
+# client's VPN/wireless getters (and existing imports) working.
+_redact_secrets = redact_secrets
 
 
 def _normalize_mac(mac: Any) -> str:
@@ -461,6 +445,9 @@ class OmadaOpenApiClient:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.omadac_id = omadac_id
+        #: When True, credentials are returned as-is instead of redacted.
+        #: Set via ``OmadaService(include_secrets=True)``.
+        self.include_secrets = False
         self.access_token = access_token
         self.timeout = timeout
 
@@ -484,6 +471,10 @@ class OmadaOpenApiClient:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _redact(self, data: Any) -> Any:
+        """Redact credentials unless :attr:`include_secrets` is set."""
+        return data if self.include_secrets else _redact_secrets(data)
 
     def _api_url(self, path: str, *, api_version: str = "v1") -> str:
         """Build a full URL from a relative Open API *path*."""
@@ -824,7 +815,18 @@ class OmadaOpenApiClient:
             return {}
 
     def get_ssids(self, site_id: str) -> list[dict[str, Any]]:
-        """Return all SSIDs across all WLANs for the given site."""
+        """Return all SSIDs across all WLANs, with full per-SSID settings.
+
+        The SSID list (``.../wlans/{wlanId}/ssids``) is only a summary, so each
+        SSID is merged with its detail (``.../wireless-network/ssids/{ssidId}``,
+        falling back to ``.../wlans/{wlanId}/ssids/{ssidId}``): security
+        settings and RADIUS profile, rate limits, WLAN schedule, band
+        steering, rate control, MAC filter, multicast, DHCP option 82,
+        Hotspot 2.0.  Per-AP SSID overrides
+        (``.../wireless-network/ssids/{ssidId}/overrides``) are added as
+        ``apOverrides``.  Detail and override lookups are best-effort.
+        Credentials (e.g. the WPA passphrase) are redacted.
+        """
         try:
             wlans_result = self._get_paged(
                 f"sites/{site_id}/wireless-network/wlans",
@@ -843,13 +845,40 @@ class OmadaOpenApiClient:
                 wlan_ssids = self._get_paged(
                     f"sites/{site_id}/wireless-network/wlans/{wlan_id}/ssids",
                 )
-                for ssid in wlan_ssids:
-                    ssid.setdefault("wlanName", wlan.get("name", ""))
-                ssids.extend(wlan_ssids)
             except OmadaAPIError:
-                pass
+                continue
+            for ssid in wlan_ssids:
+                ssid.setdefault("wlanName", wlan.get("name", ""))
+                ssid.setdefault("wlanId", wlan_id)
+                ssids.append(self._enrich_ssid(site_id, str(wlan_id), ssid))
 
-        return ssids
+        return self._redact(ssids)
+
+    def _enrich_ssid(self, site_id: str, wlan_id: str, ssid: dict[str, Any]) -> dict[str, Any]:
+        """Merge SSID detail and AP overrides into a list record."""
+        ssid_id = ssid.get("id", ssid.get("ssidId", ""))
+        if not ssid_id:
+            return ssid
+        sid = quote(str(ssid_id), safe="")
+        detail: Any = None
+        for path in (
+            f"sites/{site_id}/wireless-network/ssids/{sid}",
+            f"sites/{site_id}/wireless-network/wlans/{quote(wlan_id, safe='')}/ssids/{sid}",
+        ):
+            try:
+                detail = self._get(path)
+                break
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.debug("SSID detail unavailable via %s: %s", path, exc)
+        if isinstance(detail, dict):
+            ssid = {**ssid, **detail}
+        try:
+            overrides = self._get_paged(f"sites/{site_id}/wireless-network/ssids/{sid}/overrides")
+            if overrides:
+                ssid["apOverrides"] = overrides
+        except (OmadaAPIError, requests.RequestException) as exc:
+            logger.debug("SSID overrides unavailable for %s: %s", ssid.get("name"), exc)
+        return ssid
 
     def get_dhcp_reservations(self, site_id: str) -> list[dict[str, Any]]:
         """Return DHCP reservations for the site.
@@ -958,7 +987,7 @@ class OmadaOpenApiClient:
 
         Endpoint: ``GET /sites/{siteId}/vpn/site-to-site-vpns``
         """
-        return _redact_secrets(self._get_paged(f"sites/{site_id}/vpn/site-to-site-vpns"))
+        return self._redact(self._get_paged(f"sites/{site_id}/vpn/site-to-site-vpns"))
 
     def get_remote_access_vpns(self, site_id: str) -> list[dict[str, Any]]:
         """Return client-to-site VPN servers and clients, tagged ``vpnRole``.
@@ -984,7 +1013,7 @@ class OmadaOpenApiClient:
             tunnels.extend(items)
         if len(errors) == 2:
             raise errors[0]
-        return _redact_secrets(tunnels)
+        return self._redact(tunnels)
 
     def get_wireguard(self, site_id: str) -> list[dict[str, Any]]:
         """Return WireGuard interfaces, each with its ``peers`` nested.
@@ -1010,14 +1039,14 @@ class OmadaOpenApiClient:
                 by_id[iface_id] = {"id": iface_id, "name": peer.get("interfaceName", iface_id), "peers": []}
                 interfaces.append(by_id[iface_id])
             by_id[iface_id]["peers"].append(peer)
-        return _redact_secrets(interfaces)
+        return self._redact(interfaces)
 
     def get_vpn_users(self, site_id: str) -> list[dict[str, Any]]:
         """Return VPN user accounts (passwords redacted).
 
         Endpoint: ``GET /sites/{siteId}/vpn/users``
         """
-        return _redact_secrets(self._get_paged(f"sites/{site_id}/vpn/users"))
+        return self._redact(self._get_paged(f"sites/{site_id}/vpn/users"))
 
     def get_ssl_vpn(self, site_id: str) -> dict[str, Any]:
         """Return the SSL VPN server configuration (passwords redacted).
@@ -1044,7 +1073,7 @@ class OmadaOpenApiClient:
                 logger.warning("SSL VPN %s unavailable: %s", path, exc)
                 result = []
             config[key] = result if isinstance(result, list) else []
-        return _redact_secrets(config)
+        return self._redact(config)
 
     def get_eogre_tunnel(self, site_id: str) -> dict[str, Any]:
         """Return the EoGRE tunnel settings.
@@ -1102,3 +1131,112 @@ class OmadaOpenApiClient:
         Endpoint: ``GET /sites/{siteId}/setting/service/dhcp/user-list``
         """
         return self._get_paged(f"sites/{site_id}/setting/service/dhcp/user-list")
+
+    # ------------------------------------------------------------------
+    # Wireless profiles and site wireless settings
+    # ------------------------------------------------------------------
+
+    def get_radius_profiles(self, site_id: str) -> list[dict[str, Any]]:
+        """Return RADIUS profiles (shared secrets redacted).
+
+        Endpoint: ``GET /sites/{siteId}/profiles/radius``
+        """
+        result = self._get(f"sites/{site_id}/profiles/radius")
+        return self._redact(result if isinstance(result, list) else [])
+
+    def get_portals(self, site_id: str) -> list[dict[str, Any]]:
+        """Return guest portals, each merged with its detail (credentials redacted).
+
+        Endpoints: ``GET /sites/{siteId}/portals`` and, per portal,
+        ``GET /sites/{siteId}/portal/{portalId}`` (best-effort).
+        """
+        result = self._get(f"sites/{site_id}/portals")
+        portals = result if isinstance(result, list) else []
+        merged = []
+        for portal in portals:
+            if not isinstance(portal, dict):
+                continue
+            if portal.get("id"):
+                try:
+                    detail = self._get(f"sites/{site_id}/portal/{quote(str(portal['id']), safe='')}")
+                    if isinstance(detail, dict):
+                        portal = {**portal, **detail}
+                except (OmadaAPIError, requests.RequestException) as exc:
+                    logger.debug("Portal detail unavailable for %s: %s", portal.get("name"), exc)
+            merged.append(portal)
+        return self._redact(merged)
+
+    def get_time_range_profiles(self, site_id: str) -> list[dict[str, Any]]:
+        """Return time range (schedule) profiles.
+
+        Endpoint: ``GET /sites/{siteId}/time-range-profiles``
+        """
+        result = self._get(f"sites/{site_id}/time-range-profiles")
+        return result if isinstance(result, list) else []
+
+    def get_rate_limit_profiles(self, site_id: str) -> list[dict[str, Any]]:
+        """Return client rate limit profiles.
+
+        Endpoint: ``GET /sites/{siteId}/rate-limit-profiles``
+        """
+        result = self._get(f"sites/{site_id}/rate-limit-profiles")
+        return result if isinstance(result, list) else []
+
+    def get_wireless_settings(self, site_id: str) -> dict[str, Any]:
+        """Return site-wide wireless settings, each part best-effort.
+
+        ``bandSteering`` (``/band-steering``), ``roaming`` (``/roaming``),
+        ``mesh`` (``/mesh``) and ``multicastRateLimit``
+        (``/multicast-rate-limit``).  Raises only if every part fails.
+        """
+        settings: dict[str, Any] = {}
+        errors: list[Exception] = []
+        for key, path in (
+            ("bandSteering", "band-steering"),
+            ("roaming", "roaming"),
+            ("mesh", "mesh"),
+            ("multicastRateLimit", "multicast-rate-limit"),
+        ):
+            try:
+                result = self._get(f"sites/{site_id}/{path}")
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.warning("Wireless %s setting unavailable: %s", path, exc)
+                errors.append(exc)
+                continue
+            settings[key] = result if isinstance(result, dict) else {}
+        if len(errors) == 4:
+            raise errors[0]
+        return settings
+
+    def get_ap_radios(self, site_id: str) -> list[dict[str, Any]]:
+        """Return the radio configuration (overrides) of every access point.
+
+        Endpoint: ``GET /sites/{siteId}/aps/{apMac}/radio-config`` per AP
+        (``type: ap``).  Each record carries ``deviceName``, ``deviceMac``,
+        ``deviceModel`` and ``radios`` (keyed ``2g``, ``5g``, ``5g1``, ``5g2``,
+        ``6g``).  APs whose config is unavailable are logged and skipped.
+        """
+        records: list[dict[str, Any]] = []
+        for device in self.get_devices(site_id):
+            if str(device.get("type", device.get("deviceType", ""))).lower() != "ap":
+                continue
+            mac = device.get("mac", device.get("deviceMac", ""))
+            if not mac:
+                continue
+            try:
+                config = self._get(f"sites/{site_id}/aps/{quote(str(mac), safe='')}/radio-config")
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.warning("Radio config unavailable for AP %s (%s): %s", device.get("name", ""), mac, exc)
+                continue
+            radios: dict[str, Any] = {}
+            if isinstance(config, dict):
+                for key, value in config.items():
+                    if key.startswith("radioSetting") and isinstance(value, dict):
+                        radios[key[len("radioSetting"):]] = value
+            records.append({
+                "deviceName": device.get("name", ""),
+                "deviceMac": mac,
+                "deviceModel": device.get("model", ""),
+                "radios": radios,
+            })
+        return records

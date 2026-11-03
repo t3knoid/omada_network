@@ -14,12 +14,20 @@ import re
 from pathlib import Path
 from typing import Any
 
+from omada.redaction import contains_secrets
 from omada.registry import REGISTRY
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+#: Inserted below the title of any file whose data holds plaintext credentials.
+SECRETS_WARNING = (
+    "> ⚠️ **Contains plaintext credentials.** This file was exported with "
+    "secrets included (`--include-secrets`). Store and share it accordingly.\n\n"
+)
+
 
 def _header(text: str) -> str:
     return f"# {text}\n\n"
@@ -126,6 +134,8 @@ class MarkdownGenerator:
             content = _header(_column_header(name)) + _table(formatted_rows)
 
         path = self.output_dir / f"{name}.md"
+        if contains_secrets(data):
+            content = content.replace("\n\n", "\n\n" + SECRETS_WARNING, 1)
         path.write_text(content, encoding="utf-8")
         return path
 

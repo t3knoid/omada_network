@@ -38,6 +38,12 @@ def mock_client() -> MagicMock:
     client.get_ipsec_failover.return_value = []
     client.get_dhcp_scopes.return_value = []
     client.get_dhcp_leases.return_value = []
+    client.get_radius_profiles.return_value = []
+    client.get_portals.return_value = []
+    client.get_time_range_profiles.return_value = []
+    client.get_rate_limit_profiles.return_value = []
+    client.get_wireless_settings.return_value = {}
+    client.get_ap_radios.return_value = []
     return client
 
 
@@ -78,6 +84,12 @@ def _empty_data() -> dict:
         "ipsec_failover": [],
         "dhcp_scopes": [],
         "dhcp_leases": [],
+        "radius_profiles": [],
+        "portals": [],
+        "time_range_profiles": [],
+        "rate_limit_profiles": [],
+        "wireless_settings": {},
+        "ap_radios": [],
     }
 
 
@@ -152,12 +164,12 @@ class TestOmadaServiceRun:
 
 
 class TestVpnSecretsNeverExported:
-    def test_vpn_secrets_redacted_in_yaml_and_markdown(self, tmp_path: Path) -> None:
+    def test_vpn_and_wireless_secrets_redacted_in_yaml_and_markdown(self, tmp_path: Path) -> None:
         from omada.api.openapi_client import OmadaOpenApiClient
 
         client = OmadaOpenApiClient("https://ctrl", "cid", "token")
         secrets = ["S2S-PSK-123", "SRV-PSK-456", "CLI-PW-789", "WG-PRIV=", "WG-PSK=", "USER-PW",
-                   "SSL-USER-PW"]
+                   "SSL-USER-PW", "WIFI-PSK", "RADIUS-PW", "PORTAL-PW"]
         responses = {
             "sites/s1/vpn/site-to-site-vpns": [
                 {"name": "HQ", "siteVpnType": 1, "preSharedKey": secrets[0]}],
@@ -173,10 +185,17 @@ class TestVpnSecretsNeverExported:
             "sites/s1/vpn/ssl-vpn-server/users": [{"name": "s", "password": secrets[6]}],
             "sites/s1/vpn/ssl-vpn-server/resources": [],
             "sites/s1/vpn/ssl-vpn-server/resource-groups": [],
+            "sites/s1/wireless-network/wlans": [{"wlanId": "w1", "name": "Default"}],
+            "sites/s1/wireless-network/wlans/w1/ssids": [{"id": "s1", "name": "FROGGY"}],
+            "sites/s1/wireless-network/ssids/s1/overrides": [],
         }
         get_responses = {
             "sites/s1/vpn/ssl-vpn-server/setting": {"status": True},
             "sites/s1/vpn/ssl-vpn-server/radius": [],
+            "sites/s1/profiles/radius": [{"name": "r", "authServer": [{"radiusPwd": secrets[8]}]}],
+            "sites/s1/portals": [{"id": "p1", "name": "Guest"}],
+            "sites/s1/portal/p1": {"simplePassword": {"password": secrets[9]}},
+            "sites/s1/wireless-network/ssids/s1": {"pskSetting": {"securityKey": secrets[7]}},
         }
         with (
             patch.object(client, "_get_paged", side_effect=lambda path: responses[path]),
@@ -188,6 +207,9 @@ class TestVpnSecretsNeverExported:
                 "wireguard": client.get_wireguard("s1"),
                 "vpn_users": client.get_vpn_users("s1"),
                 "ssl_vpn": client.get_ssl_vpn("s1"),
+                "ssids": client.get_ssids("s1"),
+                "radius_profiles": client.get_radius_profiles("s1"),
+                "portals": client.get_portals("s1"),
             }
         service = OmadaService(client=MagicMock(), site_id="s1", output_dir=tmp_path)
         service.export_yaml(data)
@@ -200,4 +222,85 @@ class TestVpnSecretsNeverExported:
         for secret in secrets:
             assert secret not in written
         assert "<redacted>" in written
+
+
+class TestGlobalRedaction:
+    def test_fetch_all_redacts_every_resource(self, tmp_path: Path) -> None:
+        """Even a resource whose getter does not redact (e.g. a PPPoE password in
+        gateway settings, or a WPA passphrase) is redacted before export."""
+        from omada.registry import RESOURCES
+
+        client = MagicMock()
+        for defn in RESOURCES:
+            getattr(client, defn.fetch_method).return_value = []
+        client.get_gateway_settings.return_value = {
+            "wanPortsConfig": [{"wanPortIpv4Setting": {"ipv4Pppoe": {"username": "isp-user",
+                                                                     "password": "pppoe-pw"}}}],
+        }
+        client.get_ssids.return_value = [{"name": "FROGGY", "pskSetting": {"securityKey": "wifi-pw"}}]
+
+        service = OmadaService(client=client, site_id="s1", output_dir=tmp_path)
+        data = service.fetch_all()
+        service.export_yaml(data)
+        service.generate_docs(data)
+
+        written = "".join(f.read_text(encoding="utf-8") for f in service.site_output_dir.iterdir())
+        assert "pppoe-pw" not in written and "wifi-pw" not in written
+        assert "isp-user" in written  # identifiers are kept
+
+
+class TestIncludeSecrets:
+    def _run(self, tmp_path: Path, include_secrets: bool) -> tuple[OmadaService, str, str]:
+        from omada.api.openapi_client import OmadaOpenApiClient
+        from omada.registry import RESOURCES
+
+        client = OmadaOpenApiClient("https://ctrl", "cid", "token")
+        paged = {
+            "sites/s1/wireless-network/wlans": [{"wlanId": "w1", "name": "Default"}],
+            "sites/s1/wireless-network/wlans/w1/ssids": [{"id": "s1", "name": "FROGGY", "security": 3}],
+            "sites/s1/wireless-network/ssids/s1/overrides": [],
+        }
+        detail = {"pskSetting": {"securityKey": "froggy-wifi-pass", "versionPsk": 2}}
+        service = OmadaService(client=client, site_id="s1", output_dir=tmp_path,
+                               include_secrets=include_secrets)
+        assert client.include_secrets is include_secrets
+        # Only exercise the SSID getter for real; every other resource is empty.
+        with (
+            patch.object(client, "_get_paged", side_effect=lambda path: paged[path]),
+            patch.object(client, "_get", return_value=detail),
+        ):
+            for defn in RESOURCES:
+                if defn.fetch_method != "get_ssids":
+                    patch.object(client, defn.fetch_method, return_value=[]).start()
+            try:
+                service.run()
+            finally:
+                patch.stopall()
+        yaml_text = (service.site_output_dir / "ssids.yaml").read_text(encoding="utf-8")
+        md_text = (service.site_output_dir / "ssids.md").read_text(encoding="utf-8")
+        return service, yaml_text, md_text
+
+    def test_default_redacts_and_has_no_warning(self, tmp_path: Path) -> None:
+        _, yaml_text, md_text = self._run(tmp_path, include_secrets=False)
+        assert "froggy-wifi-pass" not in yaml_text + md_text
+        assert "<redacted>" in yaml_text
+        assert "| Security | Passphrase | Configured |" in md_text
+        assert "plaintext credentials" not in md_text
+
+    def test_include_secrets_exports_values_with_warning(self, tmp_path: Path) -> None:
+        service, yaml_text, md_text = self._run(tmp_path, include_secrets=True)
+        assert "froggy-wifi-pass" in yaml_text
+        assert "| Security | Passphrase | froggy-wifi-pass |" in md_text
+        assert md_text.startswith("# SSIDs\n\n> ⚠️ **Contains plaintext credentials.**")
+        # Files without credentials get no warning
+        devices_md = (service.site_output_dir / "devices.md").read_text(encoding="utf-8")
+        assert "plaintext credentials" not in devices_md
+
+    def test_regenerate_from_yaml_keeps_warning(self, tmp_path: Path) -> None:
+        from omada.service import generate_from_yaml
+
+        service, _, _ = self._run(tmp_path, include_secrets=True)
+        out = tmp_path / "regen"
+        generate_from_yaml(service.site_output_dir, out)
+        assert "plaintext credentials" in (out / "ssids.md").read_text(encoding="utf-8")
 

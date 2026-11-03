@@ -152,6 +152,15 @@
                 only skip for trusted self-signed controllers)
               </label>
             </div>
+            <div class="mb-3 form-check">
+              {# Deliberately never pre-checked: each plaintext export must be an explicit choice. #}
+              <input class="form-check-input" id="include_secrets" name="include_secrets"
+                     type="checkbox">
+              <label class="form-check-label" for="include_secrets">
+                Include secrets (Wi-Fi passphrases, RADIUS/VPN secrets, passwords, keys) in
+                plaintext. Off by default; the generated files will contain credentials.
+              </label>
+            </div>
             <button class="btn btn-primary w-100" type="submit">
               ⚡ Fetch &amp; Generate Documentation
             </button>

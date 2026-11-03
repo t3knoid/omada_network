@@ -54,6 +54,36 @@ class TestFetchCommand:
             )
         assert result.exit_code == 0, result.output
 
+    @pytest.mark.parametrize(
+        ("args", "env", "expected"),
+        [
+            ([], {}, False),
+            (["--include-secrets"], {}, True),
+            ([], {"OMADA_INCLUDE_SECRETS": "1"}, True),
+        ],
+    )
+    def test_fetch_include_secrets_option(
+        self, runner: CliRunner, tmp_path: Path, args: list, env: dict, expected: bool,
+    ) -> None:
+        lr = _mock_login_result()
+        with (
+            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
+            patch("omada.api.openapi_client.openapi_login", return_value=lr),
+            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada.service.OmadaService") as MockService,
+        ):
+            MockService.return_value.run.return_value = {"yaml": {}, "docs": {}}
+            result = runner.invoke(
+                cli,
+                ["fetch", "--controller", "192.168.1.1", "--client-id", "my-id",
+                 "--client-secret", "my-secret", "--output-dir", str(tmp_path), *args],
+                env=env,
+            )
+        assert result.exit_code == 0, result.output
+        assert MockService.call_args.kwargs["include_secrets"] is expected
+        assert ("plaintext" in result.output) is expected
+
     def test_fetch_auth_code_mode(self, runner: CliRunner, tmp_path: Path) -> None:
         """Authorization Code mode: --username + --password trigger 3-step."""
         mock_paths = {"yaml": {}, "docs": {}}

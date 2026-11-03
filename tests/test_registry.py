@@ -12,7 +12,7 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_twenty_five_resources_defined(self) -> None:
+    def test_all_thirty_one_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
@@ -40,6 +40,12 @@ class TestRegistry:
             "ipsec_failover",
             "dhcp_scopes",
             "dhcp_leases",
+            "radius_profiles",
+            "portals",
+            "time_range_profiles",
+            "rate_limit_profiles",
+            "wireless_settings",
+            "ap_radios",
         }
 
     def test_registry_lookup_matches_resources(self) -> None:
@@ -223,7 +229,8 @@ class TestRowFormatters:
         rows = _ssid_rows([{"name": "HomeNet", "wlanName": "Main", "band": 3, "security": 3, "broadcast": False}])
         assert rows[0]["SSID"] == "HomeNet"
         assert rows[0]["Band"] == "2.4 GHz / 5 GHz"
-        assert rows[0]["Security"] == "WPA2"
+        # security 3 is WPA-Personal per the spec (the old map mislabelled it "WPA2")
+        assert rows[0]["Security"] == "WPA-Personal"
         assert rows[0]["Broadcast"] == "No"
 
     def test_dhcp_reservation_rows(self) -> None:
@@ -760,6 +767,212 @@ class TestRowFormatters:
         assert rows[2]["Description"] == "TrueNAS"
         assert rows[2]["Options"] == "Option 66: 10.0.0.20"
         assert rows[1]["Status"] == "Disabled"
+
+    _WIFI_CONTEXT = {
+        "radius_profiles": [{"radiusProfileId": "r1", "name": "Corp RADIUS"}],
+        "rate_limit_profiles": [{"profileId": "rl1", "name": "Guest 10M"}],
+        "time_range_profiles": [{"profileId": "t1", "name": "Office hours"}],
+        "networks": [{"id": "net-iot", "name": "IoT Devices"}],
+        "portals": [{"name": "Guest Portal", "ssidList": ["s-guest"]}],
+    }
+
+    def test_ssid_rows_resolve_profiles(self) -> None:
+        from omada.registry import _ssid_rows
+        rows = _ssid_rows([
+            {"id": "s1", "name": "FROGGY", "wlanName": "Default", "band": 7, "security": 3,
+             "pskSetting": {"versionPsk": 4, "encryptionPsk": 3, "securityKey": "<redacted>"},
+             "vlanEnable": True, "vlanId": 10, "broadcast": True,
+             "clientRateLimit": {"profileId": "rl1"},
+             "wlanSchedule": {"wlanScheduleEnable": True, "action": 1, "scheduleId": "t1"},
+             "ssidDhcpOption": {"mode": 3}},
+            {"id": "s-guest", "name": "Guest", "security": 0, "oweEnable": True, "guestNetEnable": True,
+             "clientRateLimit": {"customSetting": {"downLimitEnable": True, "downLimit": 20, "downLimitType": 1,
+                                                   "upLimitEnable": True, "upLimit": 512, "upLimitType": 0}},
+             "wlanSchedule": {"wlanScheduleEnable": False}, "bandSteer": {"mode": 1}},
+            {"id": "s-ent", "name": "Corp", "security": 2,
+             "entSetting": {"versionEnt": 4, "radiusProfileId": "r1"},
+             "vlanSetting": {"mode": 1, "customConfig": {"customMode": 0, "lanNetworkId": "net-iot"}}},
+        ], self._WIFI_CONTEXT)
+        froggy, guest, corp = rows
+        assert froggy["Security"] == "WPA2-PSK/WPA3-SAE (AES)"
+        assert froggy["VLAN"] == "10"
+        assert froggy["Client Rate Limit"] == "Guest 10M"
+        assert froggy["Schedule"] == "Office hours (Radio on during schedule)"
+        assert froggy["Band Steering"] == "Use site setting"
+        assert guest["Security"] == "Open (OWE)"
+        assert guest["Guest"] == "Yes"
+        assert guest["Portal"] == "Guest Portal"
+        assert guest["Client Rate Limit"] == "Down 20 Mbps / Up 512 Kbps"
+        assert guest["Schedule"] == "None"
+        assert guest["Band Steering"] == "Prefer 5GHz/6GHz"
+        assert corp["Security"] == "WPA3-Enterprise (RADIUS: Corp RADIUS)"
+        assert corp["VLAN"] == "IoT Devices"
+
+    def test_ssid_details_and_ap_overrides(self) -> None:
+        from omada.registry import _ssid_details
+        details = _ssid_details([{
+            "id": "s1", "name": "FROGGY", "wlanName": "Default", "band": 3, "ssidEnable": True,
+            "deviceType": 3, "security": 3,
+            "pskSetting": {"versionPsk": 4, "securityKey": "<redacted>", "gikRekeyPskEnable": True,
+                           "rekeyPskInterval": 1, "intervalPskType": 2},
+            "pmfMode": 2, "enable11r": True, "mloEnable": False,
+            "ssidRateLimit": {"customSetting": {"downLimitEnable": False, "upLimitEnable": False}},
+            "rateControl": {"rate2gCtrlEnable": True, "lowerDensity2g": 12, "cckRatesDisable": True,
+                            "rate5gCtrlEnable": False},
+            "macFilter": {"macFilterEnable": True, "policy": 1, "macFilterId": "mg1"},
+            "multiCast": {"multiCastEnable": True, "channelUtil": 70},
+            "dhcpOption82": {"dhcpEnable": False},
+            "hotspotV2Setting": {"hotspotV2Enable": False},
+            "apOverrides": [{"name": "Office AP", "mac": "AA", "ssidEnable": True,
+                             "overrideName": "FROGGY-OFFICE", "overrideVlan": "30",
+                             "overridePassword": "<redacted>"}],
+        }], self._WIFI_CONTEXT)
+        assert [t for t, _ in details] == ["FROGGY", "FROGGY AP overrides"]
+        values = {(r["Category"], r["Setting"]): r["Value"] for r in details[0][1]}
+        assert values[("General", "Applies To")] == "EAP, Gateway"
+        assert values[("Security", "Passphrase")] == "Configured"
+        assert values[("Security", "Group Key Update")] == "Every 1 h"
+        assert values[("Security", "PMF")] == "Capable"
+        assert values[("Security", "802.11r Fast Transition")] == "Enabled"
+        assert values[("Rate Limits", "SSID Rate Limit")] == "Unlimited"
+        assert values[("Rate Control", "2.4 GHz Data Rate")] == "Minimum 12 Mbps, CCK rates disabled"
+        assert values[("Rate Control", "5 GHz Data Rate")] == "Disabled"
+        assert values[("MAC Filter", "MAC Filter")] == "Enabled (Allow List, MAC group mg1)"
+        assert values[("Multicast", "Channel Utilization Threshold")] == "70%"
+        assert values[("DHCP", "DHCP Option 82")] == "Disabled"
+        assert values[("Hotspot 2.0", "Hotspot 2.0")] == "Disabled"
+        assert details[1][1] == [{
+            "AP": "Office AP", "AP MAC": "AA", "SSID Enabled": "Enabled",
+            "Override SSID Name": "FROGGY-OFFICE", "Override VLAN": "30", "Override Password": "Configured",
+        }]
+
+    def test_radius_profile_rows(self) -> None:
+        from omada.registry import _radius_profile_rows
+        rows = _radius_profile_rows([
+            {"name": "Corp", "authServer": [{"radiusServerIp": "10.0.0.5", "radiusPort": 1812,
+                                             "radiusPwd": "<redacted>", "radSecEnable": True}],
+             "radiusAccountingEnable": True, "interimUpdateEnable": True, "interimUpdateInterval": 600,
+             "acctServer": [{"accountingServerIp": "10.0.0.5", "accountingServerPort": 1813,
+                             "accountingServerPwd": "<redacted>"}],
+             "wirelessVlanAssignment": True, "coaEnable": False, "requireMessageAuthenticator": True},
+            {"name": "Built-in", "builtInServer": True, "serverEnable": True, "ipType": 1,
+             "customIp": "192.168.2.1"},
+        ])
+        assert rows[0] == {
+            "Name": "Corp", "Type": "External",
+            "Authentication Servers": "10.0.0.5:1812 (RadSec, secret configured)",
+            "Accounting": "10.0.0.5:1813 (secret configured); interim update 600 s",
+            "VLAN Assignment": "Enabled", "CoA": "Disabled", "Message-Authenticator": "Required",
+        }
+        assert rows[1]["Type"] == "Built-in"
+        assert rows[1]["Authentication Servers"] == "Built-in server (enabled), IP 192.168.2.1"
+        assert rows[1]["Accounting"] == "Disabled"
+
+    def test_portal_rows_and_details(self) -> None:
+        from omada.registry import _portal_details, _portal_rows
+        context = {**self._WIFI_CONTEXT, "ssids": [{"id": "s-guest", "name": "Guest"}],
+                   "networks": [{"id": "net-guest", "name": "Guest LAN"}]}
+        portals = [
+            {"name": "Hotspot", "enable": True, "authType": 11, "ssidList": ["s-guest"],
+             "networkList": ["net-guest"], "hotspot": {"enabledTypes": [3, 6]},
+             "authTimeout": {"authTimeout": 0, "customTimeout": 3, "customTimeoutUnit": 3},
+             "landingPage": 2, "landingUrlScheme": "https", "landingUrl": "example.com/welcome",
+             "httpsRedirectEnable": True,
+             "sms": {"sid": "AC123", "authToken": "<redacted>", "phoneNum": "+15550100"}},
+            {"name": "Radius", "enable": False, "authType": 2,
+             "externalRadius": {"radiusProfileId": "r1", "authMode": 2, "nasId": "omada",
+                                "portalCustom": 1, "disconnectReq": True, "receiverPort": 3799},
+             "authTimeout": {"authTimeout": 6}},
+        ]
+        hotspot, radius = _portal_rows(portals, context)
+        assert hotspot == {
+            "Name": "Hotspot", "Status": "Enabled", "Authentication": "Hotspot (Voucher, SMS)",
+            "SSIDs": "Guest", "Networks": "Guest LAN", "Auth Timeout": "3 days",
+            "Landing Page": "Promotional URL (https://example.com/welcome)", "HTTPS Redirect": "Enabled",
+        }
+        assert radius["Auth Timeout"] == "1 day"
+        assert radius["Status"] == "Disabled"
+        details = dict(_portal_details(portals, context))
+        sms = {r["Setting"]: r["Value"] for r in details["Hotspot"] if r["Category"] == "SMS (Twilio)"}
+        assert sms == {"Account SID": "AC123", "Auth Token": "Configured", "Sender Number": "+15550100"}
+        rad = {r["Setting"]: r["Value"] for r in details["Radius"]}
+        assert rad["RADIUS Profile"] == "Corp RADIUS"
+        assert rad["Auth Mode"] == "CHAP"
+        assert rad["Portal Page"] == "Local Web Portal"
+        assert rad["Disconnect Requests"] == "Enabled (port 3799)"
+
+    def test_time_range_rows(self) -> None:
+        from omada.registry import _time_range_rows
+        rows = _time_range_rows([
+            {"name": "Office hours", "dayMode": 1,
+             "timeList": [{"dayType": 0, "startTimeH": 8, "startTimeM": 30, "endTimeH": 17, "endTimeM": 0}]},
+            {"name": "Custom", "dayMode": 3,
+             "customDayMode": {"dayMon": True, "dayWed": True, "daySun": False},
+             "timeList": [{"dayType": 1, "startTimeH": 0, "startTimeM": 0, "endTimeH": 6, "endTimeM": 15},
+                          {"dayType": 3, "startTimeH": 22, "startTimeM": 0, "endTimeH": 24, "endTimeM": 0}]},
+        ])
+        assert rows[0] == {"Name": "Office hours", "Days": "Weekdays", "Times": "08:30–17:00"}
+        assert rows[1] == {"Name": "Custom", "Days": "Mon, Wed", "Times": "Mon 00:00–06:15, Wed 22:00–24:00"}
+
+    def test_rate_limit_profile_rows(self) -> None:
+        from omada.registry import _rate_limit_profile_rows
+        rows = _rate_limit_profile_rows([
+            {"name": "Guest", "downLimitEnable": True, "downLimit": 10240, "upLimitEnable": False,
+             "defaultProfile": False},
+        ])
+        assert rows == [{"Name": "Guest", "Download": "10240 Kbps", "Upload": "Unlimited", "Default": "No"}]
+
+    def test_wireless_settings_rows(self) -> None:
+        from omada.registry import _wireless_settings_rows
+        rows = _wireless_settings_rows({
+            "bandSteering": {"bandSteeringForMultiBand": {"mode": 2}},
+            "roaming": {"roaming": {"fastRoamingEnable": True, "aiRoamingEnable": False,
+                                    "nonStickRoamingEnable": True}},
+            "mesh": {"mesh": {"meshEnable": True, "autoFailoverEnable": True,
+                              "defGatewayEnable": False, "gateway": "192.168.2.1", "fullSector": False}},
+            "multicastRateLimit": {"mcastRateLimit": {"enable": True, "arpEnable": True, "arpPps": 100,
+                                                      "mdnsEnable": False}},
+        })
+        values = {(r["Category"], r["Setting"]): r["Value"] for r in rows}
+        assert values == {
+            ("Band Steering", "Mode"): "Balance",
+            ("Roaming", "Fast Roaming"): "Enabled",
+            ("Roaming", "AI Roaming"): "Disabled",
+            ("Roaming", "Non-Stick Roaming"): "Enabled",
+            ("Mesh", "Mesh"): "Enabled",
+            ("Mesh", "Auto Failover"): "Enabled",
+            ("Mesh", "Full-Sector DFS"): "Disabled",
+            ("Mesh", "Connectivity Detection"): "Custom IP 192.168.2.1",
+            ("Multicast Rate Limit", "Multicast Rate Limit"): "Enabled",
+            ("Multicast Rate Limit", "ARP"): "100 pps",
+            ("Multicast Rate Limit", "mDNS"): "Not limited",
+        }
+
+    def test_ap_radio_rows(self) -> None:
+        from omada.registry import _ap_radio_rows
+        rows = _ap_radio_rows([{
+            "deviceName": "Lower AP", "deviceModel": "EAP620 HD",
+            "radios": {
+                "5g": {"radioEnable": True, "channel": "36", "channelWidth": "5", "txPowerLevel": 3,
+                       "txPower": 18, "wirelessMode": 16, "channelLimitEnable": False},
+                "2g": {"radioEnable": True, "channel": "0", "channelWidth": "4", "txPowerLevel": 4,
+                       "wirelessMode": -2},
+                "6g": {"radioEnable": False, "channel": "37", "txPowerLevel": 2},
+            },
+        }])
+        assert [r["Band"] for r in rows] == ["2.4 GHz", "5 GHz", "6 GHz"]
+        two, five, six = rows
+        assert two["Channel"] == "Auto"
+        assert two["Channel Width"] == "Auto (20/40 MHz)"
+        assert two["Tx Power"] == "Auto"
+        assert two["Wireless Mode"] == "Auto"
+        assert five == {
+            "AP": "Lower AP", "Model": "EAP620 HD", "Band": "5 GHz", "Radio": "Enabled",
+            "Channel": "36", "Channel Width": "80 MHz", "Tx Power": "Custom (18 dBm)",
+            "Wireless Mode": "802.11a/n/ac/ax", "Channel Limit": "Disabled",
+        }
+        assert six["Radio"] == "Disabled"
+        assert six["Channel"] == "" and six["Tx Power"] == ""
 
     def test_switch_port_profile_rows(self) -> None:
         from omada.registry import _switch_port_profile_rows

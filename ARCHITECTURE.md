@@ -94,7 +94,7 @@ and an output directory.
 
 | Method | Description |
 | --- | --- |
-| `fetch_all()` | Iterate over every `ResourceDefinition` in the registry and call its fetch method on the API client. Failures are caught per-resource so remaining resources continue. |
+| `fetch_all()` | Iterate over every `ResourceDefinition` in the registry and call its fetch method on the API client, passing each result through `redact_secrets()` so no credential reaches the exports. Failures are caught per-resource so remaining resources continue. |
 | `export_yaml(data)` | Delegate to `YamlExporter.export_all()` |
 | `generate_docs(data)` | Delegate to `MarkdownGenerator.generate_all()` |
 | `run()` | Orchestrate the full pipeline: create output dir → `fetch_all` → `export_yaml` → `generate_docs` → return paths |
@@ -199,6 +199,25 @@ Flask application created via the `create_app()` factory.
 - Path-traversal prevention on all file-serving routes.
 - `FLASK_SECRET_KEY` env var for persistent sessions (ephemeral random key
   by default).
+
+---
+
+### Credential Redaction — `omada/redaction.py`
+
+`redact_secrets(data)` returns a copy of any resource with every non-empty
+string value whose key looks like a credential (`password`, `pwd`, `secret`,
+`token`, `securityKey`, `preSharedKey`, `privateKey`, …) replaced by
+`<redacted>`. Booleans such as `hidePwd` and nested setting objects are left
+intact, and the key is kept so exports show that a secret is configured.
+`OmadaService.fetch_all()` applies it to every resource; the VPN and wireless
+client getters also apply it at the source.
+
+`OmadaService(include_secrets=True)` (CLI `--include-secrets`, env
+`OMADA_INCLUDE_SECRETS`, web UI checkbox) disables both: it skips the
+service-level pass and sets `client.include_secrets`, so the getters return
+credentials unredacted. `contains_secrets(data)` lets `MarkdownGenerator`
+insert a warning banner into any file whose data holds a plaintext
+credential, which also covers Markdown regenerated from YAML.
 
 ---
 

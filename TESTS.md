@@ -62,6 +62,7 @@ CLI interface tests.
 | | `test_fetch_client_credentials` | Client Credentials mode with `--client-id` + `--client-secret` |
 | | `test_fetch_auth_code_mode` | Authorization Code mode with `--username` + `--password` |
 | | `test_fetch_reads_env_vars` | Reads configuration from `OMADA_*` environment variables |
+| | `test_fetch_include_secrets_option` | `--include-secrets` / `OMADA_INCLUDE_SECRETS` reach the service and print a warning; off by default |
 | | `test_explicit_controller_id_skips_discovery` | `--controller-id` bypasses auto-discovery |
 | | `test_missing_client_credentials_shows_error` | Shows error when client credentials are missing |
 | `TestEnvBool` | `test_truthy_values` | Recognises truthy strings (`1`, `true`, `yes`, `on`, …) |
@@ -186,6 +187,13 @@ Omada Open API client tests.
 | | `test_get_gateway_settings_all_fail` | Returns empty dict when all endpoints fail |
 | | `test_get_ssids` | Fetches SSIDs with WLAN group names |
 | | `test_get_ssids_no_wlans` | Returns empty list when WLAN endpoint fails |
+| | `test_get_ssids_merges_detail_and_overrides_and_redacts` | Merges SSID detail and AP overrides; redacts passphrase and override password |
+| | `test_get_ssids_detail_falls_back_to_wlan_path` | Falls back to the WLAN-scoped SSID detail endpoint |
+| | `test_get_radius_profiles_redacts_all_secrets` | Redacts RADIUS auth, accounting, CoA, and built-in secrets |
+| | `test_get_portals_merges_detail_and_redacts` | Merges portal detail; redacts portal password, OAuth secret, and SMS token |
+| | `test_get_time_range_and_rate_limit_profiles` | Fetches schedule and rate limit profiles |
+| | `test_get_wireless_settings_partial_and_total_failure` | One failing site setting is tolerated; all failing raises |
+| | `test_get_ap_radios` | Fetches radio config for APs only, skipping unavailable ones |
 | | `test_get_dhcp_reservations` | Fetches DHCP reservations |
 | | `test_get_port_forwarding` | Fetches port forwarding rules |
 | | `test_get_one_to_one_nat` | Fetches One-to-One NAT rules |
@@ -217,7 +225,7 @@ Resource registry and `generate_from_yaml` tests.
 
 | Class | Test | Description |
 | --- | --- | --- |
-| `TestRegistry` | `test_all_twenty_five_resources_defined` | All 25 resource types are registered |
+| `TestRegistry` | `test_all_thirty_one_resources_defined` | All 31 resource types are registered |
 | | `test_registry_lookup_matches_resources` | Registry lookup matches `RESOURCES` list |
 | | `test_all_definitions_are_resource_definition` | All entries are `ResourceDefinition` instances |
 | | `test_all_row_formatters_callable` | All row formatters are callable |
@@ -230,7 +238,15 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_ip_group_rows` | Formats IP group rows with CIDR notation |
 | | `test_gateway_rows_dict_input` | Formats gateway rows from dict input |
 | | `test_gateway_rows_list_input` | Formats gateway rows from list input |
-| | `test_ssid_rows` | Formats SSID rows with band and security labels |
+| | `test_ssid_rows` | Formats SSID rows with band and security labels (security 3 = WPA-Personal) |
+| | `test_ssid_rows_resolve_profiles` | SSID security version, VLAN, portal, rate limit, schedule, and band steering resolved by name |
+| | `test_ssid_details_and_ap_overrides` | Full per-SSID settings plus a per-AP override table |
+| | `test_radius_profile_rows` | External and built-in RADIUS profiles, showing only secret state |
+| | `test_portal_rows_and_details` | Portal auth, SSIDs, timeout, landing page, and per-method details |
+| | `test_time_range_rows` | Schedule day modes and time slots |
+| | `test_rate_limit_profile_rows` | Rate limit profile download / upload limits |
+| | `test_wireless_settings_rows` | Site band steering, roaming, mesh, and multicast rate limit |
+| | `test_ap_radio_rows` | Per-AP radio channel, width, Tx power, and wireless mode |
 | | `test_dhcp_reservation_rows` | Formats DHCP reservation rows |
 | | `test_port_forwarding_rows` | Formats port forwarding rows, resolving WAN port IDs to names |
 | | `test_one_to_one_nat_rows` | Formats One-to-One NAT rows |
@@ -271,6 +287,20 @@ Resource registry and `generate_from_yaml` tests.
 
 ---
 
+## test_redaction.py
+
+Credential redaction tests.
+
+| Test | Description |
+| --- | --- |
+| `test_credential_keys_detected` | Password / secret / token / key field names are treated as credentials |
+| `test_non_credential_keys_not_detected` | Public keys, usernames, IDs, and setting objects are not |
+| `test_redacts_nested_strings_only` | Only non-empty string values are redacted; flags and empty values are kept; input is not mutated |
+| `test_passes_through_scalars` | Non-container values pass through unchanged |
+| `test_contains_secrets` | Detects plaintext (non-redacted) credentials anywhere in the data |
+
+---
+
 ## test_service.py
 
 `OmadaService` service layer tests.
@@ -284,7 +314,11 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_generate_docs_writes_files` | Writes Markdown files for all resources |
 | `TestOmadaServiceRun` | `test_run_creates_output_dir` | Creates the output directory if missing |
 | | `test_run_returns_yaml_and_doc_paths` | Returns paths for both YAML and Markdown files |
-| `TestVpnSecretsNeverExported` | `test_vpn_secrets_redacted_in_yaml_and_markdown` | No VPN / SSL VPN / WireGuard secret value appears in any written YAML or Markdown file |
+| `TestVpnSecretsNeverExported` | `test_vpn_and_wireless_secrets_redacted_in_yaml_and_markdown` | No VPN / SSL VPN / WireGuard / Wi-Fi / RADIUS / portal secret appears in any written YAML or Markdown file |
+| `TestIncludeSecrets` | `test_default_redacts_and_has_no_warning` | Default run redacts the Wi-Fi passphrase and adds no warning |
+| | `test_include_secrets_exports_values_with_warning` | `include_secrets=True` exports the passphrase to YAML and Markdown with a warning banner |
+| | `test_regenerate_from_yaml_keeps_warning` | Markdown regenerated from secret-bearing YAML keeps the warning |
+| `TestGlobalRedaction` | `test_fetch_all_redacts_every_resource` | `fetch_all` redacts credentials from every resource (e.g. PPPoE password, WPA passphrase), keeping identifiers |
 
 ---
 
@@ -300,6 +334,8 @@ Flask web application tests.
 | | `test_index_contains_auth_mode_tabs` | Form shows both authentication mode tabs |
 | `TestRunRoute` | `test_run_missing_client_creds_flashes_error` | Flashes error when client credentials are missing |
 | | `test_run_client_credentials_success` | Client Credentials mode succeeds end-to-end |
+| | `test_run_include_secrets_checkbox` | Checkbox reaches the service and flashes a warning; never pre-checked afterwards |
+| | `test_index_has_include_secrets_checkbox` | Run form includes the Include secrets checkbox |
 | | `test_run_auth_code_success` | Authorization Code mode succeeds end-to-end |
 | | `test_run_auth_code_missing_username_flashes_error` | Flashes error when username is missing in auth code mode |
 | | `test_run_service_error_flashes_error` | Flashes error when service raises an exception |

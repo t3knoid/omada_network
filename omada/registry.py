@@ -25,6 +25,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from omada.redaction import REDACTED
+
 
 # ---------------------------------------------------------------------------
 # Dataclass
@@ -757,8 +759,13 @@ _VPN_CLIENT_MODE_MAP: dict[int, str] = {0: "Client-to-Site", 1: "Site-to-Site"}
 
 
 def _secret_state(value: Any) -> str:
-    """Never show a secret: only whether one is configured."""
-    return "Configured" if value else "Not set"
+    """``Not set`` / ``Configured`` (redacted), or the value itself when the
+    export was run with secrets included."""
+    if not value:
+        return "Not set"
+    if value == REDACTED:
+        return "Configured"
+    return _flatten(value)
 
 
 def _vpn_subnets(subnets: Any) -> str:
@@ -1329,31 +1336,631 @@ _BAND_MAP: dict[int, str] = {
     7: "2.4 GHz / 5 GHz / 6 GHz",
 }
 
+# SSID ``security`` codes, per the Open API SsidDetailOpenApiVO schema.  The
+# WPA version lives in pskSetting / entSetting (see _ssid_security).
 _SECURITY_MAP: dict[int, str] = {
-    0: "None",
-    1: "WEP",
-    2: "WPA",
-    3: "WPA2",
-    4: "WPA/WPA2",
-    5: "WPA3",
-    6: "WPA2/WPA3",
+    0: "Open",
+    2: "WPA-Enterprise",
+    3: "WPA-Personal",
+    4: "PPSK",
+    5: "PPSK + RADIUS",
+}
+_PSK_VERSION_MAP: dict[int, str] = {
+    1: "WPA-PSK", 2: "WPA2-PSK", 3: "WPA/WPA2-PSK", 4: "WPA2-PSK/WPA3-SAE",
+}
+_ENT_VERSION_MAP: dict[int, str] = {
+    1: "WPA-Enterprise", 2: "WPA2-Enterprise", 3: "WPA/WPA2-Enterprise", 4: "WPA3-Enterprise",
+}
+_WPA_ENCRYPTION_MAP: dict[int, str] = {1: "Auto", 3: "AES", 4: "AES-GCM 256", 5: "AES-CNSA", 6: "CCMP-128"}
+_REKEY_UNIT_MAP: dict[int, str] = {0: "s", 1: "min", 2: "h"}
+_PMF_MAP: dict[int, str] = {1: "Mandatory", 2: "Capable", 3: "Disabled"}
+_NAS_ID_MODE_MAP: dict[int, str] = {0: "Default (MAC address)", 1: "Device name", 2: "Custom"}
+_SSID_BAND_STEER_MAP: dict[int, str] = {0: "Disabled", 1: "Prefer 5GHz/6GHz", 2: "Balance", 3: "Use site setting"}
+_SITE_BAND_STEER_MAP: dict[int, str] = {0: "Disabled", 1: "Prefer 5GHz/6GHz", 2: "Balance"}
+_SCHEDULE_ACTION_MAP: dict[int, str] = {0: "Radio off during schedule", 1: "Radio on during schedule"}
+_MAC_FILTER_POLICY_MAP: dict[int, str] = {0: "Deny List", 1: "Allow List"}
+_RATE_UNIT_KM_MAP: dict[int, str] = {0: "Kbps", 1: "Mbps"}
+_HOTSPOT2_NETWORK_MAP: dict[int, str] = {
+    0: "Private", 1: "Private with guest access", 2: "Chargeable public", 3: "Free public",
+    4: "Personal device", 5: "Emergency services only", 14: "Test or experimental", 15: "Wildcard",
 }
 
 
-def _ssid_rows(data: Any) -> list[dict[str, Any]]:
+def _ssid_lookups(context: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+    """ID → name maps for the profiles an SSID references."""
+    ctx = context or {}
+
+    def names(resource: str, *id_keys: str) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for item in ctx.get(resource) or []:
+            if isinstance(item, dict):
+                for key in id_keys:
+                    if item.get(key):
+                        out[str(item[key])] = _flatten(item.get("name") or item[key])
+        return out
+
+    portals_by_ssid: dict[str, str] = {}
+    for portal in ctx.get("portals") or []:
+        if isinstance(portal, dict):
+            for ssid_id in portal.get("ssidList") or []:
+                portals_by_ssid.setdefault(str(ssid_id), _flatten(portal.get("name", "")))
+    return {
+        "radius": names("radius_profiles", "radiusProfileId", "id"),
+        "rate": names("rate_limit_profiles", "profileId", "id"),
+        "schedule": names("time_range_profiles", "profileId", "id"),
+        "network": names("networks", "id"),
+        "portal_by_ssid": portals_by_ssid,
+    }
+
+
+def _ssid_security(s: dict[str, Any], lookups: dict[str, dict[str, str]]) -> str:
+    sec = s.get("security")
+    psk = s.get("pskSetting") if isinstance(s.get("pskSetting"), dict) else {}
+    ent = s.get("entSetting") if isinstance(s.get("entSetting"), dict) else {}
+    if sec == 3 and psk.get("versionPsk") is not None:
+        text = _profile_code(psk["versionPsk"], _PSK_VERSION_MAP)
+        if psk.get("encryptionPsk") is not None:
+            text += f" ({_profile_code(psk['encryptionPsk'], _WPA_ENCRYPTION_MAP)})"
+        return text
+    if sec == 2 and ent.get("versionEnt") is not None:
+        text = _profile_code(ent["versionEnt"], _ENT_VERSION_MAP)
+        radius = ent.get("radiusProfileId")
+        if radius:
+            text += f" (RADIUS: {lookups['radius'].get(str(radius), radius)})"
+        return text
+    if sec == 0 and s.get("oweEnable"):
+        return "Open (OWE)"
+    return _profile_code(sec, _SECURITY_MAP) if sec is not None else ""
+
+
+def _ssid_vlan(s: dict[str, Any], lookups: dict[str, dict[str, str]]) -> str:
+    vs = s.get("vlanSetting")
+    if isinstance(vs, dict) and vs.get("mode") == 1 and isinstance(vs.get("customConfig"), dict):
+        cfg = vs["customConfig"]
+        if cfg.get("customMode") == 0 and cfg.get("lanNetworkId"):
+            return lookups["network"].get(str(cfg["lanNetworkId"]), str(cfg["lanNetworkId"]))
+        if cfg.get("vlanId") is not None:
+            return f"VLAN {cfg['vlanId']}"
+        if cfg.get("vlanPoolIds"):
+            return f"VLAN pool {cfg['vlanPoolIds']}"
+    if s.get("vlanEnable") and s.get("vlanId") is not None:
+        return _flatten(s["vlanId"])
+    if isinstance(vs, dict) and vs.get("mode") == 0:
+        return "Default"
+    return _flatten(s.get("vlanId", "")) if s.get("vlanEnable") else ""
+
+
+def _rate_limit_text(setting: Any, lookups: dict[str, dict[str, str]]) -> str:
+    """``profile name`` or ``Down 50 Mbps / Up 10 Mbps`` for a rate-limit setting."""
+    if not isinstance(setting, dict):
+        return ""
+    if setting.get("profileId"):
+        return lookups["rate"].get(str(setting["profileId"]), str(setting["profileId"]))
+    custom = setting.get("customSetting")
+    if not isinstance(custom, dict):
+        return ""
+    parts = []
+    for prefix, label in (("down", "Down"), ("up", "Up")):
+        if custom.get(f"{prefix}LimitEnable"):
+            unit = _profile_code(custom.get(f"{prefix}LimitType", 0), _RATE_UNIT_KM_MAP)
+            parts.append(f"{label} {custom.get(f'{prefix}Limit', '')} {unit}")
+    return " / ".join(parts) if parts else "Unlimited"
+
+
+def _ssid_schedule(s: dict[str, Any], lookups: dict[str, dict[str, str]]) -> str:
+    sched = s.get("wlanSchedule")
+    if not isinstance(sched, dict) or not sched.get("wlanScheduleEnable"):
+        return "" if not isinstance(sched, dict) else "None"
+    name = lookups["schedule"].get(str(sched.get("scheduleId", "")), _flatten(sched.get("scheduleId", "")))
+    action = _profile_code(sched.get("action", ""), _SCHEDULE_ACTION_MAP)
+    return f"{name} ({action})" if action else name
+
+
+def _ssid_band_steer(s: dict[str, Any]) -> str:
+    # The spec types the SSID band-steer setting under a field named
+    # ``ssidDhcpOption``; accept that and a plain ``bandSteer``.
+    for key in ("bandSteer", "ssidDhcpOption"):
+        value = s.get(key)
+        if isinstance(value, dict) and "mode" in value:
+            return _profile_code(value["mode"], _SSID_BAND_STEER_MAP)
+    return ""
+
+
+def _ssid_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    lookups = _ssid_lookups(context)
+    rows = []
+    for s in items:
+        if not isinstance(s, dict):
+            continue
+        ssid_id = str(s.get("id", s.get("ssidId", "")))
+        rows.append({
+            "WLAN": s.get("wlanName", ""),
+            "SSID": s.get("name", s.get("ssid", "")),
+            "Security": _ssid_security(s, lookups),
+            "Band": _BAND_MAP.get(s.get("band"), str(s.get("band", ""))),
+            "Broadcast": "Yes" if s.get("broadcast", True) else "No",
+            "VLAN": _ssid_vlan(s, lookups),
+            "Guest": "Yes" if s.get("guestNetEnable") else "No",
+            "Portal": lookups["portal_by_ssid"].get(ssid_id, ""),
+            "Client Rate Limit": _rate_limit_text(s.get("clientRateLimit"), lookups),
+            "Schedule": _ssid_schedule(s, lookups),
+            "Band Steering": _ssid_band_steer(s),
+        })
+    return rows
+
+
+def _ssid_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    items = data if isinstance(data, list) else []
+    lookups = _ssid_lookups(context)
+    details: list[tuple[str, list[dict[str, Any]]]] = []
+    for s in items:
+        if not isinstance(s, dict):
+            continue
+        ssid_id = str(s.get("id", s.get("ssidId", "")))
+        rows: list[tuple[str, str, str]] = []
+
+        def add(category: str, setting: str, value: Any) -> None:
+            if value not in (None, ""):
+                rows.append((category, setting, value if isinstance(value, str) else _flatten(value)))
+
+        def flag(category: str, setting: str, obj: dict[str, Any], key: str) -> None:
+            if key in obj:
+                rows.append((category, setting, _enabled(obj[key])))
+
+        add("General", "WLAN", s.get("wlanName"))
+        add("General", "Band", _BAND_MAP.get(s.get("band"), s.get("band")))
+        flag("General", "SSID Enabled", s, "ssidEnable")
+        if "broadcast" in s:
+            add("General", "Broadcast", "Yes" if s["broadcast"] else "No")
+        if isinstance(s.get("deviceType"), int):
+            kinds = [n for bit, n in ((1, "EAP"), (2, "Gateway")) if s["deviceType"] & bit]
+            add("General", "Applies To", ", ".join(kinds))
+        if "chooseDevices" in s:
+            add("General", "Device Scope", "All devices" if s["chooseDevices"] == 0 else "Selected devices")
+        if s.get("apGroupIds"):
+            add("General", "AP Groups", ", ".join(str(g) for g in s["apGroupIds"]))
+
+        add("Security", "Security", _ssid_security(s, lookups))
+        psk = s.get("pskSetting") if isinstance(s.get("pskSetting"), dict) else {}
+        ent = s.get("entSetting") if isinstance(s.get("entSetting"), dict) else {}
+        ppsk = s.get("ppskSetting") if isinstance(s.get("ppskSetting"), dict) else {}
+        if s.get("security") == 3 and psk:
+            add("Security", "Passphrase", _secret_state(psk.get("securityKey")))
+            if psk.get("gikRekeyPskEnable"):
+                unit = _profile_code(psk.get("intervalPskType", 0), _REKEY_UNIT_MAP)
+                add("Security", "Group Key Update", f"Every {psk.get('rekeyPskInterval', '')} {unit}")
+        if s.get("security") == 2 and ent:
+            radius = ent.get("radiusProfileId")
+            add("Security", "RADIUS Profile", lookups["radius"].get(str(radius), radius) if radius else "")
+            add("Security", "Encryption", _profile_code(ent.get("encryptionEnt"), _WPA_ENCRYPTION_MAP)
+                if ent.get("encryptionEnt") is not None else "")
+            if "nasIdMode" in ent:
+                nas = _profile_code(ent["nasIdMode"], _NAS_ID_MODE_MAP)
+                add("Security", "NAS ID", f"{nas}: {ent['nasId']}" if ent.get("nasId") else nas)
+            if ent.get("gikRekeyEntEnable"):
+                unit = _profile_code(ent.get("intervalEntType", 0), _REKEY_UNIT_MAP)
+                add("Security", "Group Key Update", f"Every {ent.get('rekeyEntInterval', '')} {unit}")
+        if s.get("security") in (4, 5) and ppsk:
+            add("Security", "PPSK Profile", ppsk.get("ppskProfileId"))
+            radius = ppsk.get("radiusProfileId")
+            add("Security", "RADIUS Profile", lookups["radius"].get(str(radius), radius) if radius else "")
+            add("Security", "NAS ID", ppsk.get("nasId"))
+        flag("Security", "OWE (Enhanced Open)", s, "oweEnable")
+        if s.get("pmfMode") is not None:
+            add("Security", "PMF", _profile_code(s["pmfMode"], _PMF_MAP))
+        flag("Security", "802.11r Fast Transition", s, "enable11r")
+        flag("Security", "MLO", s, "mloEnable")
+        flag("Security", "Prohibit Wi-Fi Sharing", s, "prohibitWifiShare")
+
+        add("VLAN", "VLAN", _ssid_vlan(s, lookups) or "Default")
+
+        if "guestNetEnable" in s:
+            add("Guest / Portal", "Guest Network", "Yes" if s["guestNetEnable"] else "No")
+        add("Guest / Portal", "Portal", lookups["portal_by_ssid"].get(ssid_id, "None"))
+
+        add("Rate Limits", "Client Rate Limit", _rate_limit_text(s.get("clientRateLimit"), lookups))
+        add("Rate Limits", "SSID Rate Limit", _rate_limit_text(s.get("ssidRateLimit"), lookups))
+
+        add("Schedule", "WLAN Schedule", _ssid_schedule(s, lookups))
+        add("Band Steering", "Band Steering", _ssid_band_steer(s))
+
+        rc = s.get("rateControl") if isinstance(s.get("rateControl"), dict) else {}
+        for band, beacon in (("2g", "1 Mbps"), ("5g", "6 Mbps")):
+            label = "2.4 GHz" if band == "2g" else "5 GHz"
+            if rc.get(f"rate{band}CtrlEnable"):
+                text = f"Minimum {rc.get(f'lowerDensity{band}', '')} Mbps"
+                if rc.get(f"clientRatesRequire{band}"):
+                    text += ", required for clients"
+                if rc.get(f"sendBeacons{band}"):
+                    text += f", beacons at {beacon}"
+                if band == "2g" and rc.get("cckRatesDisable"):
+                    text += ", CCK rates disabled"
+                add("Rate Control", f"{label} Data Rate", text)
+            elif f"rate{band}CtrlEnable" in rc:
+                add("Rate Control", f"{label} Data Rate", "Disabled")
+            if rc.get(f"manageRateControl{band}Enable"):
+                add("Rate Control", f"{label} Management Rate", f"{rc.get(f'manageRateControl{band}', '')} Mbps")
+
+        mf = s.get("macFilter") if isinstance(s.get("macFilter"), dict) else {}
+        if "macFilterEnable" in mf:
+            text = _enabled(mf["macFilterEnable"])
+            if mf["macFilterEnable"]:
+                text += f" ({_profile_code(mf.get('policy', ''), _MAC_FILTER_POLICY_MAP)}"
+                text += f", MAC group {mf.get('macFilterId', '')})" if mf.get("macFilterId") else ")"
+            add("MAC Filter", "MAC Filter", text)
+
+        mc = s.get("multiCast") if isinstance(s.get("multiCast"), dict) else {}
+        flag("Multicast", "Multicast to Unicast", mc, "multiCastEnable")
+        flag("Multicast", "IPv6 Multicast to Unicast", mc, "ipv6CastEnable")
+        flag("Multicast", "ARP to Unicast", mc, "arpCastEnable")
+        if mc.get("channelUtil") is not None:
+            add("Multicast", "Channel Utilization Threshold", f"{mc['channelUtil']}%")
+        flag("Multicast", "Multicast Filter", mc, "filterEnable")
+
+        opt82 = s.get("dhcpOption82") if isinstance(s.get("dhcpOption82"), dict) else {}
+        flag("DHCP", "DHCP Option 82", opt82, "dhcpEnable")
+
+        hs2 = s.get("hotspotV2Setting") if isinstance(s.get("hotspotV2Setting"), dict) else {}
+        if "hotspotV2Enable" in hs2:
+            text = _enabled(hs2["hotspotV2Enable"])
+            if hs2["hotspotV2Enable"] and hs2.get("networkType") is not None:
+                text += f" ({_profile_code(hs2['networkType'], _HOTSPOT2_NETWORK_MAP)} network)"
+            add("Hotspot 2.0", "Hotspot 2.0", text)
+            if hs2.get("hotspotV2Enable"):
+                add("Hotspot 2.0", "Operator Domain", hs2.get("operatorDomain"))
+                add("Hotspot 2.0", "Operator Name", hs2.get("operatorFriendly"))
+        flag("Other", "Wi-Fi Calling", s, "wifiCallingEnable")
+        flag("Other", "Enhanced IoT Connectivity", s, "enhancedIotConnectivity")
+
+        title = _flatten(s.get("name", "")) or ssid_id
+        details.append((title, _detail_rows(rows)))
+
+        overrides = [
+            {
+                "AP": _flatten(o.get("name", "")),
+                "AP MAC": _flatten(o.get("mac", "")),
+                "SSID Enabled": _enabled(o.get("ssidEnable")) if "ssidEnable" in o else "",
+                "Override SSID Name": _flatten(o.get("overrideName", "")),
+                "Override VLAN": _flatten(o.get("overrideVlan", "")),
+                "Override Password": _secret_state(o.get("overridePassword")) if "overridePassword" in o else "",
+            }
+            for o in s.get("apOverrides") or [] if isinstance(o, dict)
+        ]
+        if overrides:
+            details.append((f"{title} AP overrides", overrides))
+    return details
+
+
+# RADIUS profiles ---------------------------------------------------------------
+
+def _radius_servers(servers: Any, ip_key: str, port_key: str, pwd_key: str) -> str:
+    parts = []
+    for srv in servers or []:
+        if not isinstance(srv, dict):
+            continue
+        host = _flatten(srv.get(ip_key, ""))
+        text = f"{host}:{srv[port_key]}" if srv.get(port_key) is not None else host
+        extras = []
+        if srv.get("radSecEnable"):
+            extras.append("RadSec")
+        if pwd_key in srv:
+            state = _secret_state(srv[pwd_key])
+            extras.append(f"secret {state.lower() if state in ('Configured', 'Not set') else state}")
+        parts.append(f"{text} ({', '.join(extras)})" if extras else text)
+    return "; ".join(parts)
+
+
+def _radius_profile_rows(data: Any) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    rows = []
+    for r in items:
+        if not isinstance(r, dict):
+            continue
+        if r.get("builtInServer"):
+            servers = "Built-in server"
+            if "serverEnable" in r:
+                servers += f" ({_enabled(r['serverEnable']).lower()})"
+            if r.get("ipType") == 1 and r.get("customIp"):
+                servers += f", IP {r['customIp']}"
+        else:
+            servers = _radius_servers(r.get("authServer"), "radiusServerIp", "radiusPort", "radiusPwd")
+        if r.get("radiusAccountingEnable"):
+            accounting = _radius_servers(r.get("acctServer"), "accountingServerIp",
+                                         "accountingServerPort", "accountingServerPwd") or "Enabled"
+            if r.get("interimUpdateEnable") and r.get("interimUpdateInterval") is not None:
+                accounting += f"; interim update {r['interimUpdateInterval']} s"
+        else:
+            accounting = "Disabled"
+        rows.append({
+            "Name": _flatten(r.get("name", "")),
+            "Type": "Built-in" if r.get("builtInServer") else "External",
+            "Authentication Servers": servers,
+            "Accounting": accounting,
+            "VLAN Assignment": _enabled(r.get("wirelessVlanAssignment")),
+            "CoA": _enabled(r.get("coaEnable")),
+            "Message-Authenticator": "Required" if r.get("requireMessageAuthenticator") else "Not required",
+        })
+    return rows
+
+
+# Portals -------------------------------------------------------------------------
+
+_PORTAL_AUTH_MAP: dict[int, str] = {
+    0: "No Authentication", 1: "Simple Password", 2: "External RADIUS", 4: "External Portal Server",
+    11: "Hotspot", 15: "LDAP", 16: "Social Login",
+}
+_HOTSPOT_TYPE_MAP: dict[int, str] = {3: "Voucher", 5: "Local User", 6: "SMS", 8: "RADIUS", 12: "Form Auth"}
+_SOCIAL_LOGIN_MAP: dict[int, str] = {17: "Google"}
+_AUTH_TIMEOUT_MAP: dict[int, str] = {
+    1: "30 minutes", 2: "1 hour", 3: "2 hours", 4: "4 hours", 5: "8 hours", 6: "1 day", 7: "7 days",
+}
+_TIMEOUT_UNIT_MAP: dict[int, str] = {1: "min", 2: "hours", 3: "days"}
+_PAP_CHAP_MAP: dict[int, str] = {1: "PAP", 2: "CHAP"}
+_LANDING_PAGE_MAP: dict[int, str] = {1: "Original URL", 2: "Promotional URL"}
+_PORTAL_CUSTOM_MAP: dict[int, str] = {1: "Local Web Portal", 2: "External Web Portal"}
+
+
+def _portal_timeout(value: Any) -> str:
+    if not isinstance(value, dict):
+        return _flatten(value)
+    if value.get("authTimeout") == 0:
+        unit = _profile_code(value.get("customTimeoutUnit", ""), _TIMEOUT_UNIT_MAP)
+        return f"{value.get('customTimeout', '')} {unit}".strip()
+    return _profile_code(value.get("authTimeout", ""), _AUTH_TIMEOUT_MAP)
+
+
+def _portal_auth(p: dict[str, Any]) -> str:
+    text = _profile_code(p.get("authType", ""), _PORTAL_AUTH_MAP)
+    types = (p.get("hotspot") or {}).get("enabledTypes") if isinstance(p.get("hotspot"), dict) else None
+    types = types or p.get("hotspotTypes")
+    if p.get("authType") == 11 and types:
+        text += f" ({', '.join(_profile_code(t, _HOTSPOT_TYPE_MAP) for t in types)})"
+    social = (p.get("socialLogin") or {}).get("enabledTypes") if isinstance(p.get("socialLogin"), dict) else None
+    social = social or p.get("socialLoginTypes")
+    if p.get("authType") == 16 and social:
+        text += f" ({', '.join(_profile_code(t, _SOCIAL_LOGIN_MAP) for t in social)})"
+    return text
+
+
+def _portal_ssid_names(p: dict[str, Any], context: dict[str, Any] | None) -> str:
+    names = {
+        str(s.get("id", s.get("ssidId", ""))): _flatten(s.get("name", ""))
+        for s in (context or {}).get("ssids") or [] if isinstance(s, dict)
+    }
+    return ", ".join(names.get(str(i), str(i)) for i in p.get("ssidList") or [])
+
+
+def _portal_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    lookup = _build_id_lookup(context)
+    return [
+        {
+            "Name": _flatten(p.get("name", "")),
+            "Status": _enabled(p.get("enable")),
+            "Authentication": _portal_auth(p),
+            "SSIDs": _portal_ssid_names(p, context),
+            "Networks": _resolve_ids(p.get("networkList") or [], lookup),
+            "Auth Timeout": _portal_timeout(p.get("authTimeout")),
+            "Landing Page": (
+                f"{_profile_code(p['landingPage'], _LANDING_PAGE_MAP)}"
+                + (f" ({p.get('landingUrlScheme', 'http')}://{p['landingUrl']})" if p.get("landingUrl") else "")
+            ) if p.get("landingPage") is not None else "",
+            "HTTPS Redirect": _enabled(p.get("httpsRedirectEnable")) if "httpsRedirectEnable" in p else "",
+        }
+        for p in items
+        if isinstance(p, dict)
+    ]
+
+
+def _portal_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    items = data if isinstance(data, list) else []
+    radius_names = _ssid_lookups(context)["radius"]
+    details = []
+    for p in items:
+        if not isinstance(p, dict):
+            continue
+        rows: list[tuple[str, str, str]] = [("Portal", "Authentication", _portal_auth(p))]
+        no_auth = p.get("noAuth")
+        if isinstance(no_auth, dict) and "dailyLimitEnable" in no_auth:
+            rows.append(("No Authentication", "Once per Day", _enabled(no_auth["dailyLimitEnable"])))
+        simple = p.get("simplePassword")
+        if isinstance(simple, dict) and "password" in simple:
+            rows.append(("Simple Password", "Password", _secret_state(simple["password"])))
+        for key, label in (("externalRadius", "External RADIUS"), ("hotspotRadius", "Hotspot RADIUS")):
+            rad = p.get(key)
+            if not isinstance(rad, dict) or not rad:
+                continue
+            profile = rad.get("radiusProfileId")
+            if profile:
+                rows.append((label, "RADIUS Profile", radius_names.get(str(profile), str(profile))))
+            if rad.get("authMode") is not None:
+                rows.append((label, "Auth Mode", _profile_code(rad["authMode"], _PAP_CHAP_MAP)))
+            if rad.get("nasId"):
+                rows.append((label, "NAS ID", _flatten(rad["nasId"])))
+            if rad.get("portalCustom") is not None:
+                rows.append((label, "Portal Page", _profile_code(rad["portalCustom"], _PORTAL_CUSTOM_MAP)))
+            if rad.get("externalUrl"):
+                rows.append((label, "External URL", f"{rad.get('externalUrlScheme', 'http')}://{rad['externalUrl']}"))
+            if "disconnectReq" in rad:
+                text = _enabled(rad["disconnectReq"])
+                if rad["disconnectReq"] and rad.get("receiverPort") is not None:
+                    text += f" (port {rad['receiverPort']})"
+                rows.append((label, "Disconnect Requests", text))
+        ext = p.get("externalPortal")
+        if isinstance(ext, dict) and ext:
+            if ext.get("hostType") == 2 and ext.get("serverUrl"):
+                server = f"{ext.get('serverUrlScheme', 'http')}://{ext['serverUrl']}"
+            else:
+                host = _flatten(ext.get("serverIp", ""))
+                server = f"{host}:{ext['serverPort']}" if ext.get("serverPort") else host
+            rows.append(("External Portal", "Server", server))
+        ldap = p.get("ldap")
+        if isinstance(ldap, dict) and ldap.get("ldapProfileId"):
+            rows.append(("LDAP", "LDAP Profile", _flatten(ldap["ldapProfileId"])))
+        google = p.get("google")
+        if isinstance(google, dict) and google:
+            rows.append(("Google", "Client ID", _flatten(google.get("clientId", ""))))
+            rows.append(("Google", "Client Secret", _secret_state(google.get("clientSecret"))))
+        sms = p.get("sms")
+        if isinstance(sms, dict) and sms:
+            rows.append(("SMS (Twilio)", "Account SID", _flatten(sms.get("sid", ""))))
+            rows.append(("SMS (Twilio)", "Auth Token", _secret_state(sms.get("authToken"))))
+            rows.append(("SMS (Twilio)", "Sender Number", _flatten(sms.get("phoneNum", ""))))
+        if p.get("portalFormId"):
+            rows.append(("Portal", "Form", _flatten(p["portalFormId"])))
+        rows = [r for r in rows if r[2] != ""]
+        details.append((_flatten(p.get("name", "")) or _flatten(p.get("id", "")), _detail_rows(rows)))
+    return details
+
+
+# Schedules (time range profiles) and rate limit profiles ------------------------------
+
+_DAY_MODE_MAP: dict[int, str] = {0: "Every day", 1: "Weekdays", 2: "Weekends", 3: "Custom"}
+_DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def _time_range_rows(data: Any) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    rows = []
+    for t in items:
+        if not isinstance(t, dict):
+            continue
+        days = _profile_code(t.get("dayMode", ""), _DAY_MODE_MAP)
+        custom = t.get("customDayMode")
+        if t.get("dayMode") == 3 and isinstance(custom, dict):
+            days = ", ".join(d for d in _DAY_NAMES if custom.get(f"day{d}")) or "None"
+        times = []
+        for slot in t.get("timeList") or []:
+            if not isinstance(slot, dict):
+                continue
+            span = (f"{slot.get('startTimeH', 0):02d}:{slot.get('startTimeM', 0):02d}–"
+                    f"{slot.get('endTimeH', 0):02d}:{slot.get('endTimeM', 0):02d}")
+            day = slot.get("dayType")
+            times.append(f"{_DAY_NAMES[day - 1]} {span}" if isinstance(day, int) and 1 <= day <= 7 else span)
+        rows.append({"Name": _flatten(t.get("name", "")), "Days": days, "Times": ", ".join(times)})
+    return rows
+
+
+def _rate_limit_profile_rows(data: Any) -> list[dict[str, Any]]:
     items = data if isinstance(data, list) else []
     return [
         {
-            "WLAN": s.get("wlanName", ""),
-            "SSID": s.get("name", s.get("ssid", "")),
-            "Security": _SECURITY_MAP.get(s.get("security"), str(s.get("security", ""))),
-            "Band": _BAND_MAP.get(s.get("band"), str(s.get("band", ""))),
-            "Broadcast": "Yes" if s.get("broadcast", True) else "No",
-            "VLAN": s.get("vlanId", s.get("vlan", "")),
-            "Guest": "Yes" if s.get("guestNetEnable") else "No",
+            "Name": _flatten(r.get("name", "")),
+            "Download": f"{r.get('downLimit', '')} Kbps" if r.get("downLimitEnable") else "Unlimited",
+            "Upload": f"{r.get('upLimit', '')} Kbps" if r.get("upLimitEnable") else "Unlimited",
+            "Default": "Yes" if r.get("defaultProfile") else "No",
         }
-        for s in items
+        for r in items
+        if isinstance(r, dict)
     ]
+
+
+# Site wireless settings ------------------------------------------------------------------
+
+def _unwrap(settings: dict[str, Any], key: str, inner: str) -> dict[str, Any]:
+    """Settings arrive wrapped, e.g. ``{"roaming": {"roaming": {...}}}``."""
+    value = settings.get(key)
+    if isinstance(value, dict) and isinstance(value.get(inner), dict):
+        return value[inner]
+    return value if isinstance(value, dict) else {}
+
+
+def _wireless_settings_rows(data: Any) -> list[dict[str, Any]]:
+    if not isinstance(data, dict) or not data:
+        return []
+    rows: list[tuple[str, str, str]] = []
+    band = _unwrap(data, "bandSteering", "bandSteeringForMultiBand")
+    if "mode" in band:
+        rows.append(("Band Steering", "Mode", _profile_code(band["mode"], _SITE_BAND_STEER_MAP)))
+    roaming = _unwrap(data, "roaming", "roaming")
+    for key, label in (
+        ("fastRoamingEnable", "Fast Roaming"), ("aiRoamingEnable", "AI Roaming"),
+        ("nonStickRoamingEnable", "Non-Stick Roaming"), ("dualBand11kReportEnable", "802.11k Report"),
+        ("forceDisassociationEnable", "Forced Disassociation"),
+    ):
+        if key in roaming:
+            rows.append(("Roaming", label, _enabled(roaming[key])))
+    mesh = _unwrap(data, "mesh", "mesh")
+    for key, label in (("meshEnable", "Mesh"), ("autoFailoverEnable", "Auto Failover"),
+                       ("fullSector", "Full-Sector DFS")):
+        if key in mesh:
+            rows.append(("Mesh", label, _enabled(mesh[key])))
+    if "defGatewayEnable" in mesh:
+        rows.append(("Mesh", "Connectivity Detection",
+                     "Auto" if mesh["defGatewayEnable"] else f"Custom IP {mesh.get('gateway', '')}".strip()))
+    mcast = _unwrap(data, "multicastRateLimit", "mcastRateLimit")
+    if "enable" in mcast:
+        rows.append(("Multicast Rate Limit", "Multicast Rate Limit", _enabled(mcast["enable"])))
+        if mcast["enable"]:
+            for proto, label in (("arp", "ARP"), ("nd", "ND"), ("igmp", "IGMP"), ("dhcp", "DHCP"),
+                                 ("dhcpv6", "DHCPv6"), ("mdns", "mDNS"), ("otherBcast", "Other Broadcast"),
+                                 ("otherMcast", "Other Multicast")):
+                if f"{proto}Enable" in mcast:
+                    value = f"{mcast.get(f'{proto}Pps', '')} pps" if mcast[f"{proto}Enable"] else "Not limited"
+                    rows.append(("Multicast Rate Limit", label, value))
+    return [{"Category": c, "Setting": s, "Value": v} for c, s, v in rows]
+
+
+# AP radios -------------------------------------------------------------------------------
+
+_RADIO_BAND_LABELS: dict[str, str] = {
+    "2g": "2.4 GHz", "5g": "5 GHz", "5g1": "5 GHz-1", "5g2": "5 GHz-2", "6g": "6 GHz",
+}
+_CHANNEL_WIDTH_MAP: dict[int, str] = {
+    2: "20 MHz", 3: "40 MHz", 4: "Auto (20/40 MHz)", 5: "80 MHz", 6: "Auto (20/40/80 MHz)",
+    7: "160 MHz", 8: "Auto (20/40/80/160 MHz)", 9: "240 MHz", 10: "320 MHz",
+}
+_TX_POWER_LEVEL_MAP: dict[int, str] = {0: "Low", 1: "Medium", 2: "High", 3: "Custom", 4: "Auto"}
+_WIRELESS_MODE_MAP: dict[int, str] = {
+    -2: "Auto", 3: "802.11b/g", 4: "802.11b/g/n", 13: "802.11b/g/n/ax", 17: "802.11b/g/n/ax/be",
+    7: "802.11a/n", 10: "802.11a/n/ac", 16: "802.11a/n/ac/ax", 18: "802.11a/n/ac/ax/be",
+    11: "802.11ax only", 19: "802.11ax/be",
+}
+
+
+def _ap_radio_rows(data: Any) -> list[dict[str, Any]]:
+    """One row per AP radio; values are what the AP is configured with."""
+    items = data if isinstance(data, list) else []
+    rows = []
+    for ap in items:
+        if not isinstance(ap, dict):
+            continue
+        radios = ap.get("radios") if isinstance(ap.get("radios"), dict) else {}
+        for band in sorted(radios, key=lambda b: list(_RADIO_BAND_LABELS).index(b)
+                           if b in _RADIO_BAND_LABELS else 99):
+            r = radios[band]
+            if not isinstance(r, dict):
+                continue
+            enabled = r.get("radioEnable")
+            width = r.get("channelWidth")
+            try:
+                width = _CHANNEL_WIDTH_MAP.get(int(width), str(width)) if width not in (None, "") else ""
+            except (TypeError, ValueError):
+                width = _flatten(width)
+            # Per the spec, channel 0 means automatic channel selection.
+            channel = "Auto" if str(r.get("channel", "")).strip() == "0" else _flatten(r.get("channel", ""))
+            level = r.get("txPowerLevel")
+            power = _profile_code(level, _TX_POWER_LEVEL_MAP) if level is not None else ""
+            if level == 3 and r.get("txPower") is not None:
+                power = f"Custom ({r['txPower']} dBm)"
+            rows.append({
+                "AP": _flatten(ap.get("deviceName", "")),
+                "Model": _flatten(ap.get("deviceModel", "")),
+                "Band": _RADIO_BAND_LABELS.get(band, band),
+                "Radio": _enabled(enabled) if enabled is not None else "",
+                "Channel": channel if enabled is not False else "",
+                "Channel Width": width if enabled is not False else "",
+                "Tx Power": power if enabled is not False else "",
+                "Wireless Mode": _profile_code(r["wirelessMode"], _WIRELESS_MODE_MAP)
+                if r.get("wirelessMode") is not None and enabled is not False else "",
+                "Channel Limit": _enabled(r["channelLimitEnable"]) if "channelLimitEnable" in r else "",
+            })
+    return rows
 
 
 def _dhcp_reservation_rows(data: Any) -> list[dict[str, Any]]:
@@ -1819,6 +2426,52 @@ RESOURCES: list[ResourceDefinition] = [
         fetch_method="get_ssids",
         row_formatter=_ssid_rows,
         sort_key="SSID",
+        needs_context=True,
+        detail_formatter=_ssid_details,
+    ),
+    ResourceDefinition(
+        name="radius_profiles",
+        title="RADIUS Profiles",
+        fetch_method="get_radius_profiles",
+        row_formatter=_radius_profile_rows,
+        sort_key="Name",
+    ),
+    ResourceDefinition(
+        name="portals",
+        title="Guest Portals",
+        fetch_method="get_portals",
+        row_formatter=_portal_rows,
+        sort_key="Name",
+        needs_context=True,
+        detail_formatter=_portal_details,
+    ),
+    ResourceDefinition(
+        name="time_range_profiles",
+        title="Schedules (Time Range Profiles)",
+        fetch_method="get_time_range_profiles",
+        row_formatter=_time_range_rows,
+        sort_key="Name",
+    ),
+    ResourceDefinition(
+        name="rate_limit_profiles",
+        title="Rate Limit Profiles",
+        fetch_method="get_rate_limit_profiles",
+        row_formatter=_rate_limit_profile_rows,
+        sort_key="Name",
+    ),
+    ResourceDefinition(
+        name="wireless_settings",
+        title="Wireless Site Settings",
+        fetch_method="get_wireless_settings",
+        row_formatter=_wireless_settings_rows,
+        sort_key="",  # keep the logical grouping
+    ),
+    ResourceDefinition(
+        name="ap_radios",
+        title="AP Radio Settings",
+        fetch_method="get_ap_radios",
+        row_formatter=_ap_radio_rows,
+        sort_key="AP",  # stable sort keeps band order within each AP
     ),
     ResourceDefinition(
         name="dhcp_reservations",

@@ -16,6 +16,7 @@ OMADA_PASSWORD        → --password  (Authorization Code mode)
 OMADA_SITE_NAME       → --site-name
 OMADA_OUTPUT_DIR      → --output-dir
 OMADA_VERIFY_SSL      → --verify-ssl (set to 1/true/yes/on to enable)
+OMADA_INCLUDE_SECRETS → --include-secrets (export credentials in plaintext)
 OMADA_LOG_LEVEL       → --log-level  (DEBUG, INFO, WARNING, ERROR)
 OMADA_LOG_FILE        → --log-file   (path to log file; enables file logging)
 OMADA_LOG_FORMAT      → log format string (default: "%(levelname)s %(message)s")
@@ -253,6 +254,15 @@ def _build_client(
     show_default="$OMADA_OUTPUT_DIR (default: docs)",
     help="Directory where YAML and Markdown files will be written.",
 )
+@click.option(
+    "--include-secrets",
+    is_flag=True,
+    default=lambda: _env_bool("OMADA_INCLUDE_SECRETS"),
+    help=(
+        "Export credentials (Wi-Fi passphrases, RADIUS/VPN secrets, passwords, keys) "
+        "in plaintext instead of <redacted>. Off by default; treat the output as sensitive."
+    ),
+)
 def fetch(
     controller: str,
     port: int,
@@ -264,6 +274,7 @@ def fetch(
     site_name: str,
     verify_ssl: bool,
     output_dir: str,
+    include_secrets: bool,
 ) -> None:
     """Fetch network data from the controller and generate documentation."""
     api_client, site_id, resolved_site_name, controller_id, login_result = _build_client(
@@ -282,7 +293,14 @@ def fetch(
         site_id=site_id,
         output_dir=output_dir,
         site_name=resolved_site_name,
+        include_secrets=include_secrets,
     )
+    if include_secrets:
+        click.secho(
+            "WARNING: --include-secrets is set; credentials will be written in plaintext "
+            f"to {service.site_output_dir}.",
+            fg="yellow", err=True,
+        )
 
     paths = service.run()
 

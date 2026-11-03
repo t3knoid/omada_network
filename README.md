@@ -23,7 +23,13 @@ Supports both official Open API authentication modes:
 | VLANs | ✓ | ✓ |
 | Switch Port Profiles | ✓ | ✓ |
 | Gateway Settings | ✓ | ✓ |
-| SSIDs | ✓ | ✓ |
+| SSIDs (full settings and per-AP overrides) | ✓ | ✓ |
+| RADIUS Profiles | ✓ | ✓ |
+| Guest Portals | ✓ | ✓ |
+| Schedules (Time Range Profiles) | ✓ | ✓ |
+| Rate Limit Profiles | ✓ | ✓ |
+| Wireless Site Settings (band steering, roaming, mesh, multicast) | ✓ | ✓ |
+| AP Radio Settings | ✓ | ✓ |
 | DHCP Reservations | ✓ | ✓ |
 | DHCP Scopes (pools, DNS/domain, options, relay, guard) | ✓ | ✓ |
 | DHCP Leases | ✓ | ✓ |
@@ -71,6 +77,7 @@ omada_network/
 │   │       ├── doc_view.html      # Document viewer
 │   │       └── index.html         # Main configuration form
 │   ├── logging_config.py          # Logging configuration
+│   ├── redaction.py               # Credential redaction for exports
 │   ├── registry.py                # Resource registry (single place to add a resource)
 │   └── service.py                 # Orchestration service layer
 ├── tests/
@@ -78,6 +85,7 @@ omada_network/
 │   ├── test_exporters.py
 │   ├── test_logging_config.py
 │   ├── test_openapi_client.py
+│   ├── test_redaction.py
 │   ├── test_registry.py
 │   ├── test_service.py
 │   └── test_web.py
@@ -244,6 +252,7 @@ in [Generate Open API credentials](#generate-open-api-credentials).
 | Site name | `--site-name` | `OMADA_SITE_NAME` | |
 | Output directory | `--output-dir` | `OMADA_OUTPUT_DIR` | `docs` |
 | Verify SSL cert | `--verify-ssl` | `OMADA_VERIFY_SSL` | off |
+| Include secrets (plaintext) | `--include-secrets` | `OMADA_INCLUDE_SECRETS` | off |
 
 ```bash
 python cli.py fetch \
@@ -283,6 +292,7 @@ configuration requires user-level authorization.
 | Site name | `--site-name` | `OMADA_SITE_NAME` | |
 | Output directory | `--output-dir` | `OMADA_OUTPUT_DIR` | `docs` |
 | Verify SSL cert | `--verify-ssl` | `OMADA_VERIFY_SSL` | off |
+| Include secrets (plaintext) | `--include-secrets` | `OMADA_INCLUDE_SECRETS` | off |
 
 ```bash
 python cli.py fetch \
@@ -384,7 +394,17 @@ python cli.py fetch
 
 # Enable SSL verification (off by default)
 python cli.py fetch --verify-ssl ...
+
+# Include credentials in plaintext, e.g. for a restorable backup (off by default)
+python cli.py fetch --include-secrets ...
 ```
+
+> **`--include-secrets`** exports Wi-Fi passphrases, RADIUS / VPN shared
+> secrets, portal and VPN user passwords, WireGuard keys, PPPoE passwords and
+> other credentials as their real values instead of `<redacted>`, in both YAML
+> and Markdown. A warning is printed, and every Markdown file holding a
+> plaintext credential gets a warning banner below its title (also when
+> regenerated from YAML). Treat the output directory as sensitive.
 
 ### `generate` — regenerate Markdown from existing YAML (no API credentials)
 
@@ -417,6 +437,9 @@ python cli.py serve --host 0.0.0.0 --port 5000
 python cli.py serve
 # Open http://127.0.0.1:5000 in your browser
 ```
+
+The run form has an **Include secrets** checkbox (unchecked on every visit)
+that exports credentials in plaintext, as `--include-secrets` does on the CLI.
 
 The configuration form offers two authentication tabs:
 
@@ -499,11 +522,18 @@ written under `docs/<site_name>/`:
 > `.gitignore`.  Generated output is local to each environment — run
 > `python cli.py fetch` to populate it.
 
-> **Secrets are never exported.** VPN pre-shared keys, VPN user and client
-> passwords, SSL VPN user passwords, and WireGuard private / preshared keys are replaced with
-> `<redacted>` before anything is written. The YAML records only that a secret
-> is configured, and the Markdown shows `Configured` / `Not set`. Public keys,
-> usernames, and certificate file names are kept as authentication references.
+> **Secrets are not exported by default.** Every resource is passed through
+> `omada/redaction.py` before anything is written: any non-empty string whose
+> field name looks like a credential (password, pwd, secret, token, security
+> key, pre-shared key, private key) is replaced with `<redacted>`. This covers
+> Wi-Fi passphrases and per-AP override passwords, RADIUS shared secrets, guest
+> portal passwords, OAuth secrets and SMS tokens, VPN pre-shared keys and user /
+> client passwords, SSL VPN user passwords, WireGuard private / preshared keys,
+> and WAN credentials such as PPPoE passwords. The YAML records only that a
+> secret is configured, and the Markdown shows `Configured` / `Not set`. Public
+> keys, usernames, and account / certificate identifiers are kept as
+> authentication references. To export the real values (for a restorable
+> backup), pass `--include-secrets` or tick **Include secrets** in the web UI.
 
 ```text
 docs/
@@ -557,7 +587,19 @@ docs/
     ├── dhcp_scopes.yaml
     ├── dhcp_scopes.md
     ├── dhcp_leases.yaml
-    └── dhcp_leases.md
+    ├── dhcp_leases.md
+    ├── radius_profiles.yaml
+    ├── radius_profiles.md
+    ├── portals.yaml
+    ├── portals.md
+    ├── time_range_profiles.yaml
+    ├── time_range_profiles.md
+    ├── rate_limit_profiles.yaml
+    ├── rate_limit_profiles.md
+    ├── wireless_settings.yaml
+    ├── wireless_settings.md
+    ├── ap_radios.yaml
+    └── ap_radios.md
 ```
 
 ### Example – DHCP Reservations Markdown

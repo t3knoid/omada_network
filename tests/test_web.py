@@ -100,6 +100,36 @@ class TestRunRoute:
         assert resp.status_code == 200
         assert b"Success" in resp.data
 
+    @pytest.mark.parametrize(("checked", "expected"), [(False, False), (True, True)])
+    def test_run_include_secrets_checkbox(self, app_client, tmp_path: Path, checked: bool, expected: bool) -> None:
+        form_data = {
+            "controller": "192.168.1.1", "port": "8043", "client_id": "my-id",
+            "client_secret": "my-secret", "auth_mode": "client_credentials",
+        }
+        if checked:
+            form_data["include_secrets"] = "on"
+        mock_lr = MagicMock()
+        mock_lr.access_token = "AT-tok"
+        with (
+            patch("omada.web.app.OmadaService") as MockService,
+            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
+            patch("omada.api.openapi_client.openapi_login", return_value=mock_lr),
+            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+        ):
+            MockService.return_value.run.return_value = {"yaml": {}, "docs": {}}
+            resp = app_client.post("/run", data=form_data, follow_redirects=True)
+        assert MockService.call_args.kwargs["include_secrets"] is expected
+        assert (b"stored in plaintext" in resp.data) is expected
+        # The checkbox is never pre-checked on the next visit
+        html = app_client.get("/").get_data(as_text=True)
+        tag = html[html.index('id="include_secrets"') - 60: html.index('id="include_secrets"') + 120]
+        assert "checked" not in tag
+
+    def test_index_has_include_secrets_checkbox(self, app_client) -> None:
+        html = app_client.get("/").get_data(as_text=True)
+        assert 'name="include_secrets"' in html
+
     def test_run_auth_code_success(self, app_client, tmp_path: Path) -> None:
         form_data = {
             "controller": "192.168.1.1",
