@@ -178,3 +178,16 @@ Each SSID is enriched with the parent WLAN's `name` as `wlanName`.
 
 > **API docs:** Documented under the [Service](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Service) tag —
 > *Get DHCP Reservation List*.
+
+---
+
+### Devices
+
+Returns the adopted devices for the selected site.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GET` | `sites/{siteId}/devices` | Paginated |
+| `GET` | `sites/{siteId}/devices/{deviceMac}/ports` | Paginated; queried for each device with a MAC address |
+
+> **API docs:** See the [Device](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Device) tag.

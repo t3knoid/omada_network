@@ -359,11 +359,74 @@ def _dhcp_reservation_rows(data: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _device_ports_summary(ports: Any) -> str:
+    if not isinstance(ports, list):
+        return ""
+
+    summaries = []
+    fields = (
+        ("Status", ("status", "portStatus", "linkStatus")),
+        ("Speed", ("speed", "portSpeed", "linkSpeed")),
+        ("PoE", ("poeStatus", "poeEnable", "poe")),
+        ("VLAN", ("vlan", "vlanId")),
+        ("Profile", ("profileName",)),
+    )
+    for port in ports:
+        if not isinstance(port, dict):
+            summaries.append(_flatten(port))
+            continue
+
+        name = next(
+            (port[key] for key in ("name", "portName", "port", "portId") if port.get(key) is not None),
+            "",
+        )
+        details = []
+        for label, keys in fields:
+            value = next((port[key] for key in keys if port.get(key) is not None), "")
+            if value != "":
+                details.append(f"{label}: {_flatten(value)}")
+
+        if name != "":
+            summary = _flatten(name)
+            if details:
+                summary += f" ({', '.join(details)})"
+        else:
+            summary = ", ".join(details) or _flatten(port)
+        summaries.append(summary)
+
+    return "; ".join(summaries)
+
+
+def _device_rows(data: Any) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    return [
+        {
+            "Name": _flatten(d.get("name", d.get("deviceName", ""))),
+            "Type": _flatten(d.get("type", d.get("deviceType", ""))),
+            "Model": _flatten(d.get("model", "")),
+            "MAC Address": _flatten(d.get("mac", d.get("deviceMac", ""))),
+            "IP Address": _flatten(d.get("ip", d.get("ipAddress", ""))),
+            "Status": _flatten(d.get("status", "")),
+            "Firmware": _flatten(d.get("firmwareVersion", d.get("version", ""))),
+            "Ports": _device_ports_summary(d.get("ports", [])),
+        }
+        for d in items
+        if isinstance(d, dict)
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
 RESOURCES: list[ResourceDefinition] = [
+    ResourceDefinition(
+        name="devices",
+        title="Devices",
+        fetch_method="get_devices",
+        row_formatter=_device_rows,
+        sort_key="Name",
+    ),
     ResourceDefinition(
         name="acl_rules",
         title="ACL Rules",

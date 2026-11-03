@@ -527,6 +527,42 @@ class TestOpenApiResourceMethods:
         assert len(result) == 2
         assert result[0]["vlanId"] == 1
 
+    def test_get_devices(self, openapi_client: OmadaOpenApiClient) -> None:
+        devices = [{"name": "Switch 1", "mac": "AA-BB-CC-DD-EE-FF"}]
+        ports = [{"port": 1, "status": "Connected"}]
+        with patch.object(openapi_client, "_get_paged") as mock:
+            mock.side_effect = [devices, ports]
+            result = openapi_client.get_devices("site-001")
+
+        assert result[0]["ports"] == ports
+        assert mock.call_args_list[0].args == ("sites/site-001/devices",)
+        assert mock.call_args_list[1].args == (
+            "sites/site-001/devices/AA-BB-CC-DD-EE-FF/ports",
+        )
+
+    def test_get_devices_skips_port_lookup_without_mac(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        devices = [{"name": "Unknown device"}]
+        with patch.object(openapi_client, "_get_paged", return_value=devices) as mock:
+            result = openapi_client.get_devices("site-001")
+
+        assert result == devices
+        mock.assert_called_once_with("sites/site-001/devices")
+
+    def test_get_devices_continues_when_ports_are_unavailable(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        devices = [{"name": "Switch 1", "mac": "AA-BB-CC-DD-EE-FF"}]
+        with patch.object(openapi_client, "_get_paged") as mock:
+            mock.side_effect = [
+                devices,
+                OmadaAPIError(-1600, "Unsupported"),
+            ]
+            result = openapi_client.get_devices("site-001")
+
+        assert result == devices
+
     def test_get_switch_port_profiles(self, openapi_client: OmadaOpenApiClient) -> None:
         profiles = [{"name": "Default"}]
         with patch.object(openapi_client, "_get_paged") as mock:
@@ -620,6 +656,7 @@ class TestServiceWithOpenApiClient:
         mock_client.get_gateway_settings.return_value = {}
         mock_client.get_ssids.return_value = []
         mock_client.get_dhcp_reservations.return_value = []
+        mock_client.get_devices.return_value = []
 
         service = OmadaService(
             client=mock_client,

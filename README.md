@@ -25,6 +25,7 @@ Supports both official Open API authentication modes:
 | Gateway Settings | ✓ | ✓ |
 | SSIDs | ✓ | ✓ |
 | DHCP Reservations | ✓ | ✓ |
+| Devices | ✓ | ✓ |
 
 ---
 
@@ -486,24 +487,26 @@ written under `docs/<site_name>/`:
 ```text
 docs/
 └── My Office/
-  ├── acl_rules.yaml      ← Source of truth (YAML)
-  ├── acl_rules.md         ← Markdown documentation table
-  ├── ip_groups.yaml
-  ├── ip_groups.md
-  ├── port_groups.yaml
-  ├── port_groups.md
-  ├── networks.yaml
-  ├── networks.md
-  ├── vlans.yaml
-  ├── vlans.md
-  ├── switch_port_profiles.yaml
-  ├── switch_port_profiles.md
-  ├── gateway_settings.yaml
-  ├── gateway_settings.md
-  ├── ssids.yaml
-  ├── ssids.md
-  ├── dhcp_reservations.yaml
-  └── dhcp_reservations.md
+    ├── acl_rules.yaml      ← Source of truth (YAML)
+    ├── acl_rules.md         ← Markdown documentation table
+    ├── ip_groups.yaml
+    ├── ip_groups.md
+    ├── port_groups.yaml
+    ├── port_groups.md
+    ├── networks.yaml
+    ├── networks.md
+    ├── vlans.yaml
+    ├── vlans.md
+    ├── switch_port_profiles.yaml
+    ├── switch_port_profiles.md
+    ├── gateway_settings.yaml
+    ├── gateway_settings.md
+    ├── ssids.yaml
+    ├── ssids.md
+    ├── dhcp_reservations.yaml
+    ├── dhcp_reservations.md
+    ├── devices.yaml
+    └── devices.md
 ```
 
 ### Example – DHCP Reservations Markdown

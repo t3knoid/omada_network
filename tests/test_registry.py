@@ -12,10 +12,11 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_nine_resources_defined(self) -> None:
+    def test_all_ten_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
+            "devices",
             "ip_groups",
             "port_groups",
             "networks",
@@ -56,6 +57,36 @@ class TestRegistry:
 
 
 class TestRowFormatters:
+    def test_device_rows(self) -> None:
+        from omada.registry import _device_rows
+
+        rows = _device_rows([
+            {
+                "name": "Office AP",
+                "type": "ap",
+                "model": "EAP650",
+                "mac": "AA-BB-CC-DD-EE-FF",
+                "ip": "192.168.1.20",
+                "status": "Connected",
+                "firmwareVersion": "1.2.3",
+                "ports": [
+                    {"port": 1, "status": "Connected", "speed": "1000M"},
+                    {"port": 2, "status": "Disconnected"},
+                ],
+            },
+        ])
+
+        assert rows[0]["Name"] == "Office AP"
+        assert rows[0]["Type"] == "ap"
+        assert rows[0]["Model"] == "EAP650"
+        assert rows[0]["MAC Address"] == "AA-BB-CC-DD-EE-FF"
+        assert rows[0]["IP Address"] == "192.168.1.20"
+        assert rows[0]["Status"] == "Connected"
+        assert rows[0]["Firmware"] == "1.2.3"
+        assert rows[0]["Ports"] == (
+            "1 (Status: Connected, Speed: 1000M); 2 (Status: Disconnected)"
+        )
+
     def test_acl_rule_rows(self) -> None:
         from omada.registry import _acl_rule_rows
         rows = _acl_rule_rows([{"description": "rule1", "policy": 1, "status": True}])

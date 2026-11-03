@@ -25,7 +25,7 @@ import logging
 import warnings
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import requests
 import urllib3
@@ -534,6 +534,23 @@ class OmadaOpenApiClient:
     # ------------------------------------------------------------------
     # Public API methods
     # ------------------------------------------------------------------
+
+    def get_devices(self, site_id: str) -> list[dict[str, Any]]:
+        """Return site devices, including port data when available."""
+        devices = self._get_paged(f"sites/{site_id}/devices")
+        for device in devices:
+            device_mac = device.get("mac", device.get("deviceMac", ""))
+            if not device_mac:
+                continue
+            try:
+                device["ports"] = self._get_paged(
+                    f"sites/{site_id}/devices/{quote(str(device_mac), safe='')}/ports",
+                )
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.debug(
+                    "Device ports unavailable for %s: %s", device_mac, exc,
+                )
+        return devices
 
     def get_acl_rules(self, site_id: str) -> list[dict[str, Any]]:
         """Return all ACL rules (gateway + switch) for the given site."""
