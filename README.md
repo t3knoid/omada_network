@@ -7,61 +7,99 @@ A Python application that uses the **Omada Open API** (Northbound API) to
 extract network configuration data into YAML files (source of truth) and
 generate Markdown documentation tables.
 
-Supports both official Open API authentication modes:
+Use it to document a site, review changes over time (the YAML diffs cleanly),
+or keep a reference copy of the configuration before migrating or replacing
+hardware. It is **read-only**: nothing on the controller is changed.
+
+It can be run from a **CLI** (suited to scripts and CI) or a **web UI**. It
+supports both official Open API authentication modes:
 
 - **Client Credentials Mode** — direct token exchange with Client ID + Secret
 - **Authorization Code Mode** — three-step flow with user credentials
 
 ## Features
 
-| Resource | YAML | Markdown |
+The tool exports **39 resource types**. Each one is written to `docs/<site>/<resource>.yaml`, which holds the raw API data and is the source of truth, and `docs/<site>/<resource>.md`, which holds formatted tables (a summary table, and for many resources one detail section per item). IDs are resolved to names and numeric codes to labels. Credentials are redacted unless you ask for them (see [Secrets](#secrets)). For the API endpoints behind each resource, see the [API reference](api_reference.md#resource-index).
+
+### Devices & switching
+
+| Resource | File | Contents |
 | --- | --- | --- |
-| ACL Rules | ✓ | ✓ |
-| IP Groups | ✓ | ✓ |
-| Port Groups | ✓ | ✓ |
-| Networks | ✓ | ✓ |
-| VLANs | ✓ | ✓ |
-| Switch Port Profiles | ✓ | ✓ |
-| Gateway Settings | ✓ | ✓ |
-| SSIDs (full settings and per-AP overrides) | ✓ | ✓ |
-| RADIUS Profiles | ✓ | ✓ |
-| Guest Portals | ✓ | ✓ |
-| Schedules (Time Range Profiles) | ✓ | ✓ |
-| Rate Limit Profiles | ✓ | ✓ |
-| Wireless Site Settings (band steering, roaming, mesh, multicast) | ✓ | ✓ |
-| AP Radio Settings | ✓ | ✓ |
-| WAN Failover & Load Balancing (with WAN health snapshot) | ✓ | ✓ |
-| DNS (proxy / DoH / DoT, cache, LAN DNS records, Dynamic DNS) | ✓ | ✓ |
-| Time & NTP | ✓ | ✓ |
-| Multicast, Bonjour (mDNS) & UPnP | ✓ | ✓ |
-| Link Aggregation (LAGs, M-LAG) | ✓ | ✓ |
-| Switch Settings (management VLAN, jumbo, STP / loop prevention, IGMP snooping) | ✓ | ✓ |
-| Per-port overrides vs. profile (in Device Ports) | ✓ | ✓ |
-| PoE & Port Schedules | ✓ | ✓ |
-| Uplinks & Stacks (with model remapping checklist) | ✓ | ✓ |
-| DHCP Reservations | ✓ | ✓ |
-| DHCP Scopes (pools, DNS/domain, options, relay, guard) | ✓ | ✓ |
-| DHCP Leases | ✓ | ✓ |
-| Devices | ✓ | ✓ |
-| Device Ports (switches & gateways) | ✓ | ✓ |
-| Port Forwarding | ✓ | ✓ |
-| One-to-One NAT | ✓ | ✓ |
-| ALG | ✓ | ✓ |
-| Static Routes (gateway & switches) | ✓ | ✓ |
-| Policy Routes | ✓ | ✓ |
-| Site-to-Site VPNs (IPsec) | ✓ | ✓ |
-| Remote-Access VPNs (L2TP / PPTP / IPsec / OpenVPN) | ✓ | ✓ |
-| WireGuard VPN (interfaces & peers) | ✓ | ✓ |
-| VPN Users | ✓ | ✓ |
-| SSL VPN Server (settings, user groups, users, resources) | ✓ | ✓ |
-| EoGRE Tunnel | ✓ | ✓ |
-| IPsec Failover | ✓ | ✓ |
+| Devices | `devices` | Adopted devices: type, model, MAC, IP, status, firmware |
+| Device Ports | `device_ports` | Every switch and gateway port: label, connection, type, operation, profile, native network, plus **per-port overrides** that differ from the assigned profile |
+| PoE & Port Schedules | `port_schedules` | PoE and port on/off schedules and the switch ports they cover |
+| Switch Port Profiles | `switch_port_profiles` | Summary table plus every property of each profile (VLANs, PoE, 802.1X, QoS, storm control, STP, …) |
+| Link Aggregation (LAGs) | `lags` | LAG groups: static vs. LACP, member ports, link state, M-LAG groups, hash algorithm |
+| Switch Settings | `switch_settings` | Management VLAN, jumbo frames, STP / loopback-detection coverage, IGMP snooping, LLDP, VLAN interfaces, RPVST |
+| Uplinks & Stacks | `uplinks` | Uplink and downlink ports, stack members and stack ports, and a **remapping checklist** for model changes |
+
+### LAN & addressing
+
+| Resource | File | Contents |
+| --- | --- | --- |
+| Networks | `networks` | LAN networks |
+| VLANs | `vlans` | VLANs |
+| DHCP Scopes | `dhcp_scopes` | DHCP service per network: server or relay, pools, lease time, DNS / domain, options, guard |
+| DHCP Reservations | `dhcp_reservations` | Static reservations with descriptions and per-reservation options |
+| DHCP Leases | `dhcp_leases` | Current leases across all DHCP servers (runtime snapshot) |
+
+### Security groups & ACLs
+
+| Resource | File | Contents |
+| --- | --- | --- |
+| IP Groups | `ip_groups` | IP groups |
+| Port Groups | `port_groups` | IP-port groups |
+| ACL Rules | `acl_rules` | Gateway, switch, and EAP ACLs with network and group names resolved |
+
+### Gateway, WAN & routing
+
+| Resource | File | Contents |
+| --- | --- | --- |
+| Gateway Settings | `gateway_settings` | WAN port configuration |
+| WAN Failover & Load Balancing | `wan_failover` | Load balancing weights, link backup / failover rules, health-check interval, WAN health snapshot |
+| Port Forwarding | `port_forwarding` | Port forwarding rules |
+| One-to-One NAT | `one_to_one_nat` | One-to-one NAT rules |
+| ALG | `alg` | Application Layer Gateway settings |
+| Static Routes | `static_routes` | Gateway and switch static routes: destinations, next hop, interface, metric / distance |
+| Policy Routes | `policy_routes` | Policy routes in evaluation order with WAN binding and backup interface |
+
+### Site services
+
+| Resource | File | Contents |
+| --- | --- | --- |
+| DNS | `dns_settings` | DNS proxy (DNSSEC / DoH / DoT / override), DNS cache, local DNS records, Dynamic DNS |
+| Time & NTP | `time_settings` | Time zone, NTP servers, daylight saving time |
+| Multicast, Bonjour & UPnP | `multicast_services` | IGMP / MLD proxy, IPTV, UPnP, Bonjour (mDNS) rules and profiles, multicast snooping |
+
+### Wireless
+
+| Resource | File | Contents |
+| --- | --- | --- |
+| SSIDs | `ssids` | Full SSID settings (security, RADIUS, VLAN, rate limits, schedule, band steering, …) and per-AP overrides |
+| RADIUS Profiles | `radius_profiles` | RADIUS authentication / accounting servers |
+| Guest Portals | `portals` | Guest portals: authentication method, bound SSIDs, timeouts, landing page |
+| Schedules (Time Range Profiles) | `time_range_profiles` | Schedules (time ranges) referenced by SSIDs, PoE, and failover |
+| Rate Limit Profiles | `rate_limit_profiles` | Client rate limit profiles |
+| Wireless Site Settings | `wireless_settings` | Site band steering, roaming, mesh, multicast rate limit |
+| AP Radio Settings | `ap_radios` | Per-AP radio settings: channel, width, Tx power, wireless mode |
+
+### VPN
+
+| Resource | File | Contents |
+| --- | --- | --- |
+| Site-to-Site VPNs | `site_to_site_vpns` | IPsec tunnels: peers, subnets, IKE / IPsec proposals, authentication |
+| Remote-Access VPNs | `remote_access_vpns` | L2TP / PPTP / IPsec / OpenVPN servers and clients |
+| WireGuard VPN | `wireguard` | WireGuard interfaces and peers |
+| VPN Users | `vpn_users` | VPN user accounts referenced by the servers |
+| SSL VPN Server | `ssl_vpn` | SSL VPN server settings, user groups, users, resources |
+| EoGRE Tunnel | `eogre_tunnel` | EoGRE tunnel settings |
+| IPsec Failover | `ipsec_failover` | IPsec failover groups |
 
 ---
 
 ## Web Front End
 
-![Web UI](image.png)
+![Web UI: controller configuration form, generated documents list, and regenerate panel](image.png)
 
 ---
 
@@ -90,7 +128,7 @@ omada_network/
 │   ├── registry.py                # Resource registry (single place to add a resource)
 │   └── service.py                 # Orchestration service layer
 ├── tests/
-│   ├── conftest.py               # Blocks real network access during tests
+│   ├── conftest.py                # Blocks real network access during tests
 │   ├── test_cli.py
 │   ├── test_exporters.py
 │   ├── test_logging_config.py
@@ -99,9 +137,13 @@ omada_network/
 │   ├── test_registry.py
 │   ├── test_service.py
 │   └── test_web.py
-├── api_reference.md               # API reference documentation
+├── .dockerignore
+├── ARCHITECTURE.md                # System design and extensibility guide
+├── TESTS.md                       # Test suite inventory
+├── api_reference.md               # Endpoints and output details per resource
 ├── cli.py                         # Click CLI entry-point
 ├── Dockerfile                     # Docker container definition
+├── image.png                      # Web UI screenshot (this README)
 ├── pyproject.toml
 ├── requirements.txt
 ├── requirements-dev.txt
@@ -439,6 +481,33 @@ python cli.py serve --host 0.0.0.0 --port 5000
 # Open http://127.0.0.1:5000 in your browser
 ```
 
+| Option | Default | Description |
+| --- | --- | --- |
+| `--host` | `127.0.0.1` | Address to bind |
+| `--port` | `5000` | Port to listen on |
+| `--output-dir` | `$OMADA_OUTPUT_DIR` or `docs` | Where generated files are written and listed |
+| `--debug` | off | Flask debug mode (local development only) |
+
+### `diagnose` — check what each endpoint returns
+
+```bash
+python cli.py diagnose --controller 192.168.1.1 \
+  --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET
+```
+
+Authenticates like `fetch` and calls every resource's fetcher. For each
+resource it prints the record count and the field names of the first record,
+or the error. It never prints field values. Use it when an export comes out
+empty or a field you expect is missing. It accepts the same connection
+options as `fetch`.
+
+### Global options
+
+`--log-level` (`debug`, `info`, `warning`, `error`), `-v` / `--verbose`
+(same as `--log-level debug`) and `--log-file` go **before** the
+subcommand, e.g. `python cli.py -v fetch …`. Running `python cli.py` with no
+subcommand runs `fetch` using the `OMADA_*` environment variables.
+
 ---
 
 ## Web UI
@@ -447,9 +516,6 @@ python cli.py serve --host 0.0.0.0 --port 5000
 python cli.py serve
 # Open http://127.0.0.1:5000 in your browser
 ```
-
-The run form has an **Include secrets** checkbox (unchecked on every visit)
-that exports credentials in plaintext, as `--include-secrets` does on the CLI.
 
 The configuration form offers two authentication tabs:
 
@@ -466,14 +532,29 @@ The configuration form offers two authentication tabs:
 > intentional — set `OMADA_VERIFY_SSL=true` or pass `--verify-ssl` in the CLI
 > if your controller has a valid (non-self-signed) certificate.
 
-Fill in the configuration form and click **⚡ Fetch & Generate Documentation** to
-pull data from the controller and create YAML + Markdown files.
+Below the tabs:
 
-To regenerate the Markdown tables from existing YAML files without connecting
-to the controller, click **🔄 Regenerate Markdown from YAML**.
+- **Verify SSL certificate**: checked by default (see the note above).
+- **Include secrets**: unchecked on every visit. When ticked, credentials are
+  exported in plaintext, as with `--include-secrets` on the CLI, and a warning
+  is shown after the run. See [Secrets](#secrets).
 
-Generated Markdown files appear in the **Generated Documents** panel and can
-be viewed directly in the browser.
+Click **⚡ Fetch & Generate Documentation** to pull data from the controller
+and create the YAML + Markdown files. Non-secret form values (controller,
+port, IDs, site name) are remembered in the session. Passwords and secrets
+are never stored.
+
+The **Generated Documents** panel lists every Markdown file under the output
+directory as `Site/file.md`:
+
+- **View** renders the file in the browser, with navigation between documents.
+- **⬇** downloads that file.
+- Tick several files and click **⬇ Download Selected** to get them as a ZIP
+  archive (`omada_docs.zip`). A single ticked file downloads as-is.
+
+**🔄 Regenerate Markdown from YAML** rebuilds the Markdown from the existing
+YAML files without connecting to the controller. It uses the site from the
+last fetch, or the site name in the form.
 
 ### Persistent sessions (`FLASK_SECRET_KEY`)
 
@@ -532,6 +613,8 @@ written under `docs/<site_name>/`:
 > `.gitignore`.  Generated output is local to each environment — run
 > `python cli.py fetch` to populate it.
 
+### Secrets
+
 > **Secrets are not exported by default.** Every resource is passed through
 > `omada/redaction.py` before anything is written: any non-empty string whose
 > field name looks like a credential (password, pwd, secret, token, security
@@ -547,96 +630,32 @@ written under `docs/<site_name>/`:
 
 ```text
 docs/
-└── My Office/
-    ├── acl_rules.yaml      ← Source of truth (YAML)
-    ├── acl_rules.md         ← Markdown documentation table
-    ├── ip_groups.yaml
-    ├── ip_groups.md
-    ├── port_groups.yaml
-    ├── port_groups.md
-    ├── networks.yaml
-    ├── networks.md
-    ├── vlans.yaml
-    ├── vlans.md
-    ├── switch_port_profiles.yaml
-    ├── switch_port_profiles.md
-    ├── gateway_settings.yaml
-    ├── gateway_settings.md
-    ├── ssids.yaml
-    ├── ssids.md
-    ├── dhcp_reservations.yaml
-    ├── dhcp_reservations.md
+└── My Office/                ← one directory per site
+    ├── acl_rules.yaml        ← source of truth (raw API data)
+    ├── acl_rules.md          ← Markdown tables generated from it
     ├── devices.yaml
     ├── devices.md
-    ├── device_ports.yaml
-    ├── device_ports.md
-    ├── port_forwarding.yaml
-    ├── port_forwarding.md
-    ├── one_to_one_nat.yaml
-    ├── one_to_one_nat.md
-    ├── alg.yaml
-    ├── alg.md
-    ├── static_routes.yaml
-    ├── static_routes.md
-    ├── policy_routes.yaml
-    ├── policy_routes.md
-    ├── site_to_site_vpns.yaml
-    ├── site_to_site_vpns.md
-    ├── remote_access_vpns.yaml
-    ├── remote_access_vpns.md
-    ├── wireguard.yaml
-    ├── wireguard.md
-    ├── vpn_users.yaml
-    ├── vpn_users.md
-    ├── ssl_vpn.yaml
-    ├── ssl_vpn.md
-    ├── eogre_tunnel.yaml
-    ├── eogre_tunnel.md
-    ├── ipsec_failover.yaml
-    ├── ipsec_failover.md
-    ├── dhcp_scopes.yaml
-    ├── dhcp_scopes.md
-    ├── dhcp_leases.yaml
-    ├── dhcp_leases.md
-    ├── radius_profiles.yaml
-    ├── radius_profiles.md
-    ├── portals.yaml
-    ├── portals.md
-    ├── time_range_profiles.yaml
-    ├── time_range_profiles.md
-    ├── rate_limit_profiles.yaml
-    ├── rate_limit_profiles.md
-    ├── wireless_settings.yaml
-    ├── wireless_settings.md
-    ├── ap_radios.yaml
-    ├── ap_radios.md
-    ├── wan_failover.yaml
-    ├── wan_failover.md
-    ├── dns_settings.yaml
-    ├── dns_settings.md
-    ├── time_settings.yaml
-    ├── time_settings.md
-    ├── multicast_services.yaml
-    ├── multicast_services.md
-    ├── lags.yaml
-    ├── lags.md
-    ├── switch_settings.yaml
-    ├── switch_settings.md
-    ├── port_schedules.yaml
-    ├── port_schedules.md
-    ├── uplinks.yaml
-    └── uplinks.md
+    └── …                     ← one .yaml / .md pair per resource (see Features)
 ```
+
+`generate` (or **Regenerate** in the web UI) rebuilds every `.md` from the
+`.yaml` files, so you can edit or version the YAML and regenerate the docs
+offline.
 
 ### Example – DHCP Reservations Markdown
 
 ```markdown
 # DHCP Reservations
 
-| Network | IP Address | MAC Address | Name | Status | Server |
-| --- | --- | --- | --- | --- | --- |
-| LAN | 192.168.1.50 | AA-BB-CC-DD-EE-FF | printer | Enabled | Gateway |
+| Network | IP Address | MAC Address | Name | Description | Options | Status | Server |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| LAN | 192.168.1.50 | AA-BB-CC-DD-EE-FF | printer | Office printer |  | Enabled | Gateway |
+| LAN | 192.168.1.120 | 11-22-33-44-55-66 | nas |  | Option 66: 192.168.1.10 | Enabled | Gateway |
 ```
+
+Resources with more settings than fit in one table, such as port profiles,
+SSIDs, DHCP scopes, VPN tunnels and switch settings, add a detail section per
+item below the summary table (Category / Setting / Value).
 
 ---
 
@@ -652,13 +671,27 @@ python -m pytest tests/ -v
 # Run a specific test module
 python -m pytest tests/test_openapi_client.py -v
 
-# Lint
+# Lint (CI fails only on syntax errors / undefined names; style is reported)
+flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
 flake8 . --max-line-length=120
 
 # Build package
 pip install build
 python -m build
 ```
+
+Tests never touch the network: `tests/conftest.py` blocks real HTTP traffic,
+so every API call must be mocked. See [TESTS.md](TESTS.md) for the full test
+inventory.
+
+### Adding a resource
+
+Add a `get_*` method to `omada/api/openapi_client.py` and a
+`ResourceDefinition` (with its row formatter) to `omada/registry.py`. The CLI,
+web UI, YAML export, Markdown generation and `diagnose` all pick it up from the
+registry. Add the mock return value to the service fixtures in
+`tests/test_service.py` and `tests/test_openapi_client.py`, and document it
+in `api_reference.md`. See [ARCHITECTURE.md](ARCHITECTURE.md#extensibility).
 
 ### CI/CD
 
@@ -677,7 +710,7 @@ This project uses GitHub Actions for continuous integration and deployment.
 - Tags must use the format `vN.N.N` (e.g. `v1.0.0`, `v0.0.1`). Invalid
   formats will cause the workflow to fail with a clear error message.
 - When using manual dispatch, the tag must already exist in the repository.
-- Builds and packages the project (sdist + wheel).
+- Lints and runs the test suite, then builds and packages the project (sdist + wheel).
 - Creates a GitHub Release with the built artifacts.
 - Optionally publishes to PyPI when a `PYPI_API_TOKEN` secret is configured
   in a `pypi` environment.

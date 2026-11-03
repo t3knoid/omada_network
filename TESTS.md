@@ -28,12 +28,13 @@ python -m pytest tests/ -v
 - `@pytest.mark.parametrize` — Drives data-driven tests, such as validating truthy/falsy environment variable strings and invalid port values.
 - `pytest.raises` — Asserts that specific exceptions are raised (e.g. `OmadaAPIError`, `RuntimeError`, `click.UsageError`).
 - `autouse=True` fixtures — Automatically reset shared state (e.g. the root logger) before each test in `test_logging_config.py`.
+- `conftest.py` — an autouse fixture blocks real network access for every test, so an unstubbed HTTP call fails immediately instead of waiting for a timeout.
 
 **unittest.mock**
 
 - `MagicMock` — Creates mock objects for the API client, service layer, HTTP sessions, and responses. `spec=` is used to constrain mocks to real interfaces (e.g. `requests.Response`, `requests.Session`).
 - `patch` — Context manager that temporarily replaces module-level objects (e.g. `openapi_login`, `OmadaService`, `Flask.run`) with mocks so tests run without network access or a live controller.
-- `patch.object` — Patches individual methods on an existing instance (e.g. `openapi_client._session.get`) for fine-grained request simulation.
+- `patch.object` — Patches individual methods on an existing instance (e.g. `openapi_client._session.get`, `_get`, `_get_paged`, `_post`) for fine-grained request simulation. Multi-endpoint resources are usually tested with a `side_effect` that maps each request path to its response.
 - `side_effect` — Configures mocks to return different values on successive calls or raise exceptions, enabling multi-page pagination tests and fallback-path coverage.
 
 **click.testing**
@@ -80,6 +81,7 @@ CLI interface tests.
 | | `test_generate_separate_output_dir` | Writes Markdown to a different output directory |
 | | `test_generate_empty_dir_exits_nonzero` | Exits non-zero when no YAML files are found |
 | | `test_generate_reads_env_var` | Reads `OMADA_OUTPUT_DIR` from environment |
+| | `test_generate_site_specific_directory` | `--site-name` reads YAML from and writes Markdown to the site subdirectory |
 | `TestServeCommand` | `test_serve_starts_flask` | Starts the Flask development server |
 | `TestPasswordPromptBehaviour` | `test_client_credentials_no_password_prompt` | Client Credentials mode does not prompt for a password |
 | | `test_password_prompt_when_username_provided_tty` | Prompts for password interactively when `--username` is set |
@@ -170,6 +172,7 @@ Omada Open API client tests.
 | | `test_multiple_sites_no_name` | Raises error when multiple sites exist and no name given |
 | | `test_no_sites` | Raises error when no sites are found |
 | | `test_result_as_list` | Handles result returned as a list instead of `{data: [...]}` |
+| | `test_site_discovery_returns_id_and_name` | `openapi_discover_site` returns both the site ID and its display name |
 | `TestOpenApiClientUrl` | `test_api_url_v1` | Builds correct v1 API URL |
 | | `test_api_url_v2` | Builds correct v2 API URL |
 | | `test_api_url_strips_leading_slash` | Strips leading slash from path |
@@ -236,6 +239,15 @@ Omada Open API client tests.
 | | `test_get_dhcp_scopes_extracts_dhcp_fields_and_pool_status` | Extracts DHCP fields per network and adds pool usage for serving networks |
 | | `test_get_dhcp_scopes_tolerates_pool_status_failure` | Pool-usage lookup failure does not fail the export |
 | | `test_get_dhcp_leases` | Fetches DHCP leases across all servers |
+| | `test_get_devices` | Fetches the site device list |
+| | `test_get_device_ports_switch_uses_overview` | Switch ports come from the site-wide port overview, sorted, tagged with device name / MAC / type / model |
+| | `test_get_device_ports_switch_falls_back_when_overview_fails` | Falls back to the per-switch `portList` when the overview is unavailable |
+| | `test_get_device_ports_gateway_merges_sources` | Gateway ports merge `portConfigs`, `osgPortInfos`, and WAN status (`portStatus`) by port number |
+| | `test_get_device_ports_gateway_partial_failure` | Gateway ports still export when some gateway endpoints fail |
+| | `test_get_device_ports_gateway_all_sources_fail` | Gateway with every port endpoint failing is skipped with a warning |
+| | `test_get_device_ports_skips_aps_and_missing_mac` | Access points and devices without a MAC are skipped |
+| | `test_get_device_ports_skips_overview_without_switches` | No port-overview call when the site has no switches |
+| | `test_get_device_ports_continues_when_device_fails` | A failing switch is logged and the remaining devices still export |
 | `TestServiceWithOpenApiClient` | `test_service_accepts_injected_client` | Service uses injected client |
 | | `test_service_fetch_all_uses_injected_client` | `fetch_all` calls injected client methods |
 
@@ -317,6 +329,7 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_device_port_rows_gateway_er605` | Formats ER605 gateway port rows (WAN / WAN-LAN / LAN type, mode, PVID native network) |
 | | `test_switch_port_profile_rows_resolves_tagged_networks` | Resolves tagged network IDs to names |
 | | `test_switch_port_profile_rows_no_context_shows_raw_ids` | Shows raw IDs without context |
+| | `test_device_rows` | Formats device rows (name, type, model, MAC, IP, status, firmware); no ports column |
 | `TestGenerateFromYaml` | `test_generates_markdown_from_yaml_files` | Generates Markdown from YAML files |
 | | `test_separate_input_output_dirs` | Supports separate input/output directories |
 | | `test_empty_dir_returns_empty_dict` | Returns empty dict for empty directory |
@@ -370,6 +383,7 @@ Flask web application tests.
 | | `test_index_contains_form` | Index page contains the configuration form |
 | | `test_index_contains_csrf_token_field` | Form includes a CSRF token field |
 | | `test_index_contains_auth_mode_tabs` | Form shows both authentication mode tabs |
+| | `test_index_lists_nested_markdown_paths` | Lists Markdown files in site subdirectories as `Site/file.md` |
 | `TestRunRoute` | `test_run_missing_client_creds_flashes_error` | Flashes error when client credentials are missing |
 | | `test_run_client_credentials_success` | Client Credentials mode succeeds end-to-end |
 | | `test_run_include_secrets_checkbox` | Checkbox reaches the service and flashes a warning; never pre-checked afterwards |
@@ -383,12 +397,15 @@ Flask web application tests.
 | | `test_regenerate_with_yaml_files` | Regenerates Markdown from existing YAML |
 | | `test_regenerate_missing_output_dir_flashes_warning` | Warns when output directory doesn't exist |
 | | `test_regenerate_csrf_enforced_outside_testing` | CSRF protection is enforced outside test mode |
+| | `test_regenerate_uses_resolved_site_directory` | Regenerates from the site subdirectory of the last fetch (resolved site name) |
 | `TestDocViewPathTraversal` | `test_path_traversal_is_blocked` | Blocks path traversal attempts |
 | | `test_view_existing_doc` | Renders an existing Markdown document |
 | | `test_view_missing_doc_redirects` | Redirects with warning for missing documents |
+| | `test_view_nested_doc` | Renders a Markdown file inside a site subdirectory |
 | `TestDownloadDoc` | `test_download_single_file` | Downloads a single file as attachment |
 | | `test_download_missing_file_redirects` | Redirects with warning for missing files |
 | | `test_download_path_traversal_blocked` | Blocks path traversal in download routes |
+| | `test_download_nested_doc_uses_basename` | Downloading `Site/file.md` sends the file with its base name as the attachment name |
 | `TestDownloadSelected` | `test_no_files_selected_flashes_warning` | Warns when no files are selected |
 | | `test_download_single_selected_file` | Downloads a single selected file |
 | | `test_download_multiple_files_as_zip` | Downloads multiple files as a ZIP archive |
