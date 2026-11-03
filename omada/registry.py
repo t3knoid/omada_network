@@ -519,6 +519,121 @@ def _gateway_rows(data: Any) -> list[dict[str, Any]]:
     return rows
 
 
+_NAT_PROTOCOL_MAP: dict[int, str] = {0: "All", 1: "TCP", 2: "UDP"}
+
+
+def _wan_port_names(context: dict[str, Any] | None) -> dict[str, str]:
+    """Map WAN port IDs (``1_<uuid>``) to port names from ``gateway_settings``."""
+    names: dict[str, str] = {}
+    settings = (context or {}).get("gateway_settings")
+    for item in settings if isinstance(settings, list) else [settings]:
+        if not isinstance(item, dict):
+            continue
+        for wan in item.get("wanPortsConfig") or []:
+            if isinstance(wan, dict) and wan.get("portId"):
+                names[str(wan["portId"])] = str(wan.get("portName") or wan["portId"])
+    return names
+
+
+def _nat_interfaces(ids: Any, wan_names: dict[str, str]) -> str:
+    if not ids:
+        return ""
+    return ", ".join(wan_names.get(str(i), str(i)) for i in (ids if isinstance(ids, list) else [ids]))
+
+
+def _port_forwarding_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    wan_names = _wan_port_names(context)
+    rows = []
+    for r in items:
+        if not isinstance(r, dict):
+            continue
+        interfaces = [_nat_interfaces(r.get("interfaceWanPortId"), wan_names)]
+        if r.get("virtualWanId"):
+            interfaces.append("Virtual WAN " + _nat_interfaces(r["virtualWanId"], {}))
+        wan_ips = [
+            f"{w.get('ip', '')} ({wan_names.get(str(w.get('wanId', '')), w.get('wanId', ''))})"
+            if w.get("wanId") else str(w.get("ip", ""))
+            for w in r.get("wanIps") or [] if isinstance(w, dict)
+        ]
+        if wan_ips:
+            interfaces.append("WAN IP " + ", ".join(wan_ips))
+        if r.get("from") == 1:
+            source = ", ".join(str(a) for a in r.get("limitedAddresses") or []) or "Limited"
+        else:
+            source = "Any"
+        rows.append({
+            "Name": r.get("name", ""),
+            "Status": _enabled(r.get("status")),
+            "Interface": "; ".join(i for i in interfaces if i),
+            "Source IP": source,
+            "External Port": _flatten(r.get("externalPort", "")),
+            "Forward IP": _flatten(r.get("forwardIp", "")),
+            "Forward Port": _flatten(r.get("forwardPort", "")),
+            "Protocol": _profile_code(r.get("protocol", ""), _NAT_PROTOCOL_MAP),
+            "DMZ": _enabled(r.get("dMZ", r.get("dmz"))),
+        })
+    return rows
+
+
+def _one_to_one_nat_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    wan_names = _wan_port_names(context)
+    return [
+        {
+            "Name": r.get("name", ""),
+            "Status": _enabled(r.get("status")),
+            "Interface": _nat_interfaces(r.get("interfaceIds"), wan_names),
+            "Internal IP": _flatten(r.get("internalIp", "")),
+            "External IP": _flatten(r.get("externalIp", "")),
+            "DMZ": _enabled(r.get("dmz")),
+            "Description": _flatten(r.get("description", "")),
+        }
+        for r in items
+        if isinstance(r, dict)
+    ]
+
+
+def _alg_rows(data: Any) -> list[dict[str, Any]]:
+    """ALG settings as Setting / Value rows (the API returns one object)."""
+    if not isinstance(data, dict) or not data:
+        return []
+    rows: list[tuple[str, str]] = []
+
+    def ports(key: str) -> str:
+        return ", ".join(str(p) for p in data.get(key) or [])
+
+    if "ftp" in data:
+        rows.append(("FTP ALG", _enabled(data["ftp"])))
+        if data["ftp"] and data.get("ftpPorts"):
+            rows.append(("FTP Ports", ports("ftpPorts")))
+    for key, label in (("h323", "H.323 ALG"), ("pptp", "PPTP ALG"), ("ipSec", "IPSec ALG")):
+        if key in data:
+            rows.append((label, _enabled(data[key])))
+    if "sip" in data:
+        rows.append(("SIP ALG", _enabled(data["sip"])))
+        if data["sip"]:
+            for key, label in (
+                ("sipTcp", "SIP over TCP"),
+                ("sipUdp", "SIP over UDP"),
+                ("sipDirectSignaling", "SIP Direct Signaling"),
+                ("sipDirectMedia", "SIP Direct Media"),
+                ("sipTimeout", "SIP Timeout"),
+            ):
+                if key in data:
+                    rows.append((label, _enabled(data[key])))
+            if data.get("sipPorts"):
+                rows.append(("SIP Ports", ports("sipPorts")))
+            if data.get("sipTimeout"):
+                for key, label in (
+                    ("sipSignalingTimeout", "SIP Signaling Timeout"),
+                    ("sipMediaTimeout", "SIP Media Timeout"),
+                ):
+                    if data.get(key) is not None:
+                        rows.append((label, f"{data[key]} s"))
+    return [{"Setting": setting, "Value": value} for setting, value in rows]
+
+
 # Band bits: 1=2.4GHz, 2=5GHz, 4=6GHz  (7=all, 3=2.4+5, etc.)
 _BAND_MAP: dict[int, str] = {
     1: "2.4 GHz",
@@ -794,6 +909,29 @@ RESOURCES: list[ResourceDefinition] = [
         fetch_method="get_dhcp_reservations",
         row_formatter=_dhcp_reservation_rows,
         sort_key="Hostname",
+    ),
+    ResourceDefinition(
+        name="port_forwarding",
+        title="Port Forwarding",
+        fetch_method="get_port_forwarding",
+        row_formatter=_port_forwarding_rows,
+        sort_key="Name",
+        needs_context=True,
+    ),
+    ResourceDefinition(
+        name="one_to_one_nat",
+        title="One-to-One NAT",
+        fetch_method="get_one_to_one_nat",
+        row_formatter=_one_to_one_nat_rows,
+        sort_key="Name",
+        needs_context=True,
+    ),
+    ResourceDefinition(
+        name="alg",
+        title="ALG",
+        fetch_method="get_alg_settings",
+        row_formatter=_alg_rows,
+        sort_key="",  # keep the logical setting order
     ),
 ]
 

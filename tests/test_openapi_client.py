@@ -756,6 +756,31 @@ class TestOpenApiResourceMethods:
             result = openapi_client.get_ssids("site-001")
         assert result == []
 
+    def test_get_port_forwarding(self, openapi_client: OmadaOpenApiClient) -> None:
+        rules = [{"name": "NAS", "externalPort": "443", "forwardIp": "192.168.2.50"}]
+        with patch.object(openapi_client, "_get_paged", return_value=rules) as mock:
+            result = openapi_client.get_port_forwarding("site-001")
+        assert result == rules
+        mock.assert_called_once_with("sites/site-001/nat/port-forwardings")
+
+    def test_get_one_to_one_nat(self, openapi_client: OmadaOpenApiClient) -> None:
+        rules = [{"name": "Server", "internalIp": "192.168.2.10", "externalIp": "1.2.3.4"}]
+        with patch.object(openapi_client, "_get_paged", return_value=rules) as mock:
+            result = openapi_client.get_one_to_one_nat("site-001")
+        assert result == rules
+        mock.assert_called_once_with("sites/site-001/nat/one-to-one-nat")
+
+    def test_get_alg_settings(self, openapi_client: OmadaOpenApiClient) -> None:
+        alg = {"ftp": True, "sip": False}
+        with patch.object(openapi_client, "_get", return_value=alg) as mock:
+            result = openapi_client.get_alg_settings("site-001")
+        assert result == alg
+        mock.assert_called_once_with("sites/site-001/nat/alg")
+
+    def test_get_alg_settings_non_dict_result(self, openapi_client: OmadaOpenApiClient) -> None:
+        with patch.object(openapi_client, "_get", return_value=[]):
+            assert openapi_client.get_alg_settings("site-001") == {}
+
     def test_get_dhcp_reservations(self, openapi_client: OmadaOpenApiClient) -> None:
         reservations = [{"netName": "LAN", "ip": "192.168.1.50", "mac": "AA-BB-CC-DD-EE-FF", "name": "printer", "status": True, "serverName": "Gateway"}]
         with patch.object(openapi_client, "_get_paged") as mock:
@@ -799,6 +824,9 @@ class TestServiceWithOpenApiClient:
         mock_client.get_dhcp_reservations.return_value = []
         mock_client.get_devices.return_value = []
         mock_client.get_device_ports.return_value = []
+        mock_client.get_port_forwarding.return_value = []
+        mock_client.get_one_to_one_nat.return_value = []
+        mock_client.get_alg_settings.return_value = {}
 
         service = OmadaService(
             client=mock_client,

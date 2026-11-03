@@ -12,7 +12,7 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_eleven_resources_defined(self) -> None:
+    def test_all_fourteen_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
@@ -26,6 +26,9 @@ class TestRegistry:
             "gateway_settings",
             "ssids",
             "dhcp_reservations",
+            "port_forwarding",
+            "one_to_one_nat",
+            "alg",
         }
 
     def test_registry_lookup_matches_resources(self) -> None:
@@ -221,6 +224,73 @@ class TestRowFormatters:
         assert rows[0]["Name"] == "laptop"
         assert rows[0]["Network"] == "IoT"
         assert rows[0]["Status"] == "Enabled"
+
+    def test_port_forwarding_rows(self) -> None:
+        from omada.registry import _port_forwarding_rows
+        context = {"gateway_settings": {"wanPortsConfig": [
+            {"portId": "1_abc", "portName": "WAN"},
+        ]}}
+        rows = _port_forwarding_rows([
+            {"name": "NAS HTTPS", "status": True, "from": 0,
+             "interfaceWanPortId": ["1_abc"], "externalPort": "443",
+             "forwardIp": "192.168.2.50", "forwardPort": "5001", "protocol": 1, "dMZ": False},
+            {"name": "Game", "status": False, "from": 1, "limitedAddresses": ["8.8.8.8"],
+             "interfaceWanPortId": ["2_def"], "virtualWanId": ["vw1"],
+             "wanIps": [{"wanId": "1_abc", "ip": "203.0.113.5"}],
+             "externalPort": "3074", "forwardIp": "192.168.2.60", "forwardPort": "3074",
+             "protocol": 0, "dMZ": True},
+        ], context)
+        assert rows[0] == {
+            "Name": "NAS HTTPS", "Status": "Enabled", "Interface": "WAN",
+            "Source IP": "Any", "External Port": "443", "Forward IP": "192.168.2.50",
+            "Forward Port": "5001", "Protocol": "TCP", "DMZ": "Disabled",
+        }
+        assert rows[1]["Status"] == "Disabled"
+        assert rows[1]["Source IP"] == "8.8.8.8"
+        assert rows[1]["Interface"] == "2_def; Virtual WAN vw1; WAN IP 203.0.113.5 (WAN)"
+        assert rows[1]["Protocol"] == "All"
+        assert rows[1]["DMZ"] == "Enabled"
+
+    def test_one_to_one_nat_rows(self) -> None:
+        from omada.registry import _one_to_one_nat_rows
+        context = {"gateway_settings": {"wanPortsConfig": [{"portId": "1_abc", "portName": "WAN"}]}}
+        rows = _one_to_one_nat_rows([
+            {"name": "Web", "status": True, "interfaceIds": ["1_abc"],
+             "internalIp": "192.168.2.10", "externalIp": "203.0.113.10",
+             "dmz": False, "description": "Public web server"},
+        ], context)
+        assert rows == [{
+            "Name": "Web", "Status": "Enabled", "Interface": "WAN",
+            "Internal IP": "192.168.2.10", "External IP": "203.0.113.10",
+            "DMZ": "Disabled", "Description": "Public web server",
+        }]
+
+    def test_alg_rows(self) -> None:
+        from omada.registry import _alg_rows
+        rows = _alg_rows({
+            "ftp": True, "ftpPorts": [21, 2121], "h323": False, "pptp": True, "ipSec": True,
+            "sip": True, "sipTcp": True, "sipUdp": False, "sipPorts": [5060, 5061],
+            "sipDirectSignaling": True, "sipDirectMedia": False, "sipTimeout": True,
+            "sipSignalingTimeout": 3600, "sipMediaTimeout": 120,
+            "supportSipAlgConfig": True,
+        })
+        values = {r["Setting"]: r["Value"] for r in rows}
+        assert values == {
+            "FTP ALG": "Enabled", "FTP Ports": "21, 2121", "H.323 ALG": "Disabled",
+            "PPTP ALG": "Enabled", "IPSec ALG": "Enabled", "SIP ALG": "Enabled",
+            "SIP over TCP": "Enabled", "SIP over UDP": "Disabled",
+            "SIP Direct Signaling": "Enabled", "SIP Direct Media": "Disabled",
+            "SIP Timeout": "Enabled", "SIP Ports": "5060, 5061",
+            "SIP Signaling Timeout": "3600 s", "SIP Media Timeout": "120 s",
+        }
+
+    def test_alg_rows_sip_disabled_hides_sip_options(self) -> None:
+        from omada.registry import _alg_rows
+        rows = _alg_rows({"ftp": False, "ftpPorts": [21], "sip": False, "sipTcp": True})
+        assert rows == [
+            {"Setting": "FTP ALG", "Value": "Disabled"},
+            {"Setting": "SIP ALG", "Value": "Disabled"},
+        ]
 
     def test_switch_port_profile_rows(self) -> None:
         from omada.registry import _switch_port_profile_rows

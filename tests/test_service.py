@@ -24,6 +24,9 @@ def mock_client() -> MagicMock:
     client.get_dhcp_reservations.return_value = []
     client.get_devices.return_value = []
     client.get_device_ports.return_value = []
+    client.get_port_forwarding.return_value = []
+    client.get_one_to_one_nat.return_value = []
+    client.get_alg_settings.return_value = {}
     return client
 
 
@@ -50,6 +53,9 @@ def _empty_data() -> dict:
         "dhcp_reservations": [],
         "devices": [],
         "device_ports": [],
+        "port_forwarding": [],
+        "one_to_one_nat": [],
+        "alg": {},
     }
 
 

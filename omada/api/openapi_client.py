@@ -824,3 +824,25 @@ class OmadaOpenApiClient:
         Endpoint: ``GET /sites/{siteId}/setting/service/dhcp``
         """
         return self._get_paged(f"sites/{site_id}/setting/service/dhcp")
+
+    def get_port_forwarding(self, site_id: str) -> list[dict[str, Any]]:
+        """Return gateway port forwarding rules for the site.
+
+        Endpoint: ``GET /sites/{siteId}/nat/port-forwardings``
+        """
+        return self._get_paged(f"sites/{site_id}/nat/port-forwardings")
+
+    def get_one_to_one_nat(self, site_id: str) -> list[dict[str, Any]]:
+        """Return One-to-One NAT rules for the site.
+
+        Endpoint: ``GET /sites/{siteId}/nat/one-to-one-nat``
+        """
+        return self._get_paged(f"sites/{site_id}/nat/one-to-one-nat")
+
+    def get_alg_settings(self, site_id: str) -> dict[str, Any]:
+        """Return NAT Application Layer Gateway (ALG) settings for the site.
+
+        Endpoint: ``GET /sites/{siteId}/nat/alg``
+        """
+        result = self._get(f"sites/{site_id}/nat/alg")
+        return result if isinstance(result, dict) else {}

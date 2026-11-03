@@ -27,6 +27,9 @@ Supports both official Open API authentication modes:
 | DHCP Reservations | ✓ | ✓ |
 | Devices | ✓ | ✓ |
 | Device Ports (switches & gateways) | ✓ | ✓ |
+| Port Forwarding | ✓ | ✓ |
+| One-to-One NAT | ✓ | ✓ |
+| ALG | ✓ | ✓ |
 
 ---
 
@@ -509,7 +512,13 @@ docs/
     ├── devices.yaml
     ├── devices.md
     ├── device_ports.yaml
-    └── device_ports.md
+    ├── device_ports.md
+    ├── port_forwarding.yaml
+    ├── port_forwarding.md
+    ├── one_to_one_nat.yaml
+    ├── one_to_one_nat.md
+    ├── alg.yaml
+    └── alg.md
 ```
 
 ### Example – DHCP Reservations Markdown

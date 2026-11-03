@@ -235,3 +235,20 @@ The Markdown table mirrors the controller's port list:
 > **API docs:** See the [Device](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Device) tag —
 > *Get the switches ports overview*, *Get switch info*, *Get gateway info*,
 > *Get gateway ports*, *Get gateway wan status*.
+
+---
+
+### NAT
+
+Gateway NAT settings, exported as three resources. WAN port IDs in the rules
+(e.g. `1_<uuid>`) are shown as WAN port names, resolved from `gateway_settings`
+(`wanPortsConfig[].portId` → `portName`); unknown IDs are shown as-is.
+
+| Resource | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| `port_forwarding` | `GET` | `sites/{siteId}/nat/port-forwardings` | Paginated. Name, status, interface (WAN ports / virtual WANs / WAN IPs), source IP (Any or limited addresses), external port, forward IP/port, protocol (All/TCP/UDP), DMZ |
+| `one_to_one_nat` | `GET` | `sites/{siteId}/nat/one-to-one-nat` | Paginated. Name, status, interface, internal IP, external IP, DMZ, description |
+| `alg` | `GET` | `sites/{siteId}/nat/alg` | Single object, rendered as Setting / Value rows: FTP (+ ports), H.323, PPTP, IPSec, SIP (+ TCP/UDP, ports, direct signaling/media, timeouts when SIP is on) |
+
+> **API docs:** Documented under the NAT tag —
+> *Get port forwarding list*, *Get One-to-One NAT list*, *Get ALG Info*.
