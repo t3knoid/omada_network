@@ -194,6 +194,15 @@ Omada Open API client tests.
 | | `test_get_static_routes_gateway_and_switch` | Combines gateway and switch static routes, resolving interface names |
 | | `test_get_static_routes_tolerates_failures` | Missing gateway/switch routing support does not fail the export |
 | | `test_get_policy_routes` | Fetches policy routing rules |
+| | `test_get_site_to_site_vpns_redacts_psk` | Fetches site-to-site VPNs with the pre-shared key redacted |
+| | `test_get_remote_access_vpns_tags_roles_and_redacts` | Combines VPN servers and clients, tagging roles and redacting secrets |
+| | `test_get_remote_access_vpns_partial_and_total_failure` | One failing endpoint is tolerated; both failing raises |
+| | `test_get_wireguard_nests_peers_and_redacts` | Nests peers under interfaces and redacts private/preshared keys |
+| | `test_get_vpn_users_redacts_passwords` | Fetches VPN users with passwords redacted |
+| | `test_get_ssl_vpn_collects_lists_and_redacts` | Gathers SSL VPN setting and lists, tolerating a failing list and redacting passwords |
+| | `test_get_ssl_vpn_setting_failure_propagates` | A failing SSL VPN setting call is reported as a fetch failure |
+| | `test_get_eogre_tunnel` | Fetches EoGRE tunnel settings |
+| | `test_get_ipsec_failover` | Fetches IPsec failover groups |
 | `TestServiceWithOpenApiClient` | `test_service_accepts_injected_client` | Service uses injected client |
 | | `test_service_fetch_all_uses_injected_client` | `fetch_all` calls injected client methods |
 
@@ -205,7 +214,7 @@ Resource registry and `generate_from_yaml` tests.
 
 | Class | Test | Description |
 | --- | --- | --- |
-| `TestRegistry` | `test_all_sixteen_resources_defined` | All 16 resource types are registered |
+| `TestRegistry` | `test_all_twenty_three_resources_defined` | All 23 resource types are registered |
 | | `test_registry_lookup_matches_resources` | Registry lookup matches `RESOURCES` list |
 | | `test_all_definitions_are_resource_definition` | All entries are `ResourceDefinition` instances |
 | | `test_all_row_formatters_callable` | All row formatters are callable |
@@ -227,6 +236,15 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_static_route_rows` | Formats gateway (next hop / interface) and switch static routes |
 | | `test_static_route_rows_prefers_fetched_interface_name` | Uses the interface name fetched from the API |
 | | `test_policy_route_rows` | Formats policy routes in index order with resolved sources, destinations, and WAN binding |
+| | `test_site_to_site_vpn_rows_and_details` | Site-to-site VPN summary and phase 1/2 + authentication details |
+| | `test_remote_access_vpn_rows` | L2TP/PPTP/IPsec/OpenVPN server and client rows, including user references |
+| | `test_remote_access_vpn_details_title_includes_role` | Detail sections are titled with the tunnel role |
+| | `test_wireguard_rows_and_peer_details` | WireGuard interface rows and per-interface peer tables |
+| | `test_vpn_user_rows` | Formats VPN user rows without exposing passwords |
+| | `test_ssl_vpn_rows` | SSL VPN server settings, including RADIUS, lockout, and idle logout |
+| | `test_ssl_vpn_details` | SSL VPN user group, user, resource, and resource group sections |
+| | `test_eogre_rows` | EoGRE tunnel settings as Setting / Value rows |
+| | `test_ipsec_failover_rows` | IPsec failover primary, ordered candidates, and failback |
 | | `test_switch_port_profile_rows` | Formats switch port profile rows |
 | | `test_switch_port_profile_rows_vlan_columns` | Resolves native, untagged, and tagged networks in the profile summary |
 | | `test_switch_port_profile_details_lists_all_properties` | Per-profile detail rows cover every property group, plus unmapped keys |
@@ -257,6 +275,7 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_generate_docs_writes_files` | Writes Markdown files for all resources |
 | `TestOmadaServiceRun` | `test_run_creates_output_dir` | Creates the output directory if missing |
 | | `test_run_returns_yaml_and_doc_paths` | Returns paths for both YAML and Markdown files |
+| `TestVpnSecretsNeverExported` | `test_vpn_secrets_redacted_in_yaml_and_markdown` | No VPN / SSL VPN / WireGuard secret value appears in any written YAML or Markdown file |
 
 ---
 

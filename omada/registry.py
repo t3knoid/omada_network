@@ -728,6 +728,596 @@ def _policy_route_rows(data: Any, context: dict[str, Any] | None = None) -> list
     return rows
 
 
+# --- VPN ---------------------------------------------------------------------
+# Codes from the Open API VPN schemas (VpnAdvancedSettingOpenApiVO etc.).
+
+_VPN_HASH_MAP: dict[int, str] = {0: "MD5", 1: "SHA1", 2: "SHA256", 3: "SHA384", 4: "SHA512"}
+_VPN_CIPHER_MAP: dict[int, str] = {0: "DES", 1: "3DES", 2: "AES128", 3: "AES192", 4: "AES256"}
+_VPN_DH_MAP: dict[int, str] = {
+    0: "DH1", 1: "DH2", 2: "DH5", 3: "DH14", 4: "DH15", 5: "DH16",
+    6: "DH19", 7: "DH20", 8: "DH21", 9: "DH25", 10: "DH26",
+}
+_VPN_PFS_MAP: dict[int, str] = {0: "None", 1: "DH1", 2: "DH2", 3: "DH5", 14: "DH14", 15: "DH15"}
+_VPN_IKE_MAP: dict[int, str] = {0: "IKEv1", 1: "IKEv2"}
+_VPN_EXCHANGE_MAP: dict[int, str] = {0: "Main Mode", 1: "Aggressive Mode"}
+# The spec labels 1 as "Aggressive Mode" (a copy error); the UI calls it Responder Mode.
+_VPN_NEGOTIATION_MAP: dict[int, str] = {0: "Initiator Mode", 1: "Responder Mode"}
+_VPN_ID_TYPE_MAP: dict[int, str] = {0: "IP Address", 1: "Name"}
+_VPN_ENCAP_MAP: dict[int, str] = {0: "Tunnel Mode", 1: "Transport Mode"}
+_VPN_PHASE2_PROTO_MAP: dict[int, str] = {0: "AH", 1: "ESP"}
+_SITE_VPN_TYPE_MAP: dict[int, str] = {0: "Auto IPsec", 1: "Manual IPsec"}
+_CLIENT_VPN_TYPE_MAP: dict[int, str] = {0: "L2TP", 1: "PPTP", 2: "IPsec", 3: "OpenVPN"}
+_OPENVPN_MODE_MAP: dict[int, str] = {0: "Certificate", 1: "Certificate + Account"}
+_VPN_TUNNEL_MODE_MAP: dict[int, str] = {0: "Split", 1: "Full"}
+_VPN_SERVICE_MAP: dict[int, str] = {0: "UDP", 1: "TCP"}
+_VPN_AUTH_MODE_MAP: dict[int, str] = {0: "Local", 1: "LDAP"}
+_VPN_WORKING_MODE_MAP: dict[int, str] = {0: "NAT", 1: "Routing"}
+_VPN_USER_PROTOCOL_MAP: dict[int, str] = {0: "L2TP/PPTP", 1: "OpenVPN"}
+_VPN_CLIENT_MODE_MAP: dict[int, str] = {0: "Client-to-Site", 1: "Site-to-Site"}
+
+
+def _secret_state(value: Any) -> str:
+    """Never show a secret: only whether one is configured."""
+    return "Configured" if value else "Not set"
+
+
+def _vpn_subnets(subnets: Any) -> str:
+    parts = []
+    for s in subnets or []:
+        if isinstance(s, dict):
+            parts.append(f"{s.get('ip', '')}/{s['mask']}" if s.get("mask") is not None else str(s.get("ip", "")))
+        else:
+            parts.append(str(s))
+    return ", ".join(parts)
+
+
+def _vpn_local_networks(v: dict[str, Any], lookup: dict[str, str]) -> str:
+    if v.get("networkType") == 1:
+        return _vpn_subnets(v.get("customNetwork"))
+    return _resolve_ids(v.get("networkList") or [], lookup)
+
+
+def _vpn_ike_summary(adv: Any) -> str:
+    """Compact cipher suite, e.g. ``IKEv2 AES256/SHA256/DH14, ESP AES256/SHA256, PFS DH14``."""
+    if not isinstance(adv, dict) or not adv:
+        return ""
+    p1 = "/".join(x for x in (
+        _profile_code(adv.get("phase1Proposal2", ""), _VPN_CIPHER_MAP),
+        _profile_code(adv.get("phase1Proposal1", ""), _VPN_HASH_MAP),
+        _profile_code(adv.get("phase1Proposal3", ""), _VPN_DH_MAP),
+    ) if x)
+    p2 = "/".join(x for x in (
+        _profile_code(adv.get("phase2Proposal3", ""), _VPN_CIPHER_MAP),
+        _profile_code(adv.get("phase2Proposal2", ""), _VPN_HASH_MAP),
+    ) if x)
+    proto = _profile_code(adv.get("phase2Proposal1", ""), _VPN_PHASE2_PROTO_MAP)
+    ike = _profile_code(adv.get("keyExchangeVersion", ""), _VPN_IKE_MAP)
+    parts = [f"{ike} {p1}".strip()]
+    if p2 or proto:
+        parts.append(f"{proto} {p2}".strip())
+    if "pfs" in adv:
+        parts.append(f"PFS {_profile_code(adv['pfs'], _VPN_PFS_MAP)}")
+    return ", ".join(p for p in parts if p)
+
+
+def _vpn_advanced_details(adv: Any) -> list[tuple[str, str, str]]:
+    """(category, setting, value) rows for an IPsec advanced setting."""
+    if not isinstance(adv, dict) or not adv:
+        return []
+    rows: list[tuple[str, str, str]] = []
+
+    def add(category: str, key: str, label: str, mapping: dict[int, str] | None = None,
+            suffix: str = "") -> None:
+        if key in adv and adv[key] is not None:
+            value = _profile_code(adv[key], mapping) if mapping else _flatten(adv[key])
+            rows.append((category, label, f"{value}{suffix}"))
+
+    add("Phase 1 (IKE)", "keyExchangeVersion", "Key Exchange Version", _VPN_IKE_MAP)
+    add("Phase 1 (IKE)", "phase1Proposal2", "Encryption", _VPN_CIPHER_MAP)
+    add("Phase 1 (IKE)", "phase1Proposal1", "Authentication (Hash)", _VPN_HASH_MAP)
+    add("Phase 1 (IKE)", "phase1Proposal3", "DH Group", _VPN_DH_MAP)
+    add("Phase 1 (IKE)", "exchangeMode", "Exchange Mode", _VPN_EXCHANGE_MAP)
+    add("Phase 1 (IKE)", "negotiationMode", "Negotiation Mode", _VPN_NEGOTIATION_MAP)
+    add("Phase 1 (IKE)", "saLifetime", "SA Lifetime", suffix=" s")
+    if "dpd" in adv:
+        dpd = _enabled(adv["dpd"])
+        if adv["dpd"] and adv.get("dpdInterval") is not None:
+            dpd += f" ({adv['dpdInterval']} s)"
+        rows.append(("Phase 1 (IKE)", "Dead Peer Detection", dpd))
+    add("Phase 2 (IPsec)", "encapsulationMode", "Encapsulation Mode", _VPN_ENCAP_MAP)
+    add("Phase 2 (IPsec)", "phase2Proposal1", "Protocol", _VPN_PHASE2_PROTO_MAP)
+    add("Phase 2 (IPsec)", "phase2Proposal3", "Encryption", _VPN_CIPHER_MAP)
+    add("Phase 2 (IPsec)", "phase2Proposal2", "Authentication (Hash)", _VPN_HASH_MAP)
+    add("Phase 2 (IPsec)", "pfs", "PFS", _VPN_PFS_MAP)
+    add("Phase 2 (IPsec)", "saLifetime2", "SA Lifetime", suffix=" s")
+    add("Authentication", "localIdType", "Local ID Type", _VPN_ID_TYPE_MAP)
+    add("Authentication", "localName", "Local ID")
+    add("Authentication", "remoteIdType", "Remote ID Type", _VPN_ID_TYPE_MAP)
+    add("Authentication", "remoteName", "Remote ID")
+    return rows
+
+
+def _detail_rows(rows: list[tuple[str, str, str]]) -> list[dict[str, Any]]:
+    return [{"Category": c, "Setting": s, "Value": v} for c, s, v in rows]
+
+
+# Site-to-site --------------------------------------------------------------
+
+def _s2s_peer(v: dict[str, Any]) -> str:
+    return _flatten(v.get("remoteSite") if v.get("siteVpnType") == 0 else v.get("remoteIp", ""))
+
+
+def _s2s_auth(v: dict[str, Any]) -> str:
+    if v.get("siteVpnType") == 0:
+        return "Automatic (controller-managed)"
+    return f"Pre-shared Key ({_secret_state(v.get('preSharedKey'))})"
+
+
+def _site_to_site_vpn_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    lookup = _build_id_lookup(context)
+    wan_names = _wan_port_names(context)
+    return [
+        {
+            "Name": _flatten(v.get("name", "")),
+            "Status": _enabled(v.get("status")),
+            "Type": _profile_code(v.get("siteVpnType", ""), _SITE_VPN_TYPE_MAP),
+            "Remote Peer": _s2s_peer(v),
+            "Remote Subnets": _vpn_subnets(v.get("remoteSubnet")),
+            "Local Networks": _vpn_local_networks(v, lookup),
+            "WAN": _nat_interfaces(v.get("wan"), wan_names),
+            "Encryption": _vpn_ike_summary(v.get("advancedSetting")),
+            "Authentication": _s2s_auth(v),
+        }
+        for v in items
+        if isinstance(v, dict)
+    ]
+
+
+def _site_to_site_vpn_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    items = data if isinstance(data, list) else []
+    lookup = _build_id_lookup(context)
+    wan_names = _wan_port_names(context)
+    details = []
+    for v in items:
+        if not isinstance(v, dict):
+            continue
+        rows = [
+            ("Tunnel", "Type", _profile_code(v.get("siteVpnType", ""), _SITE_VPN_TYPE_MAP)),
+            ("Tunnel", "Status", _enabled(v.get("status"))),
+            ("Tunnel", "Remote Peer", _s2s_peer(v)),
+            ("Tunnel", "WAN", _nat_interfaces(v.get("wan"), wan_names)),
+            ("Networks", "Remote Subnets", _vpn_subnets(v.get("remoteSubnet"))),
+            ("Networks", "Local Networks", _vpn_local_networks(v, lookup)),
+            ("Authentication", "Method", _s2s_auth(v)),
+        ]
+        rows += _vpn_advanced_details(v.get("advancedSetting"))
+        details.append((_flatten(v.get("name", "")) or _flatten(v.get("id", "")), _detail_rows(rows)))
+    return details
+
+
+# Remote access (client-to-site servers and clients) ---------------------------
+
+def _vpn_users_by_server(context: dict[str, Any] | None) -> dict[str, list[str]]:
+    users: dict[str, list[str]] = {}
+    for u in (context or {}).get("vpn_users") or []:
+        if isinstance(u, dict):
+            for server_id in u.get("servers") or []:
+                users.setdefault(str(server_id), []).append(str(u.get("username", "")))
+    return users
+
+
+def _ra_ip_pool(v: dict[str, Any]) -> str:
+    if v.get("ipPoolStart") or v.get("ipPoolEnd"):
+        return f"{v.get('ipPoolStart', '')} – {v.get('ipPoolEnd', '')}"
+    return _flatten(v.get("ipPool", ""))
+
+
+def _ra_service(v: dict[str, Any]) -> str:
+    if v.get("clientVpnType") != 3 and v.get("servicePort") is None:
+        return ""
+    proto = _profile_code(v.get("serviceType", ""), _VPN_SERVICE_MAP) if "serviceType" in v else ""
+    port = v.get("servicePort")
+    return f"{proto} {port}".strip() if port is not None else proto
+
+
+def _ra_encryption(v: dict[str, Any]) -> str:
+    kind = v.get("clientVpnType")
+    if kind == 2:
+        return _vpn_ike_summary(v.get("advancedSetting")) or "IPsec"
+    if kind == 3:
+        return "TLS"
+    if kind == 0:
+        return "L2TP over IPsec" if v.get("encryption") == 0 else "Unencrypted"
+    if kind == 1:
+        return "MPPE" if v.get("encryption") == 0 else "Unencrypted"
+    return ""
+
+
+def _ra_auth(v: dict[str, Any], users_by_server: dict[str, list[str]]) -> str:
+    """Authentication references: method, account and PSK state, never secrets."""
+    kind = v.get("clientVpnType")
+    parts: list[str] = []
+    if v.get("vpnRole") == "client":
+        if kind == 3:
+            parts.append(_profile_code(v.get("openVpnMode", v.get("mode", "")), _OPENVPN_MODE_MAP))
+            cert = v.get("vpnConfiguration")
+            if isinstance(cert, dict) and cert.get("fileName"):
+                parts.append(f"Config file {cert['fileName']}")
+        if v.get("clientUserName"):
+            parts.append(f"User {v['clientUserName']}")
+        if "clientPassword" in v:
+            parts.append(f"Password {_secret_state(v['clientPassword'])}")
+    else:
+        if kind == 3:
+            parts.append(_profile_code(v.get("openVpnMode", ""), _OPENVPN_MODE_MAP))
+        elif "authMode" in v:
+            parts.append(f"{_profile_code(v['authMode'], _VPN_AUTH_MODE_MAP)} users")
+        users = users_by_server.get(str(v.get("id", "")))
+        if users:
+            parts.append("Users: " + ", ".join(sorted(users)))
+    if "preSharedKey" in v and (kind == 2 or (kind == 0 and v.get("encryption") == 0)):
+        parts.append(f"Pre-shared Key {_secret_state(v['preSharedKey'])}")
+    return "; ".join(p for p in parts if p)
+
+
+def _remote_access_vpn_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    lookup = _build_id_lookup(context)
+    wan_names = _wan_port_names(context)
+    users_by_server = _vpn_users_by_server(context)
+    return [
+        {
+            "Name": _flatten(v.get("name", "")),
+            "Role": _flatten(v.get("vpnRole", "")).title(),
+            "Status": _enabled(v.get("status")),
+            "Protocol": _profile_code(v.get("clientVpnType", ""), _CLIENT_VPN_TYPE_MAP),
+            "Remote Peer": _flatten(v.get("remoteIp") or v.get("remoteSite") or ""),
+            "Remote Subnets": _vpn_subnets(v.get("remoteSubnet")),
+            "Local Networks": _vpn_local_networks(v, lookup),
+            "Client IP Pool": _ra_ip_pool(v),
+            "WAN": _nat_interfaces(v.get("wan"), wan_names),
+            "Service": _ra_service(v),
+            "Encryption": _ra_encryption(v),
+            "Authentication": _ra_auth(v, users_by_server),
+        }
+        for v in items
+        if isinstance(v, dict)
+    ]
+
+
+def _remote_access_vpn_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    items = data if isinstance(data, list) else []
+    lookup = _build_id_lookup(context)
+    wan_names = _wan_port_names(context)
+    users_by_server = _vpn_users_by_server(context)
+    details = []
+    for v in items:
+        if not isinstance(v, dict):
+            continue
+        role = _flatten(v.get("vpnRole", "")).title()
+        rows = [
+            ("Tunnel", "Role", role),
+            ("Tunnel", "Protocol", _profile_code(v.get("clientVpnType", ""), _CLIENT_VPN_TYPE_MAP)),
+            ("Tunnel", "Status", _enabled(v.get("status"))),
+            ("Tunnel", "Remote Peer", _flatten(v.get("remoteIp") or v.get("remoteSite") or "")),
+            ("Tunnel", "WAN", _nat_interfaces(v.get("wan"), wan_names)),
+            ("Tunnel", "Service", _ra_service(v)),
+        ]
+        tunnel_mode = v.get("tunnelMode", v.get("openVpnTunnelMode"))
+        if tunnel_mode is not None:
+            rows.append(("Tunnel", "Tunnel Mode", _profile_code(tunnel_mode, _VPN_TUNNEL_MODE_MAP)))
+        if "workingMode" in v:
+            rows.append(("Tunnel", "Working Mode", _profile_code(v["workingMode"], _VPN_WORKING_MODE_MAP)))
+        rows += [
+            ("Networks", "Remote Subnets", _vpn_subnets(v.get("remoteSubnet"))),
+            ("Networks", "Local Networks", _vpn_local_networks(v, lookup)),
+            ("Networks", "Client IP Pool", _ra_ip_pool(v)),
+        ]
+        dns = ", ".join(str(x) for x in (v.get("primaryDns"), v.get("secondaryDns")) if x)
+        if dns:
+            rows.append(("Networks", "DNS", dns))
+        rows.append(("Encryption", "Encryption", _ra_encryption(v)))
+        rows.append(("Authentication", "References", _ra_auth(v, users_by_server)))
+        rows += _vpn_advanced_details(v.get("advancedSetting"))
+        rows = [r for r in rows if r[2] != ""]
+        title = _flatten(v.get("name", "")) or _flatten(v.get("id", ""))
+        details.append((f"{title} ({role})" if role else title, _detail_rows(rows)))
+    return details
+
+
+# WireGuard -------------------------------------------------------------------
+
+def _wireguard_rows(data: Any) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    return [
+        {
+            "Name": _flatten(w.get("name", "")),
+            "Status": _enabled(w.get("status")),
+            "Listen Port": _flatten(w.get("listenPort", "")),
+            "Local IP": _flatten(w.get("localIp", "")),
+            "MTU": _flatten(w.get("mtu", "")),
+            "Public Key": _flatten(w.get("publicKey", "")),
+            "Private Key": _secret_state(w.get("privateKey")),
+            "Peers": str(len(w.get("peers") or [])),
+        }
+        for w in items
+        if isinstance(w, dict)
+    ]
+
+
+def _wireguard_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """One section per interface listing its peers."""
+    items = data if isinstance(data, list) else []
+    details = []
+    for w in items:
+        if not isinstance(w, dict):
+            continue
+        peers = [
+            {
+                "Peer": _flatten(p.get("name", "")),
+                "Status": _enabled(p.get("status")),
+                "Endpoint": (
+                    f"{p.get('endPoint', '')}:{p['endPointPort']}"
+                    if p.get("endPoint") and p.get("endPointPort") is not None
+                    else _flatten(p.get("endPoint", ""))
+                ),
+                "Allowed Addresses": ", ".join(str(a) for a in p.get("allowAddress") or []),
+                "Keepalive": f"{p['keepAlive']} s" if p.get("keepAlive") else "Off",
+                "Public Key": _flatten(p.get("publicKey", "")),
+                "Preshared Key": _secret_state(p.get("presharedKey")),
+                "Comment": _flatten(p.get("comment", "")),
+            }
+            for p in w.get("peers") or []
+            if isinstance(p, dict)
+        ]
+        details.append((f"{_flatten(w.get('name', ''))} peers", peers))
+    return details
+
+
+# VPN users -------------------------------------------------------------------
+
+def _vpn_user_rows(data: Any) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    return [
+        {
+            "Username": _flatten(u.get("username", "")),
+            "Protocol": _profile_code(u.get("protocol", ""), _VPN_USER_PROTOCOL_MAP),
+            "Client Mode": _profile_code(u.get("clientMode", ""), _VPN_CLIENT_MODE_MAP),
+            "Servers": _flatten(u.get("serverNames", "")) or ", ".join(str(s) for s in u.get("servers") or []),
+            "Max Connections": _flatten(u.get("maxConnections", "")),
+            "Remote Subnets": _vpn_subnets(u.get("userRemoteSubnets")),
+            "Local IP": _flatten(u.get("localIp", "")),
+            "Password": _secret_state(u.get("password")),
+        }
+        for u in items
+        if isinstance(u, dict)
+    ]
+
+
+# SSL VPN ---------------------------------------------------------------------
+
+_SSL_AUTH_TYPE_MAP: dict[int, str] = {0: "Local", 1: "RADIUS", 2: "LDAP"}
+_RADIUS_AUTH_MAP: dict[int, str] = {0: "PAP", 1: "CHAP"}
+_SSL_RESOURCE_TYPE_MAP: dict[int, str] = {0: "IP", 1: "Domain"}
+_SSL_RESOURCE_PROTOCOL_MAP: dict[int, str] = {
+    0: "All", 1: "TCP", 2: "UDP", 3: "TCP/UDP", 4: "ICMP", 5: "Other",
+}
+
+
+def _ssl_lock(lock: Any) -> str:
+    if not isinstance(lock, dict) or not lock.get("status"):
+        return "Disabled"
+    return f"Enabled ({lock.get('times', '')} failures, {lock.get('duration', '')} min)"
+
+
+def _brief_names(items: Any) -> str:
+    return ", ".join(
+        _flatten(i.get("name") or i.get("id", "")) if isinstance(i, dict) else str(i)
+        for i in items or []
+    )
+
+
+def _ssl_vpn_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """SSL VPN server settings as Setting / Value rows."""
+    if not isinstance(data, dict):
+        return []
+    s = data.get("setting")
+    if not isinstance(s, dict) or not s:
+        return []
+    wan_names = _wan_port_names(context)
+    radius_names = {
+        str(r["id"]): _flatten(r.get("name") or r["id"])
+        for r in data.get("radiusServers") or [] if isinstance(r, dict) and r.get("id")
+    }
+    group_names = {
+        str(g["id"]): _flatten(g.get("name") or g["id"])
+        for g in data.get("userGroups") or [] if isinstance(g, dict) and g.get("id")
+    }
+    rows: list[tuple[str, str]] = [("Status", _enabled(s.get("status")))]
+    if s.get("wanPort"):
+        rows.append(("WAN", wan_names.get(str(s["wanPort"]), str(s["wanPort"]))))
+    if s.get("wanIp"):
+        rows.append(("WAN IP", _flatten(s["wanIp"])))
+    if s.get("servicePort") is not None:
+        rows.append(("Service Port", _flatten(s["servicePort"])))
+    if s.get("ipPoolStart") or s.get("ipPoolEnd"):
+        rows.append(("Client IP Pool", f"{s.get('ipPoolStart', '')} – {s.get('ipPoolEnd', '')}"))
+    dns = ", ".join(str(x) for x in (s.get("primaryDns"), s.get("secondaryDns")) if x)
+    if dns:
+        rows.append(("DNS", dns))
+    if "totalTraffic" in s:
+        rows.append(("Tunnel Mode", "Full (all traffic)" if s["totalTraffic"] else "Split"))
+
+    auth = s.get("authType")
+    rows.append(("Authentication", _profile_code(auth, _SSL_AUTH_TYPE_MAP) if auth is not None else ""))
+    radius = s.get("radiusSetting")
+    if auth == 1 and isinstance(radius, dict):
+        profile = radius.get("radiusProfile")
+        rows.append(("RADIUS Profile", radius_names.get(str(profile), _flatten(profile))))
+        if "authType" in radius:
+            rows.append(("RADIUS Auth Protocol", _profile_code(radius["authType"], _RADIUS_AUTH_MAP)))
+        if radius.get("repeatTime") is not None:
+            rows.append(("RADIUS Retries", _flatten(radius["repeatTime"])))
+        if radius.get("overTime") is not None:
+            rows.append(("RADIUS Timeout", f"{radius['overTime']} s"))
+        if radius.get("nasIp"):
+            rows.append(("NAS IP", _flatten(radius["nasIp"])))
+        if radius.get("defaultGroup"):
+            group = str(radius["defaultGroup"])
+            rows.append(("Default User Group", group_names.get(group, group)))
+    ldap = s.get("LDAPSetting", s.get("ldapSetting"))
+    if auth == 2 and isinstance(ldap, dict):
+        rows.append(("LDAP Profile", _flatten(ldap.get("LDAPProfile", ldap.get("ldapProfile", "")))))
+        if ldap.get("defaultGroup"):
+            group = str(ldap["defaultGroup"])
+            rows.append(("Default User Group", group_names.get(group, group)))
+    rows.append(("Username Lockout", _ssl_lock(s.get("nameLockSetting"))))
+    rows.append(("IP Lockout", _ssl_lock(s.get("ipLockSetting"))))
+    if "exitAtIdle" in s:
+        idle = _enabled(s["exitAtIdle"])
+        if s["exitAtIdle"] and s.get("exitTime") is not None:
+            idle += f" ({s['exitTime']} s)"
+        rows.append(("Idle Logout", idle))
+    return [{"Setting": k, "Value": v} for k, v in rows if v != ""]
+
+
+def _ssl_resource_ports(r: dict[str, Any]) -> str:
+    proto = r.get("protocol")
+    if proto == 4:
+        parts = [f"{label} {r[key]}" for key, label in (("icmpType", "Type"), ("icmpCode", "Code"))
+                 if r.get(key) is not None]
+        return ", ".join(parts)
+    if proto == 5:
+        return f"Protocol {r['otherProtocol']}" if r.get("otherProtocol") is not None else ""
+    parts = []
+    for prefix, label in (("src", "Source"), ("dst", "Destination")):
+        start, end = r.get(f"{prefix}PortStart"), r.get(f"{prefix}PortEnd")
+        if start is None and end is None:
+            continue
+        rng = str(start) if end in (None, start) else f"{start}–{end}"
+        parts.append(f"{label} {rng}")
+    return ", ".join(parts)
+
+
+def _ssl_vpn_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    if not isinstance(data, dict):
+        return []
+    sections: list[tuple[str, list[dict[str, Any]]]] = []
+
+    groups = [
+        {
+            "Name": _flatten(g.get("name", "")),
+            "Users": ", ".join(str(u) for u in g.get("userList") or [])
+            or _flatten(g.get("userNumber", "")),
+            "Resource Groups": _brief_names(g.get("resourceGroupList")),
+            "RADIUS Attribute": _flatten(g.get("radiusAttribute", "")),
+            "LDAP Attribute": _flatten(g.get("ldapAttribute", "")),
+        }
+        for g in data.get("userGroups") or [] if isinstance(g, dict)
+    ]
+    users = [
+        {
+            "Name": _flatten(u.get("name", "")),
+            "Group": _flatten(u.get("groupName") or u.get("groupId", "")),
+            "Status": _enabled(u.get("status")),
+            "Validity": _flatten(u.get("validity", "")),
+            "Concurrent Logins": _flatten(u.get("concurrentNumber", "")),
+            "Password": _secret_state(u.get("password")),
+        }
+        for u in data.get("users") or [] if isinstance(u, dict)
+    ]
+    resources = []
+    for r in data.get("resources") or []:
+        if not isinstance(r, dict):
+            continue
+        if r.get("type") == 1:
+            target = _flatten(r.get("domain", ""))
+        else:
+            target = f"{r.get('ip', '')}/{r['mask']}" if r.get("mask") else _flatten(r.get("ip", ""))
+        resources.append({
+            "Name": _flatten(r.get("name", "")),
+            "Type": _profile_code(r.get("type", ""), _SSL_RESOURCE_TYPE_MAP),
+            "Destination": target,
+            "Protocol": _profile_code(r.get("protocol", ""), _SSL_RESOURCE_PROTOCOL_MAP),
+            "Ports / ICMP": _ssl_resource_ports(r),
+            "Resource Groups": _brief_names(r.get("resourceGroupList")),
+        })
+    resource_groups = [
+        {"Name": _flatten(g.get("name", "")), "Resources": _brief_names(g.get("resourcesList"))}
+        for g in data.get("resourceGroups") or [] if isinstance(g, dict)
+    ]
+    for title, rows in (
+        ("User Groups", groups), ("Users", users),
+        ("Resources", resources), ("Resource Groups", resource_groups),
+    ):
+        sections.append((title, sorted(rows, key=lambda r: str(r.get("Name", "")).lower())))
+    return sections
+
+
+# EoGRE -------------------------------------------------------------------------
+
+def _eogre_rows(data: Any) -> list[dict[str, Any]]:
+    if not isinstance(data, dict) or not data:
+        return []
+    rows: list[tuple[str, str]] = []
+    if "greEnable" in data:
+        rows.append(("EoGRE Tunnel", _enabled(data["greEnable"])))
+    for key, label, suffix in (
+        ("tunnelMtu", "MTU", ""),
+        ("interval", "Keepalive Interval", " s"),
+        ("maxCount", "Max Missed Keepalives", ""),
+        ("primaryAddress", "Primary Gateway", ""),
+        ("secondaryAddress", "Secondary Gateway", ""),
+    ):
+        if data.get(key) not in (None, ""):
+            rows.append((label, f"{data[key]}{suffix}"))
+    return [{"Setting": k, "Value": v} for k, v in rows]
+
+
+# IPsec failover ------------------------------------------------------------------
+
+_IPSEC_STATE_MAP: dict[int, str] = {0: "Active", 1: "Standby", 2: "Disconnected"}
+
+
+def _ipsec_ref(info: Any) -> str:
+    if not isinstance(info, dict):
+        return _flatten(info)
+    name = _flatten(info.get("name") or info.get("id", ""))
+    if isinstance(info.get("status"), int):
+        return f"{name} ({_IPSEC_STATE_MAP.get(info['status'], info['status'])})"
+    return name
+
+
+def _ipsec_failover_rows(data: Any) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    rows = []
+    for f in items:
+        if not isinstance(f, dict):
+            continue
+        if f.get("failBack"):
+            failback = "Enabled"
+            if f.get("failBackTime") is not None:
+                failback += f" (after {f['failBackTime']})"
+        else:
+            failback = "Disabled"
+        rows.append({
+            "Name": _flatten(f.get("name", "")),
+            "Primary Tunnel": _ipsec_ref(f.get("primary")),
+            "Candidates": " → ".join(_ipsec_ref(c) for c in f.get("candidates") or []),
+            "Failback": failback,
+        })
+    return rows
+
+
 # Band bits: 1=2.4GHz, 2=5GHz, 4=6GHz  (7=all, 3=2.4+5, etc.)
 _BAND_MAP: dict[int, str] = {
     1: "2.4 GHz",
@@ -1042,6 +1632,62 @@ RESOURCES: list[ResourceDefinition] = [
         row_formatter=_policy_route_rows,
         sort_key="",  # formatter keeps evaluation order (index)
         needs_context=True,
+    ),
+    ResourceDefinition(
+        name="site_to_site_vpns",
+        title="Site-to-Site VPNs",
+        fetch_method="get_site_to_site_vpns",
+        row_formatter=_site_to_site_vpn_rows,
+        sort_key="Name",
+        needs_context=True,
+        detail_formatter=_site_to_site_vpn_details,
+    ),
+    ResourceDefinition(
+        name="remote_access_vpns",
+        title="Remote-Access VPNs",
+        fetch_method="get_remote_access_vpns",
+        row_formatter=_remote_access_vpn_rows,
+        sort_key="Name",
+        needs_context=True,
+        detail_formatter=_remote_access_vpn_details,
+    ),
+    ResourceDefinition(
+        name="wireguard",
+        title="WireGuard VPN",
+        fetch_method="get_wireguard",
+        row_formatter=_wireguard_rows,
+        sort_key="Name",
+        detail_formatter=_wireguard_details,
+    ),
+    ResourceDefinition(
+        name="vpn_users",
+        title="VPN Users",
+        fetch_method="get_vpn_users",
+        row_formatter=_vpn_user_rows,
+        sort_key="Username",
+    ),
+    ResourceDefinition(
+        name="ssl_vpn",
+        title="SSL VPN Server",
+        fetch_method="get_ssl_vpn",
+        row_formatter=_ssl_vpn_rows,
+        sort_key="",  # keep the logical setting order
+        needs_context=True,
+        detail_formatter=_ssl_vpn_details,
+    ),
+    ResourceDefinition(
+        name="eogre_tunnel",
+        title="EoGRE Tunnel",
+        fetch_method="get_eogre_tunnel",
+        row_formatter=_eogre_rows,
+        sort_key="",
+    ),
+    ResourceDefinition(
+        name="ipsec_failover",
+        title="IPsec Failover",
+        fetch_method="get_ipsec_failover",
+        row_formatter=_ipsec_failover_rows,
+        sort_key="Name",
     ),
 ]
 

@@ -384,6 +384,29 @@ def _sort_ports(ports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(ports, key=key)
 
 
+#: Keys whose string values are credentials; never written to exports.
+_SECRET_KEYS = frozenset({
+    "preSharedKey", "presharedKey", "password", "clientPassword", "privateKey",
+})
+
+REDACTED = "<redacted>"
+
+
+def _redact_secrets(data: Any) -> Any:
+    """Recursively replace non-empty secret string values with ``<redacted>``.
+
+    The key is kept so exports still show that a secret is configured.
+    """
+    if isinstance(data, dict):
+        return {
+            k: (REDACTED if k in _SECRET_KEYS and isinstance(v, str) and v else _redact_secrets(v))
+            for k, v in data.items()
+        }
+    if isinstance(data, list):
+        return [_redact_secrets(v) for v in data]
+    return data
+
+
 def _normalize_mac(mac: Any) -> str:
     """Normalize a MAC address for comparison (``aa:bb`` → ``AA-BB``)."""
     return str(mac).strip().upper().replace(":", "-")
@@ -915,3 +938,115 @@ class OmadaOpenApiClient:
         Endpoint: ``GET /sites/{siteId}/routing/policy-routings``
         """
         return self._get_paged(f"sites/{site_id}/routing/policy-routings")
+
+    # ------------------------------------------------------------------
+    # VPN (all secrets are redacted before being returned)
+    # ------------------------------------------------------------------
+
+    def get_site_to_site_vpns(self, site_id: str) -> list[dict[str, Any]]:
+        """Return site-to-site (Auto / Manual IPsec) VPN tunnels.
+
+        Endpoint: ``GET /sites/{siteId}/vpn/site-to-site-vpns``
+        """
+        return _redact_secrets(self._get_paged(f"sites/{site_id}/vpn/site-to-site-vpns"))
+
+    def get_remote_access_vpns(self, site_id: str) -> list[dict[str, Any]]:
+        """Return client-to-site VPN servers and clients, tagged ``vpnRole``.
+
+        Endpoints: ``GET /sites/{siteId}/vpn/client-to-site-vpn-servers`` and
+        ``GET /sites/{siteId}/vpn/client-to-site-vpn-clients``.  If only one of
+        them fails, the other's tunnels are still returned.
+        """
+        tunnels: list[dict[str, Any]] = []
+        errors: list[Exception] = []
+        for role, path in (
+            ("server", "client-to-site-vpn-servers"),
+            ("client", "client-to-site-vpn-clients"),
+        ):
+            try:
+                items = self._get_paged(f"sites/{site_id}/vpn/{path}")
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.warning("Remote-access VPN %ss unavailable: %s", role, exc)
+                errors.append(exc)
+                continue
+            for item in items:
+                item["vpnRole"] = role
+            tunnels.extend(items)
+        if len(errors) == 2:
+            raise errors[0]
+        return _redact_secrets(tunnels)
+
+    def get_wireguard(self, site_id: str) -> list[dict[str, Any]]:
+        """Return WireGuard interfaces, each with its ``peers`` nested.
+
+        Endpoints: ``GET /sites/{siteId}/vpn/wireguards`` and
+        ``GET /sites/{siteId}/vpn/wireguard-peers``.
+        """
+        interfaces = self._get_paged(f"sites/{site_id}/vpn/wireguards")
+        try:
+            peers = self._get_paged(f"sites/{site_id}/vpn/wireguard-peers")
+        except (OmadaAPIError, requests.RequestException) as exc:
+            logger.warning("WireGuard peers unavailable: %s", exc)
+            peers = []
+        by_id = {str(i.get("id")): i for i in interfaces if isinstance(i, dict)}
+        for iface in by_id.values():
+            iface.setdefault("peers", [])
+        for peer in peers:
+            if not isinstance(peer, dict):
+                continue
+            iface_id = str(peer.get("interfaceId", ""))
+            if iface_id not in by_id:
+                # Peer bound to an interface missing from the list: keep it visible.
+                by_id[iface_id] = {"id": iface_id, "name": peer.get("interfaceName", iface_id), "peers": []}
+                interfaces.append(by_id[iface_id])
+            by_id[iface_id]["peers"].append(peer)
+        return _redact_secrets(interfaces)
+
+    def get_vpn_users(self, site_id: str) -> list[dict[str, Any]]:
+        """Return VPN user accounts (passwords redacted).
+
+        Endpoint: ``GET /sites/{siteId}/vpn/users``
+        """
+        return _redact_secrets(self._get_paged(f"sites/{site_id}/vpn/users"))
+
+    def get_ssl_vpn(self, site_id: str) -> dict[str, Any]:
+        """Return the SSL VPN server configuration (passwords redacted).
+
+        ``setting`` comes from ``GET /sites/{siteId}/vpn/ssl-vpn-server/setting``
+        (a failure there propagates).  The related lists are fetched best-effort
+        from ``…/user-groups``, ``…/users``, ``…/resources``,
+        ``…/resource-groups`` and ``…/radius`` and stored as ``userGroups``,
+        ``users``, ``resources``, ``resourceGroups`` and ``radiusServers``.
+        """
+        base = f"sites/{site_id}/vpn/ssl-vpn-server"
+        setting = self._get(f"{base}/setting")
+        config: dict[str, Any] = {"setting": setting if isinstance(setting, dict) else {}}
+        for key, path, paged in (
+            ("userGroups", "user-groups", True),
+            ("users", "users", True),
+            ("resources", "resources", True),
+            ("resourceGroups", "resource-groups", True),
+            ("radiusServers", "radius", False),
+        ):
+            try:
+                result = self._get_paged(f"{base}/{path}") if paged else self._get(f"{base}/{path}")
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.warning("SSL VPN %s unavailable: %s", path, exc)
+                result = []
+            config[key] = result if isinstance(result, list) else []
+        return _redact_secrets(config)
+
+    def get_eogre_tunnel(self, site_id: str) -> dict[str, Any]:
+        """Return the EoGRE tunnel settings.
+
+        Endpoint: ``GET /sites/{siteId}/vpn/gre-tunnel``
+        """
+        result = self._get(f"sites/{site_id}/vpn/gre-tunnel")
+        return result if isinstance(result, dict) else {}
+
+    def get_ipsec_failover(self, site_id: str) -> list[dict[str, Any]]:
+        """Return IPsec failover groups.
+
+        Endpoint: ``GET /sites/{siteId}/vpn/ipsec_failovers``
+        """
+        return self._get_paged(f"sites/{site_id}/vpn/ipsec_failovers")

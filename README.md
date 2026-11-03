@@ -32,6 +32,13 @@ Supports both official Open API authentication modes:
 | ALG | ✓ | ✓ |
 | Static Routes (gateway & switches) | ✓ | ✓ |
 | Policy Routes | ✓ | ✓ |
+| Site-to-Site VPNs (IPsec) | ✓ | ✓ |
+| Remote-Access VPNs (L2TP / PPTP / IPsec / OpenVPN) | ✓ | ✓ |
+| WireGuard VPN (interfaces & peers) | ✓ | ✓ |
+| VPN Users | ✓ | ✓ |
+| SSL VPN Server (settings, user groups, users, resources) | ✓ | ✓ |
+| EoGRE Tunnel | ✓ | ✓ |
+| IPsec Failover | ✓ | ✓ |
 
 ---
 
@@ -490,6 +497,12 @@ written under `docs/<site_name>/`:
 > `.gitignore`.  Generated output is local to each environment — run
 > `python cli.py fetch` to populate it.
 
+> **Secrets are never exported.** VPN pre-shared keys, VPN user and client
+> passwords, SSL VPN user passwords, and WireGuard private / preshared keys are replaced with
+> `<redacted>` before anything is written. The YAML records only that a secret
+> is configured, and the Markdown shows `Configured` / `Not set`. Public keys,
+> usernames, and certificate file names are kept as authentication references.
+
 ```text
 docs/
 └── My Office/
@@ -524,7 +537,21 @@ docs/
     ├── static_routes.yaml
     ├── static_routes.md
     ├── policy_routes.yaml
-    └── policy_routes.md
+    ├── policy_routes.md
+    ├── site_to_site_vpns.yaml
+    ├── site_to_site_vpns.md
+    ├── remote_access_vpns.yaml
+    ├── remote_access_vpns.md
+    ├── wireguard.yaml
+    ├── wireguard.md
+    ├── vpn_users.yaml
+    ├── vpn_users.md
+    ├── ssl_vpn.yaml
+    ├── ssl_vpn.md
+    ├── eogre_tunnel.yaml
+    ├── eogre_tunnel.md
+    ├── ipsec_failover.yaml
+    └── ipsec_failover.md
 ```
 
 ### Example – DHCP Reservations Markdown

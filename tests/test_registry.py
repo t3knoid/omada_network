@@ -12,7 +12,7 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_sixteen_resources_defined(self) -> None:
+    def test_all_twenty_three_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
@@ -31,6 +31,13 @@ class TestRegistry:
             "alg",
             "static_routes",
             "policy_routes",
+            "site_to_site_vpns",
+            "remote_access_vpns",
+            "wireguard",
+            "vpn_users",
+            "ssl_vpn",
+            "eogre_tunnel",
+            "ipsec_failover",
         }
 
     def test_registry_lookup_matches_resources(self) -> None:
@@ -373,6 +380,245 @@ class TestRowFormatters:
         assert rows[1]["Destination Type"] == "IP Group"
         assert rows[1]["WAN Binding"] == "WAN: WAN, WAN/LAN1; VPN: vpn-9"
         assert rows[1]["Backup Interface"] == "Yes"
+
+    _VPN_CONTEXT = {
+        "gateway_settings": {"wanPortsConfig": [{"portId": "1_abc", "portName": "WAN"}]},
+        "networks": [{"id": "net-lan", "name": "LAN"}],
+        "vpn_users": [
+            {"username": "bob", "servers": ["srv-l2tp"]},
+            {"username": "alice", "servers": ["srv-l2tp", "srv-ovpn"]},
+        ],
+    }
+    _ADVANCED = {
+        "keyExchangeVersion": 1, "phase1Proposal1": 2, "phase1Proposal2": 4,
+        "phase1Proposal3": 3, "exchangeMode": 0, "negotiationMode": 0,
+        "localIdType": 0, "remoteIdType": 1, "remoteName": "hq.example",
+        "saLifetime": 28800, "dpd": True, "dpdInterval": 10, "encapsulationMode": 0,
+        "phase2Proposal1": 1, "phase2Proposal2": 2, "phase2Proposal3": 4,
+        "pfs": 14, "saLifetime2": 3600,
+    }
+
+    def test_site_to_site_vpn_rows_and_details(self) -> None:
+        from omada.registry import _site_to_site_vpn_details, _site_to_site_vpn_rows
+        vpns = [
+            {"name": "HQ", "status": True, "siteVpnType": 1, "remoteIp": "203.0.113.9",
+             "remoteSubnet": [{"ip": "10.50.0.0", "mask": 16}], "networkType": 0,
+             "networkList": ["net-lan"], "wan": ["1_abc"], "preSharedKey": "<redacted>",
+             "advancedSetting": self._ADVANCED},
+            {"name": "Branch", "status": False, "siteVpnType": 0, "remoteSite": "Freehold",
+             "networkType": 1, "customNetwork": [{"ip": "192.168.5.0", "mask": 24}]},
+        ]
+        rows = _site_to_site_vpn_rows(vpns, self._VPN_CONTEXT)
+        assert rows[0] == {
+            "Name": "HQ", "Status": "Enabled", "Type": "Manual IPsec",
+            "Remote Peer": "203.0.113.9", "Remote Subnets": "10.50.0.0/16",
+            "Local Networks": "LAN", "WAN": "WAN",
+            "Encryption": "IKEv2 AES256/SHA256/DH14, ESP AES256/SHA256, PFS DH14",
+            "Authentication": "Pre-shared Key (Configured)",
+        }
+        assert rows[1]["Type"] == "Auto IPsec"
+        assert rows[1]["Remote Peer"] == "Freehold"
+        assert rows[1]["Local Networks"] == "192.168.5.0/24"
+        assert rows[1]["Authentication"] == "Automatic (controller-managed)"
+
+        details = dict(_site_to_site_vpn_details(vpns, self._VPN_CONTEXT))
+        hq = {(r["Category"], r["Setting"]): r["Value"] for r in details["HQ"]}
+        assert hq[("Phase 1 (IKE)", "Key Exchange Version")] == "IKEv2"
+        assert hq[("Phase 1 (IKE)", "DH Group")] == "DH14"
+        assert hq[("Phase 1 (IKE)", "Negotiation Mode")] == "Initiator Mode"
+        assert hq[("Phase 1 (IKE)", "SA Lifetime")] == "28800 s"
+        assert hq[("Phase 1 (IKE)", "Dead Peer Detection")] == "Enabled (10 s)"
+        assert hq[("Phase 2 (IPsec)", "Protocol")] == "ESP"
+        assert hq[("Phase 2 (IPsec)", "PFS")] == "DH14"
+        assert hq[("Authentication", "Remote ID Type")] == "Name"
+        assert hq[("Authentication", "Remote ID")] == "hq.example"
+
+    def test_remote_access_vpn_rows(self) -> None:
+        from omada.registry import _remote_access_vpn_rows
+        rows = _remote_access_vpn_rows([
+            {"id": "srv-l2tp", "vpnRole": "server", "name": "L2TP", "status": True,
+             "clientVpnType": 0, "encryption": 0, "preSharedKey": "<redacted>",
+             "authMode": 0, "ipPoolStart": "10.9.0.10", "ipPoolEnd": "10.9.0.50",
+             "wan": ["1_abc"], "networkType": 0, "networkList": ["net-lan"]},
+            {"id": "srv-ovpn", "vpnRole": "server", "name": "OpenVPN", "status": True,
+             "clientVpnType": 3, "openVpnMode": 1, "serviceType": 0, "servicePort": 1194,
+             "ipPool": "10.8.0.0/24"},
+            {"id": "cli-1", "vpnRole": "client", "name": "To Office", "status": False,
+             "clientVpnType": 2, "remoteIp": "198.51.100.7",
+             "remoteSubnet": [{"ip": "172.16.0.0", "mask": 12}], "preSharedKey": "",
+             "advancedSetting": self._ADVANCED},
+            {"id": "cli-2", "vpnRole": "client", "name": "PPTP out", "clientVpnType": 1,
+             "encryption": 1, "remoteIp": "pptp.example", "clientUserName": "carol",
+             "clientPassword": "<redacted>"},
+        ], self._VPN_CONTEXT)
+        l2tp, ovpn, ipsec, pptp = rows
+        assert l2tp["Role"] == "Server"
+        assert l2tp["Protocol"] == "L2TP"
+        assert l2tp["Client IP Pool"] == "10.9.0.10 – 10.9.0.50"
+        assert l2tp["WAN"] == "WAN"
+        assert l2tp["Local Networks"] == "LAN"
+        assert l2tp["Encryption"] == "L2TP over IPsec"
+        assert l2tp["Authentication"] == "Local users; Users: alice, bob; Pre-shared Key Configured"
+        assert ovpn["Service"] == "UDP 1194"
+        assert ovpn["Encryption"] == "TLS"
+        assert ovpn["Client IP Pool"] == "10.8.0.0/24"
+        assert ovpn["Authentication"] == "Certificate + Account; Users: alice"
+        assert ipsec["Role"] == "Client"
+        assert ipsec["Remote Peer"] == "198.51.100.7"
+        assert ipsec["Remote Subnets"] == "172.16.0.0/12"
+        assert ipsec["Encryption"].startswith("IKEv2 AES256/SHA256/DH14")
+        assert ipsec["Authentication"] == "Pre-shared Key Not set"
+        assert pptp["Encryption"] == "Unencrypted"
+        assert pptp["Authentication"] == "User carol; Password Configured"
+
+    def test_remote_access_vpn_details_title_includes_role(self) -> None:
+        from omada.registry import _remote_access_vpn_details
+        details = _remote_access_vpn_details([
+            {"name": "Office", "vpnRole": "server", "clientVpnType": 3, "tunnelMode": 0,
+             "primaryDns": "1.1.1.1", "secondaryDns": "8.8.8.8"},
+            {"name": "Office", "vpnRole": "client", "clientVpnType": 3, "workingMode": 1,
+             "vpnConfiguration": {"id": "c1", "fileName": "office.ovpn"}, "openVpnMode": 0},
+        ])
+        titles = [t for t, _ in details]
+        assert titles == ["Office (Server)", "Office (Client)"]
+        server = {r["Setting"]: r["Value"] for r in details[0][1]}
+        client = {r["Setting"]: r["Value"] for r in details[1][1]}
+        assert server["Tunnel Mode"] == "Split"
+        assert server["DNS"] == "1.1.1.1, 8.8.8.8"
+        assert client["Working Mode"] == "Routing"
+        assert client["References"] == "Certificate; Config file office.ovpn"
+
+    def test_wireguard_rows_and_peer_details(self) -> None:
+        from omada.registry import _wireguard_details, _wireguard_rows
+        data = [{
+            "name": "wg0", "status": True, "listenPort": 51820, "localIp": "10.7.0.1/24",
+            "mtu": 1420, "publicKey": "PUB=", "privateKey": "<redacted>",
+            "peers": [{"name": "Phone", "status": True, "endPoint": "vpn.example",
+                       "endPointPort": 51820, "allowAddress": ["10.7.0.2/32"],
+                       "keepAlive": 25, "publicKey": "PEER=", "presharedKey": "",
+                       "comment": "Alice"}],
+        }]
+        assert _wireguard_rows(data) == [{
+            "Name": "wg0", "Status": "Enabled", "Listen Port": "51820",
+            "Local IP": "10.7.0.1/24", "MTU": "1420", "Public Key": "PUB=",
+            "Private Key": "Configured", "Peers": "1",
+        }]
+        [(title, peers)] = _wireguard_details(data)
+        assert title == "wg0 peers"
+        assert peers == [{
+            "Peer": "Phone", "Status": "Enabled", "Endpoint": "vpn.example:51820",
+            "Allowed Addresses": "10.7.0.2/32", "Keepalive": "25 s",
+            "Public Key": "PEER=", "Preshared Key": "Not set", "Comment": "Alice",
+        }]
+
+    def test_vpn_user_rows(self) -> None:
+        from omada.registry import _vpn_user_rows
+        rows = _vpn_user_rows([
+            {"username": "alice", "password": "<redacted>", "protocol": 1, "clientMode": 0,
+             "serverNames": "OpenVPN", "maxConnections": 2,
+             "userRemoteSubnets": [{"ip": "192.168.50.0", "mask": 24}], "localIp": ""},
+        ])
+        assert rows == [{
+            "Username": "alice", "Protocol": "OpenVPN", "Client Mode": "Client-to-Site",
+            "Servers": "OpenVPN", "Max Connections": "2", "Remote Subnets": "192.168.50.0/24",
+            "Local IP": "", "Password": "Configured",
+        }]
+
+    _SSL_VPN = {
+        "setting": {
+            "status": True, "wanPort": "1_abc", "wanIp": "203.0.113.2", "servicePort": 443,
+            "ipPoolStart": "10.6.0.10", "ipPoolEnd": "10.6.0.99",
+            "primaryDns": "1.1.1.1", "secondaryDns": "", "totalTraffic": False,
+            "authType": 1,
+            "radiusSetting": {"radiusProfile": "r1", "authType": 1, "repeatTime": 3,
+                              "overTime": 5, "nasIp": "10.0.0.1", "defaultGroup": "g1"},
+            "nameLockSetting": {"status": True, "times": 5, "duration": 30},
+            "ipLockSetting": {"status": False},
+            "exitAtIdle": True, "exitTime": 600,
+        },
+        "radiusServers": [{"id": "r1", "name": "Corp RADIUS"}],
+        "userGroups": [{"id": "g1", "name": "Staff", "userList": ["alice", "bob"],
+                        "resourceGroupList": [{"id": "rg1", "name": "Servers"}],
+                        "radiusAttribute": "staff"}],
+        "users": [{"name": "alice", "groupName": "Staff", "status": True,
+                   "validity": "12/31/2027", "concurrentNumber": 2, "password": "<redacted>"}],
+        "resources": [
+            {"name": "NAS", "type": 0, "ip": "192.168.2.50", "mask": "32", "protocol": 1,
+             "dstPortStart": 5000, "dstPortEnd": 5001,
+             "resourceGroupList": [{"id": "rg1", "name": "Servers"}]},
+            {"name": "Wiki", "type": 1, "domain": "wiki.example", "protocol": 4,
+             "icmpType": 8, "icmpCode": 0},
+        ],
+        "resourceGroups": [{"name": "Servers", "resourcesList": [{"id": "x", "name": "NAS"}]}],
+    }
+
+    def test_ssl_vpn_rows(self) -> None:
+        from omada.registry import _ssl_vpn_rows
+        context = {"gateway_settings": {"wanPortsConfig": [{"portId": "1_abc", "portName": "WAN"}]}}
+        values = {r["Setting"]: r["Value"] for r in _ssl_vpn_rows(self._SSL_VPN, context)}
+        assert values == {
+            "Status": "Enabled", "WAN": "WAN", "WAN IP": "203.0.113.2", "Service Port": "443",
+            "Client IP Pool": "10.6.0.10 – 10.6.0.99", "DNS": "1.1.1.1",
+            "Tunnel Mode": "Split", "Authentication": "RADIUS",
+            "RADIUS Profile": "Corp RADIUS", "RADIUS Auth Protocol": "CHAP",
+            "RADIUS Retries": "3", "RADIUS Timeout": "5 s", "NAS IP": "10.0.0.1",
+            "Default User Group": "Staff",
+            "Username Lockout": "Enabled (5 failures, 30 min)", "IP Lockout": "Disabled",
+            "Idle Logout": "Enabled (600 s)",
+        }
+        assert _ssl_vpn_rows({}) == []
+        assert _ssl_vpn_rows({"setting": {}}) == []
+
+    def test_ssl_vpn_details(self) -> None:
+        from omada.registry import _ssl_vpn_details
+        sections = dict(_ssl_vpn_details(self._SSL_VPN))
+        assert list(sections) == ["User Groups", "Users", "Resources", "Resource Groups"]
+        assert sections["User Groups"] == [{
+            "Name": "Staff", "Users": "alice, bob", "Resource Groups": "Servers",
+            "RADIUS Attribute": "staff", "LDAP Attribute": "",
+        }]
+        assert sections["Users"] == [{
+            "Name": "alice", "Group": "Staff", "Status": "Enabled", "Validity": "12/31/2027",
+            "Concurrent Logins": "2", "Password": "Configured",
+        }]
+        nas, wiki = sections["Resources"]
+        assert nas["Destination"] == "192.168.2.50/32"
+        assert nas["Protocol"] == "TCP"
+        assert nas["Ports / ICMP"] == "Destination 5000–5001"
+        assert nas["Resource Groups"] == "Servers"
+        assert wiki["Type"] == "Domain"
+        assert wiki["Destination"] == "wiki.example"
+        assert wiki["Ports / ICMP"] == "Type 8, Code 0"
+        assert sections["Resource Groups"] == [{"Name": "Servers", "Resources": "NAS"}]
+
+    def test_eogre_rows(self) -> None:
+        from omada.registry import _eogre_rows
+        rows = _eogre_rows({"greEnable": True, "tunnelMtu": 1476, "interval": 30,
+                            "maxCount": 5, "primaryAddress": "10.1.1.1", "secondaryAddress": ""})
+        assert rows == [
+            {"Setting": "EoGRE Tunnel", "Value": "Enabled"},
+            {"Setting": "MTU", "Value": "1476"},
+            {"Setting": "Keepalive Interval", "Value": "30 s"},
+            {"Setting": "Max Missed Keepalives", "Value": "5"},
+            {"Setting": "Primary Gateway", "Value": "10.1.1.1"},
+        ]
+
+    def test_ipsec_failover_rows(self) -> None:
+        from omada.registry import _ipsec_failover_rows
+        rows = _ipsec_failover_rows([
+            {"name": "HQ", "primary": {"id": "a", "name": "HQ-WAN1", "status": 0},
+             "candidates": [{"id": "b", "name": "HQ-WAN2", "status": 1},
+                            {"id": "c", "name": "HQ-LTE", "status": 2}],
+             "failBack": True, "failBackTime": 60},
+            {"name": "Branch", "primary": {"name": "BR-1"}, "candidates": [], "failBack": False},
+        ])
+        assert rows[0] == {
+            "Name": "HQ", "Primary Tunnel": "HQ-WAN1 (Active)",
+            "Candidates": "HQ-WAN2 (Standby) → HQ-LTE (Disconnected)",
+            "Failback": "Enabled (after 60)",
+        }
+        assert rows[1]["Primary Tunnel"] == "BR-1"
+        assert rows[1]["Failback"] == "Disabled"
 
     def test_switch_port_profile_rows(self) -> None:
         from omada.registry import _switch_port_profile_rows

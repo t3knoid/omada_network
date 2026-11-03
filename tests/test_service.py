@@ -29,6 +29,13 @@ def mock_client() -> MagicMock:
     client.get_alg_settings.return_value = {}
     client.get_static_routes.return_value = []
     client.get_policy_routes.return_value = []
+    client.get_site_to_site_vpns.return_value = []
+    client.get_remote_access_vpns.return_value = []
+    client.get_wireguard.return_value = []
+    client.get_vpn_users.return_value = []
+    client.get_ssl_vpn.return_value = {}
+    client.get_eogre_tunnel.return_value = {}
+    client.get_ipsec_failover.return_value = []
     return client
 
 
@@ -60,6 +67,13 @@ def _empty_data() -> dict:
         "alg": {},
         "static_routes": [],
         "policy_routes": [],
+        "site_to_site_vpns": [],
+        "remote_access_vpns": [],
+        "wireguard": [],
+        "vpn_users": [],
+        "ssl_vpn": {},
+        "eogre_tunnel": {},
+        "ipsec_failover": [],
     }
 
 
@@ -131,3 +145,55 @@ class TestOmadaServiceRun:
         assert len(result["docs"]) == len(OmadaService.RESOURCE_NAMES)
         assert all(path.parent.name == "Home Office" for path in result["docs"].values())
         assert all(path.parent == service.site_output_dir for path in result["yaml"].values())
+
+
+class TestVpnSecretsNeverExported:
+    def test_vpn_secrets_redacted_in_yaml_and_markdown(self, tmp_path: Path) -> None:
+        from omada.api.openapi_client import OmadaOpenApiClient
+
+        client = OmadaOpenApiClient("https://ctrl", "cid", "token")
+        secrets = ["S2S-PSK-123", "SRV-PSK-456", "CLI-PW-789", "WG-PRIV=", "WG-PSK=", "USER-PW",
+                   "SSL-USER-PW"]
+        responses = {
+            "sites/s1/vpn/site-to-site-vpns": [
+                {"name": "HQ", "siteVpnType": 1, "preSharedKey": secrets[0]}],
+            "sites/s1/vpn/client-to-site-vpn-servers": [
+                {"name": "L2TP", "clientVpnType": 0, "encryption": 0, "preSharedKey": secrets[1]}],
+            "sites/s1/vpn/client-to-site-vpn-clients": [
+                {"name": "Out", "clientVpnType": 1, "clientPassword": secrets[2]}],
+            "sites/s1/vpn/wireguards": [{"id": "w", "name": "wg0", "privateKey": secrets[3]}],
+            "sites/s1/vpn/wireguard-peers": [
+                {"name": "p", "interfaceId": "w", "presharedKey": secrets[4]}],
+            "sites/s1/vpn/users": [{"username": "u", "password": secrets[5]}],
+            "sites/s1/vpn/ssl-vpn-server/user-groups": [],
+            "sites/s1/vpn/ssl-vpn-server/users": [{"name": "s", "password": secrets[6]}],
+            "sites/s1/vpn/ssl-vpn-server/resources": [],
+            "sites/s1/vpn/ssl-vpn-server/resource-groups": [],
+        }
+        get_responses = {
+            "sites/s1/vpn/ssl-vpn-server/setting": {"status": True},
+            "sites/s1/vpn/ssl-vpn-server/radius": [],
+        }
+        with (
+            patch.object(client, "_get_paged", side_effect=lambda path: responses[path]),
+            patch.object(client, "_get", side_effect=lambda path: get_responses[path]),
+        ):
+            data = {
+                "site_to_site_vpns": client.get_site_to_site_vpns("s1"),
+                "remote_access_vpns": client.get_remote_access_vpns("s1"),
+                "wireguard": client.get_wireguard("s1"),
+                "vpn_users": client.get_vpn_users("s1"),
+                "ssl_vpn": client.get_ssl_vpn("s1"),
+            }
+        service = OmadaService(client=MagicMock(), site_id="s1", output_dir=tmp_path)
+        service.export_yaml(data)
+        service.generate_docs(data)
+
+        written = "".join(
+            f.read_text(encoding="utf-8") for f in service.site_output_dir.iterdir()
+        )
+        assert written  # files were produced
+        for secret in secrets:
+            assert secret not in written
+        assert "<redacted>" in written
+

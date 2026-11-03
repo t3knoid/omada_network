@@ -296,3 +296,86 @@ port names from `gateway_settings`. **Backup Interface** shows whether traffic
 fails over to another WAN when the bound one is down.
 
 > **API docs:** *Get policy routing list*.
+
+---
+
+### VPN
+
+> **Secrets are redacted in the client**, before data reaches YAML or
+> Markdown: `preSharedKey`, `presharedKey`, `password`, `clientPassword`, and
+> `privateKey` string values become `<redacted>` (this covers SSL VPN users too). Markdown shows only
+> `Configured` / `Not set`.
+
+| Resource | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| `site_to_site_vpns` | `GET` | `sites/{siteId}/vpn/site-to-site-vpns` | Auto / Manual IPsec tunnels |
+| `remote_access_vpns` | `GET` | `sites/{siteId}/vpn/client-to-site-vpn-servers` | Tagged `vpnRole: server` (paginated) |
+| `remote_access_vpns` | `GET` | `sites/{siteId}/vpn/client-to-site-vpn-clients` | Tagged `vpnRole: client` (paginated). If only one endpoint fails, the other is still used |
+| `wireguard` | `GET` | `sites/{siteId}/vpn/wireguards` | Interfaces (paginated) |
+| `wireguard` | `GET` | `sites/{siteId}/vpn/wireguard-peers` | Peers, nested under their interface as `peers` |
+| `vpn_users` | `GET` | `sites/{siteId}/vpn/users` | Accounts referenced by L2TP / PPTP / OpenVPN servers |
+
+**Site-to-site** summary: name, status, type (Auto / Manual IPsec), remote
+peer (remote site or IP), remote subnets, local networks (network names or
+custom subnets), WAN, encryption (e.g. `IKEv2 AES256/SHA256/DH14, ESP
+AES256/SHA256, PFS DH14`), authentication. Each tunnel then gets a detail
+section: Phase 1 (key exchange version, encryption, hash, DH group, exchange
+and negotiation mode, SA lifetime, DPD), Phase 2 (encapsulation, AH/ESP,
+encryption, hash, PFS, SA lifetime), and Authentication (method, local /
+remote ID type and value).
+
+**Remote access** summary: name, role (server / client), status, protocol
+(L2TP, PPTP, IPsec, OpenVPN), remote peer, remote subnets, local networks,
+client IP pool, WAN, service (UDP/TCP and port), encryption (L2TP over IPsec,
+MPPE, IKE suite, or TLS), and authentication references (local / LDAP users and
+the usernames assigned to that server from `vpn_users`, OpenVPN certificate
+mode and config file, client username, and pre-shared key / password state).
+Each tunnel gets a detail section titled `<name> (<role>)`.
+
+**WireGuard**: one row per interface (listen port, local IP, MTU, public key,
+private-key state, peer count) and one section per interface listing its peers
+(endpoint, allowed addresses, keepalive, public key, preshared-key state,
+comment).
+
+### SSL VPN Server
+
+| Method | Endpoint | Stored as | Notes |
+| --- | --- | --- | --- |
+| `GET` | `sites/{siteId}/vpn/ssl-vpn-server/setting` | `setting` | Required; a failure is reported as a fetch failure |
+| `GET` | `sites/{siteId}/vpn/ssl-vpn-server/user-groups` | `userGroups` | Paginated, best-effort |
+| `GET` | `sites/{siteId}/vpn/ssl-vpn-server/users` | `users` | Paginated, best-effort; passwords redacted |
+| `GET` | `sites/{siteId}/vpn/ssl-vpn-server/resources` | `resources` | Paginated, best-effort |
+| `GET` | `sites/{siteId}/vpn/ssl-vpn-server/resource-groups` | `resourceGroups` | Paginated, best-effort |
+| `GET` | `sites/{siteId}/vpn/ssl-vpn-server/radius` | `radiusServers` | Used to name the RADIUS profile |
+
+The Markdown starts with server settings as Setting / Value rows: status, WAN
+and WAN IP, service port, client IP pool, DNS, tunnel mode (full / split),
+authentication (Local / RADIUS / LDAP, with RADIUS profile, PAP/CHAP, retries,
+timeout, NAS IP, default user group, or LDAP profile), username and IP
+lockout, and idle logout. Sections follow for **User Groups** (users, resource
+groups, RADIUS / LDAP attribute), **Users** (group, status, validity,
+concurrent logins, password state), **Resources** (IP/subnet or domain,
+protocol, ports or ICMP type/code, groups), and **Resource Groups**.
+
+### EoGRE Tunnel
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GET` | `sites/{siteId}/vpn/gre-tunnel` | Single object: enabled, MTU, keepalive interval, max missed keepalives, primary / secondary gateway |
+
+### IPsec Failover
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GET` | `sites/{siteId}/vpn/ipsec_failovers` | Paginated. Name, primary tunnel, candidate tunnels in failover order, failback |
+
+Tunnel references include the state the controller reports (`Active`,
+`Standby`, `Disconnected`). The failback time is shown as returned; the spec
+does not state its unit.
+
+> **API docs:** VPN tag — *Get site-to-site VPN list*, *Get client-to-site VPN
+> server list*, *Get client-to-site VPN client list*, *Get wireguard list*,
+> *Get wireguard peer list*, *Get VPN user list*, *Get SSL VPN server setting*,
+> *Get user group / user / resource / resource group list for SSL VPN server*,
+> *Get radius server for SSL VPN server*, *Get EoGRE tunnel config*,
+> *Get IPsec failover list*.

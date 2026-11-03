@@ -846,6 +846,123 @@ class TestOpenApiResourceMethods:
         assert result == rules
         mock.assert_called_once_with("sites/site-001/routing/policy-routings")
 
+    def test_get_site_to_site_vpns_redacts_psk(self, openapi_client: OmadaOpenApiClient) -> None:
+        vpns = [{"name": "HQ", "siteVpnType": 1, "preSharedKey": "s3cret!", "remoteIp": "1.2.3.4"}]
+        with patch.object(openapi_client, "_get_paged", return_value=vpns) as mock:
+            result = openapi_client.get_site_to_site_vpns("site-001")
+        mock.assert_called_once_with("sites/site-001/vpn/site-to-site-vpns")
+        assert result[0]["preSharedKey"] == "<redacted>"
+        assert result[0]["remoteIp"] == "1.2.3.4"
+        assert "s3cret!" not in repr(result)
+
+    def test_get_remote_access_vpns_tags_roles_and_redacts(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        servers = [{"name": "L2TP Server", "preSharedKey": "psk", "accountPassword": True}]
+        clients = [{"name": "To Office", "clientUserName": "bob", "clientPassword": "pw"}]
+        with patch.object(openapi_client, "_get_paged", side_effect=[servers, clients]) as mock:
+            result = openapi_client.get_remote_access_vpns("site-001")
+        assert [c.args[0] for c in mock.call_args_list] == [
+            "sites/site-001/vpn/client-to-site-vpn-servers",
+            "sites/site-001/vpn/client-to-site-vpn-clients",
+        ]
+        assert [v["vpnRole"] for v in result] == ["server", "client"]
+        assert result[0]["preSharedKey"] == "<redacted>"
+        assert result[0]["accountPassword"] is True  # boolean flag, not a secret
+        assert result[1]["clientUserName"] == "bob"
+        assert result[1]["clientPassword"] == "<redacted>"
+
+    def test_get_remote_access_vpns_partial_and_total_failure(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        clients = [{"name": "To Office"}]
+        with patch.object(
+            openapi_client, "_get_paged",
+            side_effect=[OmadaAPIError(-1, "x"), clients],
+        ):
+            assert [v["name"] for v in openapi_client.get_remote_access_vpns("site-001")] == ["To Office"]
+        with patch.object(openapi_client, "_get_paged", side_effect=OmadaAPIError(-1, "x")):
+            with pytest.raises(OmadaAPIError):
+                openapi_client.get_remote_access_vpns("site-001")
+
+    def test_get_wireguard_nests_peers_and_redacts(self, openapi_client: OmadaOpenApiClient) -> None:
+        interfaces = [{"id": "wg1", "name": "wg0", "privateKey": "PRIV=", "publicKey": "PUB="}]
+        peers = [
+            {"name": "Laptop", "interfaceId": "wg1", "presharedKey": "PSK=", "publicKey": "PEER="},
+            {"name": "Orphan", "interfaceId": "wg9", "interfaceName": "wg-old"},
+        ]
+        with patch.object(openapi_client, "_get_paged", side_effect=[interfaces, peers]):
+            result = openapi_client.get_wireguard("site-001")
+        assert result[0]["privateKey"] == "<redacted>"
+        assert result[0]["publicKey"] == "PUB="
+        assert result[0]["peers"][0]["name"] == "Laptop"
+        assert result[0]["peers"][0]["presharedKey"] == "<redacted>"
+        assert result[1]["name"] == "wg-old"
+        assert [p["name"] for p in result[1]["peers"]] == ["Orphan"]
+        assert "PRIV=" not in repr(result) and "PSK=" not in repr(result)
+
+    def test_get_vpn_users_redacts_passwords(self, openapi_client: OmadaOpenApiClient) -> None:
+        users = [{"username": "alice", "password": "hunter2", "servers": ["srv1"]}]
+        with patch.object(openapi_client, "_get_paged", return_value=users) as mock:
+            result = openapi_client.get_vpn_users("site-001")
+        mock.assert_called_once_with("sites/site-001/vpn/users")
+        assert result == [{"username": "alice", "password": "<redacted>", "servers": ["srv1"]}]
+
+    def test_get_ssl_vpn_collects_lists_and_redacts(
+        self,
+        openapi_client: OmadaOpenApiClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        base = "sites/site-001/vpn/ssl-vpn-server"
+        paged = {
+            f"{base}/user-groups": [{"id": "g1", "name": "Staff"}],
+            f"{base}/users": [{"name": "alice", "password": "pw!"}],
+            f"{base}/resources": [{"name": "NAS"}],
+        }
+
+        def fake_paged(path: str) -> list:
+            if path == f"{base}/resource-groups":
+                raise OmadaAPIError(-1600, "Unsupported")
+            return paged[path]
+
+        def fake_get(path: str):
+            return {f"{base}/setting": {"status": True, "authType": 0},
+                    f"{base}/radius": [{"id": "r1", "name": "Corp RADIUS"}]}[path]
+
+        with (
+            patch.object(openapi_client, "_get_paged", side_effect=fake_paged),
+            patch.object(openapi_client, "_get", side_effect=fake_get),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = openapi_client.get_ssl_vpn("site-001")
+
+        assert result["setting"] == {"status": True, "authType": 0}
+        assert result["userGroups"] == [{"id": "g1", "name": "Staff"}]
+        assert result["users"] == [{"name": "alice", "password": "<redacted>"}]
+        assert result["resources"] == [{"name": "NAS"}]
+        assert result["resourceGroups"] == []
+        assert result["radiusServers"] == [{"id": "r1", "name": "Corp RADIUS"}]
+        assert "SSL VPN resource-groups unavailable" in caplog.text
+
+    def test_get_ssl_vpn_setting_failure_propagates(self, openapi_client: OmadaOpenApiClient) -> None:
+        with patch.object(openapi_client, "_get", side_effect=OmadaAPIError(-1600, "Unsupported")):
+            with pytest.raises(OmadaAPIError):
+                openapi_client.get_ssl_vpn("site-001")
+
+    def test_get_eogre_tunnel(self, openapi_client: OmadaOpenApiClient) -> None:
+        cfg = {"greEnable": True, "tunnelMtu": 1476}
+        with patch.object(openapi_client, "_get", return_value=cfg) as mock:
+            assert openapi_client.get_eogre_tunnel("site-001") == cfg
+        mock.assert_called_once_with("sites/site-001/vpn/gre-tunnel")
+        with patch.object(openapi_client, "_get", return_value=None):
+            assert openapi_client.get_eogre_tunnel("site-001") == {}
+
+    def test_get_ipsec_failover(self, openapi_client: OmadaOpenApiClient) -> None:
+        groups = [{"name": "HQ failover"}]
+        with patch.object(openapi_client, "_get_paged", return_value=groups) as mock:
+            assert openapi_client.get_ipsec_failover("site-001") == groups
+        mock.assert_called_once_with("sites/site-001/vpn/ipsec_failovers")
+
     def test_get_dhcp_reservations(self, openapi_client: OmadaOpenApiClient) -> None:
         reservations = [{"netName": "LAN", "ip": "192.168.1.50", "mac": "AA-BB-CC-DD-EE-FF", "name": "printer", "status": True, "serverName": "Gateway"}]
         with patch.object(openapi_client, "_get_paged") as mock:
@@ -894,6 +1011,13 @@ class TestServiceWithOpenApiClient:
         mock_client.get_alg_settings.return_value = {}
         mock_client.get_static_routes.return_value = []
         mock_client.get_policy_routes.return_value = []
+        mock_client.get_site_to_site_vpns.return_value = []
+        mock_client.get_remote_access_vpns.return_value = []
+        mock_client.get_wireguard.return_value = []
+        mock_client.get_vpn_users.return_value = []
+        mock_client.get_ssl_vpn.return_value = {}
+        mock_client.get_eogre_tunnel.return_value = {}
+        mock_client.get_ipsec_failover.return_value = []
 
         service = OmadaService(
             client=mock_client,
