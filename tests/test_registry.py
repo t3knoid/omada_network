@@ -12,7 +12,7 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_thirty_eight_resources_defined(self) -> None:
+    def test_all_thirty_nine_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
@@ -53,6 +53,7 @@ class TestRegistry:
             "lags",
             "switch_settings",
             "port_schedules",
+            "uplinks",
         }
 
     def test_registry_lookup_matches_resources(self) -> None:
@@ -1368,6 +1369,66 @@ class TestRowFormatters:
             {"Type": "PoE", "Name": "Night PoE off", "Status": "Enabled", "On During": "Office hours",
              "Ports": "Main Switch: 3, 4"},
             {"Type": "Port", "Name": "Lab", "Status": "Disabled", "On During": "t-x", "Ports": "20:23: 1"},
+        ]
+
+    _UPLINK_DATA = {
+        "switches": [
+            {"deviceName": "Main Switch", "deviceMac": "54-AF", "deviceModel": "TL-SG2428P",
+             "uplink": {"port": 24, "name": "Astoria Gateway", "type": "gateway", "linkSpeed": 3,
+                        "linkPeerPortInfo": {"port": 2}},
+             "downlinks": [{"port": 1, "name": "Lab Switch", "type": "switch", "model": "SG2008",
+                            "linkPeerPortInfo": {"port": 8}, "linkSpeed": 3},
+                           {"lagId": 2, "name": "NAS", "type": "switch"}]},
+            {"deviceName": "Stack Unit", "deviceMac": "CC", "deviceModel": "SX3008F",
+             "uplink": {"lagId": 1, "stPort": "1/0/9", "stackName": "Core", "type": "switch"},
+             "stackMsg": {"stackId": "st1", "stackName": "Core", "unit": 2, "priority": 10,
+                          "stackPorts": [{"ID": 1, "name": "Group 1", "ports": [7, 8]}]}},
+        ],
+        "stacks": [{"name": "Core", "status": 0, "members": [
+            {"name": "Core-1", "unit": 1, "memberStatus": 0, "priority": 15, "showModel": "SX3008F v1.0",
+             "stackPorts": [{"name": "Group 1", "ports": [7, 8]}],
+             "uplink": {"port": 1, "name": "Astoria Gateway", "type": "gateway"}},
+            {"name": "Core-2", "unit": 2, "memberStatus": 1, "priority": 10},
+        ]}],
+    }
+
+    def test_uplink_rows(self) -> None:
+        from omada.registry import _uplink_rows
+        main, unit = _uplink_rows(self._UPLINK_DATA)
+        assert main == {
+            "Switch": "Main Switch", "Model": "TL-SG2428P", "Uplink Port": "24",
+            "Uplink To": "Astoria Gateway (gateway) port 2", "Speed": "1000M", "Downlinks": "2", "Stack": "",
+        }
+        assert unit["Uplink Port"] == "LAG 1"
+        assert unit["Uplink To"] == "Core (switch)"
+        assert unit["Stack"] == "Core unit 2 (priority 10)"
+        assert _uplink_rows({}) == []
+
+    def test_uplink_details_and_remapping_checklist(self) -> None:
+        from omada.registry import _uplink_details
+        context = {"lags": {"lags": [{"deviceMac": "54-af", "lagId": 2, "memberPorts": [25, 26]}]}}
+        sections = dict(_uplink_details(self._UPLINK_DATA, context))
+        assert sections["Main Switch downlinks"] == [
+            {"Local Port": "1", "Device": "Lab Switch (switch)", "Model": "SG2008", "Peer Port": "8",
+             "Speed": "1000M"},
+            {"Local Port": "LAG 2", "Device": "NAS (switch)", "Model": "", "Peer Port": "", "Speed": ""},
+        ]
+        assert sections["Stack Core (Normal)"] == [
+            {"Unit": "1", "Member": "Core-1", "Model": "SX3008F v1.0", "Role": "Master", "Priority": "15",
+             "Stack Ports": "Group 1: 7, 8", "Uplink": "1 → Astoria Gateway (gateway)"},
+            {"Unit": "2", "Member": "Core-2", "Model": "", "Role": "Member", "Priority": "10",
+             "Stack Ports": "", "Uplink": ""},
+        ]
+        checklist = [(r["Switch"], r["Port"], r["Role"])
+                     for r in sections["Remapping checklist (model-specific ports)"]]
+        assert checklist == [
+            ("Main Switch", "24", "Uplink to Astoria Gateway (gateway) port 2"),
+            ("Main Switch", "1", "Downlink to Lab Switch (switch)"),
+            ("Main Switch", "LAG 2", "Downlink to NAS (switch)"),
+            ("Main Switch", "25, 26", "LAG 2 member"),
+            ("Stack Unit", "LAG 1", "Uplink to Core (switch)"),
+            ("Stack Unit", "7, 8", "Stack port group Group 1"),
+            ("Core-1", "Group 1: 7, 8", "Stack Core unit 1 stacking"),
         ]
 
     def test_switch_port_profile_rows(self) -> None:

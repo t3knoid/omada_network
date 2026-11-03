@@ -1182,6 +1182,53 @@ class TestOpenApiResourceMethods:
         with patch.object(openapi_client, "_get_paged", side_effect=fake_paged):
             assert openapi_client.get_port_schedules("site-001") == {"poeSchedules": [{"name": "Night PoE off"}]}
 
+    def test_get_uplinks_switch_detail_fallback_and_stacks(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        devices = [
+            {"name": "Main Switch", "type": "switch", "mac": "54-AF", "model": "TL-SG2428P"},
+            {"name": "Lab Switch", "type": "switch", "mac": "20-23", "model": "SG2008"},
+            {"name": "AP", "type": "ap", "mac": "AA"},
+        ]
+        detail = [{"mac": "54-af", "uplink": {"port": 24, "name": "Astoria Gateway", "type": "gateway",
+                                             "linkPeerPortInfo": {"port": 2}},
+                   "downlinkList": [{"port": 1, "name": "Lab Switch", "type": "switch"}],
+                   "stackMsg": {"stackId": None}}]
+        selected = [{"mac": "20-23", "uplink": {"port": 8, "name": "Main Switch", "type": "switch"}}]
+        stacks = [{"id": "st1", "name": "Core", "status": 0, "masterMac": "CC", "member": [
+            {"name": "Core-1", "mac": "CC", "unit": 1, "priority": 15, "memberStatus": 0, "cpuUtil": 9,
+             "stackPorts": [{"ID": 1, "name": "Group 1", "ports": [25, 26]}]}]}]
+
+        def fake_paged(path: str) -> list:
+            return {"sites/site-001/devices": devices, "sites/site-001/stacks": stacks}[path]
+
+        with (
+            patch.object(openapi_client, "_get_paged", side_effect=fake_paged),
+            patch.object(openapi_client, "_get", return_value=detail) as mock_get,
+            patch.object(openapi_client, "_post", return_value=selected) as mock_post,
+        ):
+            result = openapi_client.get_uplinks("site-001")
+
+        mock_get.assert_called_once_with("sites/site-001/switches/ports/switch-detail")
+        mock_post.assert_called_once()  # Lab Switch missing from switch-detail
+        main, lab = result["switches"]
+        assert main["uplink"]["name"] == "Astoria Gateway"
+        assert main["downlinks"] == [{"port": 1, "name": "Lab Switch", "type": "switch"}]
+        assert "stackMsg" not in main  # no stackId: not stacked
+        assert lab["uplink"]["port"] == 8 and lab["deviceModel"] == "SG2008"
+        [stack] = result["stacks"]
+        assert stack["name"] == "Core" and stack["members"][0]["unit"] == 1
+        assert "cpuUtil" not in stack["members"][0]  # runtime stats dropped
+
+    def test_get_uplinks_no_switches(self, openapi_client: OmadaOpenApiClient) -> None:
+        with (
+            patch.object(openapi_client, "_get_paged",
+                         side_effect=[[{"name": "AP", "type": "ap", "mac": "AA"}], OmadaAPIError(-1, "x")]),
+            patch.object(openapi_client, "_get") as mock_get,
+        ):
+            assert openapi_client.get_uplinks("site-001") == {"switches": [], "stacks": []}
+        mock_get.assert_not_called()
+
     def test_get_ssids_no_wlans(self, openapi_client: OmadaOpenApiClient) -> None:
         with patch.object(openapi_client, "_get_paged") as mock:
             mock.side_effect = OmadaAPIError(-1600, "Unsupported")
@@ -1510,6 +1557,7 @@ class TestServiceWithOpenApiClient:
         mock_client.get_lags.return_value = {}
         mock_client.get_switch_settings.return_value = {}
         mock_client.get_port_schedules.return_value = {}
+        mock_client.get_uplinks.return_value = {}
 
         service = OmadaService(
             client=mock_client,

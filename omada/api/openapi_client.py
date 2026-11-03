@@ -1591,6 +1591,85 @@ class OmadaOpenApiClient:
             switches.append(record)
         return self._redact({"site": site, "switches": switches})
 
+    # ------------------------------------------------------------------
+    # Uplinks and stacks (topology)
+    # ------------------------------------------------------------------
+
+    def get_uplinks(self, site_id: str) -> dict[str, Any]:
+        """Return switch uplinks / downlinks and stack membership.
+
+        * ``switches``: one record per switch with ``uplink`` (local port or
+          LAG, upstream device and its port in ``linkPeerPortInfo``),
+          ``downlinks`` (local port -> downstream device) and ``stackMsg``
+          (stack, unit, priority, stack ports).  Source:
+          ``GET /sites/{siteId}/switches/ports/switch-detail``; switches
+          missing there fall back to ``POST .../switches/ports/select``.
+        * ``stacks``: ``GET /sites/{siteId}/stacks`` -- members with unit,
+          priority, role, stack port groups, and their own uplink / downlinks.
+
+        All parts are best-effort.
+        """
+        devices = [
+            d for d in self.get_devices(site_id)
+            if str(d.get("type", d.get("deviceType", ""))).lower() == "switch" and d.get("mac")
+        ]
+        by_mac: dict[str, dict[str, Any]] = {}
+        if devices:
+            try:
+                detail = self._get(f"sites/{site_id}/switches/ports/switch-detail")
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.debug("Switch uplink detail unavailable: %s", exc)
+                detail = []
+            for sw in detail if isinstance(detail, list) else []:
+                if isinstance(sw, dict) and sw.get("mac"):
+                    by_mac[_normalize_mac(sw["mac"])] = sw
+            if any(_normalize_mac(d["mac"]) not in by_mac for d in devices):
+                try:
+                    selected = self._post(f"sites/{site_id}/switches/ports/select",
+                                          {"selectAll": True, "switchList": []})
+                except (OmadaAPIError, requests.RequestException) as exc:
+                    logger.debug("Switch port select unavailable for uplinks: %s", exc)
+                    selected = []
+                for sw in selected if isinstance(selected, list) else []:
+                    if isinstance(sw, dict) and sw.get("mac"):
+                        by_mac.setdefault(_normalize_mac(sw["mac"]), sw)
+
+        switches = []
+        for device in devices:
+            sw = by_mac.get(_normalize_mac(device["mac"]), {})
+            record: dict[str, Any] = {
+                "deviceName": device.get("name", ""),
+                "deviceMac": device["mac"],
+                "deviceModel": device.get("model", sw.get("showModel", "")),
+            }
+            if isinstance(sw.get("uplink"), dict) and sw["uplink"]:
+                record["uplink"] = sw["uplink"]
+            if sw.get("downlinkList"):
+                record["downlinks"] = sw["downlinkList"]
+            if isinstance(sw.get("stackMsg"), dict) and sw["stackMsg"].get("stackId"):
+                record["stackMsg"] = sw["stackMsg"]
+            switches.append(record)
+
+        try:
+            stacks_raw = self._get_paged(f"sites/{site_id}/stacks")
+        except (OmadaAPIError, requests.RequestException) as exc:
+            logger.debug("Switch stacks unavailable: %s", exc)
+            stacks_raw = []
+        stacks = []
+        for st in stacks_raw:
+            if not isinstance(st, dict):
+                continue
+            stacks.append({
+                "id": st.get("id"), "name": st.get("name", ""), "status": st.get("status"),
+                "masterMac": st.get("masterMac", ""), "devicesNum": st.get("devicesNum"),
+                "members": [
+                    {k: m[k] for k in ("name", "mac", "model", "showModel", "unit", "priority", "memberStatus",
+                                       "status", "stackPorts", "uplink", "downlinkList") if k in m}
+                    for m in st.get("member") or [] if isinstance(m, dict)
+                ],
+            })
+        return {"switches": switches, "stacks": stacks}
+
 
 def _lags_from_overview(device: dict[str, Any], ports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Rebuild LAG groups for one switch from its port-overview records."""

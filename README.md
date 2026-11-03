@@ -38,6 +38,7 @@ Supports both official Open API authentication modes:
 | Switch Settings (management VLAN, jumbo, STP / loop prevention, IGMP snooping) | ✓ | ✓ |
 | Per-port overrides vs. profile (in Device Ports) | ✓ | ✓ |
 | PoE & Port Schedules | ✓ | ✓ |
+| Uplinks & Stacks (with model remapping checklist) | ✓ | ✓ |
 | DHCP Reservations | ✓ | ✓ |
 | DHCP Scopes (pools, DNS/domain, options, relay, guard) | ✓ | ✓ |
 | DHCP Leases | ✓ | ✓ |
@@ -622,7 +623,9 @@ docs/
     ├── switch_settings.yaml
     ├── switch_settings.md
     ├── port_schedules.yaml
-    └── port_schedules.md
+    ├── port_schedules.md
+    ├── uplinks.yaml
+    └── uplinks.md
 ```
 
 ### Example – DHCP Reservations Markdown

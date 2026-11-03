@@ -640,3 +640,28 @@ The Markdown lists each schedule's type, status, time range (by name from
 `time_range_profiles`), and the switch ports it covers. Each member port is
 also tagged in `device_ports` and shows up there as a port-level override.
 
+---
+
+### Uplinks & Stacks (`uplinks`)
+
+| Part | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| `switches[]` | `GET` | `sites/{siteId}/switches/ports/switch-detail` | Per switch: `uplink`, `downlinks` (`downlinkList`), `stackMsg` |
+| Fallback | `POST` | `sites/{siteId}/switches/ports/select` | Read-only; only for switches missing from switch-detail |
+| `stacks[]` | `GET` | `sites/{siteId}/stacks` | Paginated. Members: unit, priority, role (master / member), stack port groups, uplink, downlinks; runtime stats dropped |
+
+All parts are best-effort.
+
+A link's **local port** is the port on this switch: `port`, `stPort` for
+stacks (`unit/slot/port`), or `lagId`, shown as `LAG n`. The remote device is
+`name` / `type` / `model`, and its port is `linkPeerPortInfo`. Speeds use the
+port-status codes (1 10M, 2 100M, 3 1000M, 4 10G).
+
+The Markdown has a summary row per switch (uplink port, upstream device and
+port, speed, downlink count, stack unit), a downlink table per switch, and a
+member table per stack. It ends with a **Remapping checklist** listing every
+port whose role depends on the hardware: uplink ports / LAGs, downlink ports,
+stack port groups, and LAG members (from `lags`). On a different switch model
+those port numbers may not exist or may mean something else (e.g. SFP vs.
+copper), so each one needs a deliberate mapping.
+

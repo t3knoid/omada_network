@@ -2266,6 +2266,149 @@ def _port_schedule_rows(data: Any, context: dict[str, Any] | None = None) -> lis
     return rows
 
 
+# --- Uplinks and stacks ------------------------------------------------------------------
+
+_STACK_STATUS_MAP: dict[int, str] = {0: "Normal", 1: "Abnormal", 2: "Not ready"}
+_STACK_ROLE_MAP: dict[int, str] = {
+    0: "Master", 1: "Member", 2: "Not initialized", 3: "License overdue", 4: "License inactive",
+}
+
+
+def _link_port(link: dict[str, Any]) -> str:
+    """A link's port as ``LAG 1``, ``1/0/24`` (stack) or ``24``."""
+    if link.get("lagId") is not None:
+        return f"LAG {link['lagId']}"
+    return _flatten(link.get("stPort") or link.get("port", ""))
+
+
+def _link_device(link: dict[str, Any]) -> str:
+    name = _flatten(link.get("stackName") or link.get("name") or link.get("mac", ""))
+    kind = _flatten(link.get("type", ""))
+    return f"{name} ({kind})" if kind and name else name
+
+
+def _link_speed(link: dict[str, Any]) -> str:
+    speed = link.get("linkSpeed")
+    return _profile_code(speed, _STATUS_SPEED_MAP) if speed not in (None, 0) else ""
+
+
+def _peer_port(link: dict[str, Any]) -> str:
+    peer = link.get("linkPeerPortInfo") if isinstance(link.get("linkPeerPortInfo"), dict) else {}
+    return _link_port(peer) if peer else ""
+
+
+def _stack_label(msg: Any) -> str:
+    if not isinstance(msg, dict) or not msg.get("stackId"):
+        return ""
+    text = f"{_flatten(msg.get('stackName') or msg['stackId'])} unit {msg.get('unit', '?')}"
+    if msg.get("priority") is not None:
+        text += f" (priority {msg['priority']})"
+    return text
+
+
+def _uplink_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if not isinstance(data, dict):
+        return []
+    rows = []
+    for sw in data.get("switches") or []:
+        if not isinstance(sw, dict):
+            continue
+        up = sw.get("uplink") if isinstance(sw.get("uplink"), dict) else {}
+        peer = _peer_port(up)
+        rows.append({
+            "Switch": _flatten(sw.get("deviceName", "")),
+            "Model": _flatten(sw.get("deviceModel", "")),
+            "Uplink Port": _link_port(up) if up else "",
+            "Uplink To": (_link_device(up) + (f" port {peer}" if peer else "")) if up else "",
+            "Speed": _link_speed(up) if up else "",
+            "Downlinks": str(len(sw.get("downlinks") or [])),
+            "Stack": _stack_label(sw.get("stackMsg")),
+        })
+    return rows
+
+
+def _uplink_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    if not isinstance(data, dict):
+        return []
+    sections: list[tuple[str, list[dict[str, Any]]]] = []
+    lags = (context or {}).get("lags")
+    lag_list = lags.get("lags") if isinstance(lags, dict) else []
+    checklist = []
+
+    for sw in data.get("switches") or []:
+        if not isinstance(sw, dict):
+            continue
+        name = _flatten(sw.get("deviceName", "")) or _flatten(sw.get("deviceMac", ""))
+        model = _flatten(sw.get("deviceModel", ""))
+        downlinks = [
+            {
+                "Local Port": _link_port(d),
+                "Device": _link_device(d),
+                "Model": _flatten(d.get("model", "")),
+                "Peer Port": _peer_port(d),
+                "Speed": _link_speed(d),
+            }
+            for d in sw.get("downlinks") or [] if isinstance(d, dict)
+        ]
+        if downlinks:
+            sections.append((f"{name} downlinks", downlinks))
+
+        up = sw.get("uplink") if isinstance(sw.get("uplink"), dict) else {}
+        if up:
+            checklist.append({"Switch": name, "Model": model, "Port": _link_port(up),
+                              "Role": f"Uplink to {_link_device(up)}"
+                                      + (f" port {_peer_port(up)}" if _peer_port(up) else "")})
+        for d in downlinks:
+            checklist.append({"Switch": name, "Model": model, "Port": d["Local Port"],
+                              "Role": f"Downlink to {d['Device']}"})
+        msg = sw.get("stackMsg") if isinstance(sw.get("stackMsg"), dict) else {}
+        for group in msg.get("stackPorts") or []:
+            if isinstance(group, dict):
+                ports = ", ".join(_flatten(x) for x in group.get("ports") or [])
+                checklist.append({"Switch": name, "Model": model, "Port": ports,
+                                  "Role": f"Stack port group {_flatten(group.get('name') or group.get('ID', ''))}"})
+        for lag in lag_list or []:
+            if isinstance(lag, dict) and str(lag.get("deviceMac", "")).upper() == str(sw.get("deviceMac", "")).upper():
+                checklist.append({"Switch": name, "Model": model, "Port": _lag_members(lag),
+                                  "Role": f"{_lag_label(lag)} member"})
+
+    for st in data.get("stacks") or []:
+        if not isinstance(st, dict):
+            continue
+        members = []
+        for m in st.get("members") or []:
+            if not isinstance(m, dict):
+                continue
+            groups = "; ".join(
+                f"{_flatten(g.get('name') or g.get('ID', ''))}: {', '.join(_flatten(x) for x in g.get('ports') or [])}"
+                for g in m.get("stackPorts") or [] if isinstance(g, dict)
+            )
+            up = m.get("uplink") if isinstance(m.get("uplink"), dict) else {}
+            members.append({
+                "Unit": _flatten(m.get("unit", "")),
+                "Member": _flatten(m.get("name") or m.get("mac", "")),
+                "Model": _flatten(m.get("showModel") or m.get("model", "")),
+                "Role": _profile_code(m["memberStatus"], _STACK_ROLE_MAP) if m.get("memberStatus") is not None else "",
+                "Priority": _flatten(m.get("priority", "")),
+                "Stack Ports": groups,
+                "Uplink": (f"{_link_port(up)} → {_link_device(up)}" if up else ""),
+            })
+            if groups:
+                checklist.append({"Switch": _flatten(m.get("name") or m.get("mac", "")),
+                                  "Model": _flatten(m.get("showModel") or m.get("model", "")),
+                                  "Port": groups, "Role": f"Stack {_flatten(st.get('name', ''))} unit "
+                                                          f"{_flatten(m.get('unit', ''))} stacking"})
+        status = _profile_code(st["status"], _STACK_STATUS_MAP) if st.get("status") is not None else ""
+        title = f"Stack {_flatten(st.get('name', ''))}" + (f" ({status})" if status else "")
+        sections.append((title, members))
+
+    if checklist:
+        sections.append(("Remapping checklist (model-specific ports)", checklist))
+    return sections
+
+
 # Band bits: 1=2.4GHz, 2=5GHz, 4=6GHz  (7=all, 3=2.4+5, etc.)
 _BAND_MAP: dict[int, str] = {
     1: "2.4 GHz",
@@ -3322,6 +3465,15 @@ RESOURCES: list[ResourceDefinition] = [
         row_formatter=_port_schedule_rows,
         sort_key="Name",
         needs_context=True,
+    ),
+    ResourceDefinition(
+        name="uplinks",
+        title="Uplinks & Stacks",
+        fetch_method="get_uplinks",
+        row_formatter=_uplink_rows,
+        sort_key="Switch",
+        needs_context=True,
+        detail_formatter=_uplink_details,
     ),
     ResourceDefinition(
         name="acl_rules",
