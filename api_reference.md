@@ -545,3 +545,30 @@ of its endpoints fail.
 | `bonjourServices` | `GET` | `sites/{siteId}/profiles/bonjour-service` | Service profiles and their `_service._proto.local` IDs |
 | `lanMulticasts` | `GET` | `sites/{siteId}/lan-multicasts` | Paginated. IGMP / MLD snooping: networks, unknown-multicast handling, querier, router ports, report suppression, leave time |
 
+---
+
+### Link Aggregation (`lags`)
+
+| Part | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| Standalone switch LAGs | `GET` | `sites/{siteId}/switches/ports/overview` | Rebuilt from each member port's `lagSetting` (the API has no LAG list for standalone switches) |
+| Fallback | `GET` | `sites/{siteId}/switches/{switchMac}` | Only for a switch missing from the overview: ports flagged `lagPort` are listed as a group with `lagId: null` |
+| Stack LAGs | `GET` | `sites/{siteId}/stacks`, then `stacks/{stackId}/lags` | Full LAG records: name, mode, ports (`unit/slot/port`), profile, status |
+| `mlagGroups` | `GET` | `sites/{siteId}/mlag` | Paginated, best-effort. M-LAG groups: status, member switches and roles, peer-link ports |
+| `hashAlgorithm` | `GET` | `sites/{siteId}/lag-hash-alg` | Best-effort. Site LAG hash: source / destination MAC or IP |
+
+**Group membership.** Ports are grouped by (switch, `lagId`). A group's
+members are the union of every member's `lagSetting.ports`, plus the ports
+carrying that `lagId`. A port marked `operation: AGGREGATING` therefore isn't
+the only source: a member is listed even if its own record is missing or
+incomplete. An aggregating port with no `lagSetting` is shown under
+"LAG (group unknown)".
+
+**Mode** (`lagType`): 1 Static, 2 LACP, 3 LACP (Active), 4 LACP (Passive).
+
+The Markdown has one row per LAG (device, LAG ID, name, mode, member ports,
+link: up/down with speed for stacks, or "x/y members up", profile, M-LAG),
+then a member-port table for each LAG, the M-LAG groups, and the site hash
+algorithm. In `device_ports`, the Operation column of an aggregating port
+names its group, e.g. `Aggregating (LAG 1)`.
+

@@ -12,7 +12,7 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_thirty_five_resources_defined(self) -> None:
+    def test_all_thirty_six_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
@@ -50,6 +50,7 @@ class TestRegistry:
             "dns_settings",
             "time_settings",
             "multicast_services",
+            "lags",
         }
 
     def test_registry_lookup_matches_resources(self) -> None:
@@ -1149,6 +1150,59 @@ class TestRowFormatters:
             "Unknown Multicast": "Discard", "Querier": "Enabled", "Flood Known": "Disabled",
             "Manual Router Ports": "Disabled", "Report Suppression": "Enabled", "Leave Time": "1 s",
         }]
+
+    def test_lag_rows_and_details(self) -> None:
+        from omada.registry import _lag_details, _lag_rows
+        data = {
+            "lags": [
+                {"deviceName": "Main Switch", "lagId": 1, "lagType": 2, "memberPorts": [25, 26],
+                 "profileName": "All", "members": [
+                     {"port": 25, "portName": "Port25", "connectedStatus": 0,
+                      "portStatus": {"linkStatus": 1, "linkSpeed": 3, "duplex": 2}, "profileName": "All"},
+                     {"port": 26, "portName": "Port26", "connectedStatus": 1}]},
+                {"deviceName": "Core Stack", "lagId": 3, "name": "Uplink", "lagType": 3, "ports": [1, 2],
+                 "memberPorts": [1, 2], "mlagEnable": True, "mlagName": "DC Pair",
+                 "standardPorts": [{"unit": 1, "slot": 0, "port": 1}, {"unit": 2, "slot": 0, "port": 1}],
+                 "lagStatus": {"linkStatus": 1, "linkSpeed": 5}},
+                {"deviceName": "Lab Switch", "lagId": None, "memberPorts": [7], "members": []},
+            ],
+            "mlagGroups": [{"name": "DC Pair", "status": 0, "members": [
+                {"name": "Core-A", "role": "Primary", "peerLinkPorts": [47, 48]},
+                {"name": "Core-B", "role": "Secondary"}]}],
+            "hashAlgorithm": {"type": 5},
+        }
+        rows = _lag_rows(data)
+        assert rows[0] == {
+            "Device": "Main Switch", "LAG": "LAG 1", "Name": "", "Mode": "LACP",
+            "Member Ports": "25, 26", "Link": "1/2 members up", "Profile": "All", "M-LAG": "",
+        }
+        assert rows[1]["Mode"] == "LACP (Active)"
+        assert rows[1]["Member Ports"] == "1/0/1, 2/0/1"
+        assert rows[1]["Link"] == "Up (10G)"
+        assert rows[1]["M-LAG"] == "DC Pair"
+        assert rows[2]["LAG"] == "LAG (group unknown)" and rows[2]["Mode"] == ""
+
+        sections = dict(_lag_details(data))
+        assert sections["Main Switch LAG 1 members"] == [
+            {"Port": "25", "Name": "Port25", "Connection": "Connected (1000M Full Duplex)", "Profile": "All"},
+            {"Port": "26", "Name": "Port26", "Connection": "Disconnected", "Profile": ""},
+        ]
+        assert sections["M-LAG Groups"] == [{
+            "Name": "DC Pair", "Status": "Normal", "Members": "Core-A (Primary), Core-B (Secondary)",
+            "Peer Link Ports": "Core-A: 47, 48",
+        }]
+        assert sections["Site LAG Settings"] == [{"Setting": "Hash Algorithm", "Value": "Source + Destination IP"}]
+        assert _lag_rows({}) == [] and _lag_details({}) == []
+
+    def test_device_port_operation_names_lag(self) -> None:
+        from omada.registry import _device_port_rows
+        rows = _device_port_rows([
+            {"deviceName": "SW", "deviceType": "switch", "port": 25, "operation": "AGGREGATING",
+             "lagSetting": {"lagId": 1, "ports": [25, 26]}},
+            {"deviceName": "SW", "deviceType": "switch", "port": 9, "operation": "AGGREGATING"},
+        ])
+        assert rows[0]["Operation"] == "Aggregating (LAG 1)"
+        assert rows[1]["Operation"] == "Aggregating"
 
     def test_switch_port_profile_rows(self) -> None:
         from omada.registry import _switch_port_profile_rows

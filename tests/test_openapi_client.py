@@ -969,6 +969,85 @@ class TestOpenApiResourceMethods:
         assert result["mdnsRules"] == [{"name": "Cast to IoT"}]
         assert result["upnp"] == {"enable": True}
 
+    def test_get_lags_rebuilds_groups_from_port_overview(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        devices = [{"name": "Main Switch", "type": "switch", "mac": "54-AF"}]
+        overview = [
+            # Port 25 carries the full definition: members 25-26, LACP
+            {"switchMac": "54-AF", "port": 25, "portName": "Port25", "operation": "AGGREGATING",
+             "lagSetting": {"lagId": 1, "ports": [25, 26], "lagType": 2}, "profileName": "All"},
+            # Port 26 lists only itself -- membership must still be the union
+            {"switchMac": "54-AF", "port": 26, "portName": "Port26", "operation": "AGGREGATING",
+             "lagSetting": {"lagId": 1, "ports": [26]}},
+            # A second, static LAG whose member list includes a port not in the overview page
+            {"switchMac": "54-AF", "port": 27, "operation": "AGGREGATING",
+             "lagSetting": {"lagId": 2, "ports": [27, 28], "lagType": 1}},
+            # Aggregating without lagSetting: grouped as unknown
+            {"switchMac": "54-AF", "port": 9, "operation": "AGGREGATING"},
+            {"switchMac": "54-AF", "port": 1, "operation": "SWITCHING"},
+        ]
+
+        def fake_paged(path: str) -> list:
+            return {
+                "sites/site-001/devices": devices,
+                "sites/site-001/switches/ports/overview": overview,
+                "sites/site-001/stacks": [],
+                "sites/site-001/mlag": [],
+            }[path]
+
+        with (
+            patch.object(openapi_client, "_get_paged", side_effect=fake_paged),
+            patch.object(openapi_client, "_get", return_value={"type": 2}),
+        ):
+            result = openapi_client.get_lags("site-001")
+
+        lags = result["lags"]
+        assert [(lag["lagId"], lag["memberPorts"]) for lag in lags] == [
+            (1, [25, 26]), (2, [27, 28]), (None, [9]),
+        ]
+        assert lags[0]["lagType"] == 2 and lags[0]["profileName"] == "All"
+        assert lags[0]["deviceName"] == "Main Switch"
+        assert [m["port"] for m in lags[0]["members"]] == [25, 26]
+        assert [m["port"] for m in lags[1]["members"]] == [27]  # 28 known only from the group
+        assert lags[1]["lagType"] == 1
+        assert result["hashAlgorithm"] == {"type": 2}
+        assert result["mlagGroups"] == []
+
+    def test_get_lags_fallback_and_stacks(self, openapi_client: OmadaOpenApiClient) -> None:
+        devices = [{"name": "Lab Switch", "type": "switch", "mac": "20-23"}]
+        stack_lag = {"lagId": 3, "name": "Uplink", "lagType": 3, "ports": [1, 2],
+                     "standardPorts": [{"unit": 1, "slot": 0, "port": 1}, {"unit": 2, "slot": 0, "port": 1}],
+                     "lagStatus": {"linkStatus": 1, "linkSpeed": 5}}
+
+        def fake_paged(path: str) -> list:
+            if path == "sites/site-001/switches/ports/overview":
+                raise OmadaAPIError(-1600, "Unsupported")
+            if path == "sites/site-001/mlag":
+                raise OmadaAPIError(-1600, "Unsupported")
+            return {"sites/site-001/devices": devices,
+                    "sites/site-001/stacks": [{"id": "st1", "name": "Core Stack"}]}[path]
+
+        def fake_get(path: str):
+            if path == "sites/site-001/switches/20-23":
+                return {"portList": [{"port": 7, "lagPort": True}, {"port": 8, "lagPort": False}]}
+            if path == "sites/site-001/stacks/st1/lags":
+                return [stack_lag]
+            raise OmadaAPIError(-1600, "Unsupported")
+
+        with (
+            patch.object(openapi_client, "_get_paged", side_effect=fake_paged),
+            patch.object(openapi_client, "_get", side_effect=fake_get),
+        ):
+            result = openapi_client.get_lags("site-001")
+
+        fallback, stack = result["lags"]
+        assert fallback["lagId"] is None and fallback["memberPorts"] == [7]
+        assert fallback["source"] == "switch-info"
+        assert stack["deviceName"] == "Core Stack" and stack["deviceType"] == "stack"
+        assert stack["name"] == "Uplink" and stack["memberPorts"] == [1, 2]
+        assert "mlagGroups" not in result and "hashAlgorithm" not in result
+
     def test_get_ssids_no_wlans(self, openapi_client: OmadaOpenApiClient) -> None:
         with patch.object(openapi_client, "_get_paged") as mock:
             mock.side_effect = OmadaAPIError(-1600, "Unsupported")
@@ -1294,6 +1373,7 @@ class TestServiceWithOpenApiClient:
         mock_client.get_dns_settings.return_value = {}
         mock_client.get_time_settings.return_value = {}
         mock_client.get_multicast_services.return_value = {}
+        mock_client.get_lags.return_value = {}
 
         service = OmadaService(
             client=mock_client,

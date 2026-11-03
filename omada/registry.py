@@ -1730,6 +1730,120 @@ def _multicast_services_details(
     return sections
 
 
+# --- Link aggregation (LAGs) ---------------------------------------------------------
+
+_LAG_TYPE_MAP: dict[int, str] = {1: "Static", 2: "LACP", 3: "LACP (Active)", 4: "LACP (Passive)"}
+_LAG_HASH_MAP: dict[int, str] = {
+    0: "Source MAC", 1: "Destination MAC", 2: "Source + Destination MAC",
+    3: "Source IP", 4: "Destination IP", 5: "Source + Destination IP",
+}
+# OswLagStatusVO.linkSpeed codes (differ from the port-status speed codes).
+_LAG_SPEED_MAP: dict[int, str] = {0: "Auto", 1: "10M", 2: "100M", 3: "1000M", 4: "2.5G", 5: "10G"}
+_MLAG_STATUS_MAP: dict[int, str] = {
+    0: "Normal", 1: "Peer error", 2: "DAD error", 3: "Abnormal",
+    4: "Configuration unsynchronized", 5: "Members incompatible", 6: "Members mismatch",
+}
+
+
+def _lag_label(lag: dict[str, Any]) -> str:
+    return f"LAG {lag['lagId']}" if lag.get("lagId") is not None else "LAG (group unknown)"
+
+
+def _stand_ports(ports: Any) -> str:
+    """Stack ports as ``unit/slot/port``."""
+    return ", ".join(
+        f"{sp.get('unit', '')}/{sp.get('slot', 0)}/{sp.get('port', '')}"
+        for sp in ports or [] if isinstance(sp, dict)
+    )
+
+
+def _lag_members(lag: dict[str, Any]) -> str:
+    stand = _stand_ports(lag.get("standardPorts") or lag.get("standPorts") or lag.get("stPorts"))
+    return stand or ", ".join(str(p) for p in lag.get("memberPorts") or lag.get("ports") or [])
+
+
+def _lag_link(lag: dict[str, Any]) -> str:
+    status = lag.get("lagStatus") if isinstance(lag.get("lagStatus"), dict) else None
+    if status and "linkStatus" in status:
+        if status["linkStatus"] != 1:
+            return "Down"
+        speed = _profile_code(status.get("linkSpeed"), _LAG_SPEED_MAP) if status.get("linkSpeed") else ""
+        return f"Up ({speed})" if speed else "Up"
+    members = [m for m in lag.get("members") or [] if isinstance(m, dict)]
+    if not members:
+        return ""
+    up = sum(1 for m in members if _port_connection({"deviceType": "switch", **m}).startswith("Connected"))
+    return f"{up}/{len(members)} members up"
+
+
+def _lag_rows(data: Any) -> list[dict[str, Any]]:
+    lags = data.get("lags") if isinstance(data, dict) else data
+    rows = []
+    for lag in lags if isinstance(lags, list) else []:
+        if not isinstance(lag, dict):
+            continue
+        mlag = ""
+        if lag.get("mlagEnable"):
+            mlag = _flatten(lag.get("mlagName") or "Enabled")
+        rows.append({
+            "Device": _flatten(lag.get("deviceName", "")),
+            "LAG": _lag_label(lag),
+            "Name": _flatten(lag.get("name", "")),
+            "Mode": _profile_code(lag["lagType"], _LAG_TYPE_MAP) if lag.get("lagType") is not None else "",
+            "Member Ports": _lag_members(lag),
+            "Link": _lag_link(lag),
+            "Profile": _flatten(lag.get("profileName", "")),
+            "M-LAG": mlag,
+        })
+    return rows
+
+
+def _lag_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    if not isinstance(data, dict):
+        return []
+    sections: list[tuple[str, list[dict[str, Any]]]] = []
+    for lag in data.get("lags") or []:
+        if not isinstance(lag, dict) or not lag.get("members"):
+            continue
+        members = [
+            {
+                "Port": _flatten(m.get("port", "")),
+                "Name": _flatten(m.get("portName", m.get("name", ""))),
+                "Connection": _port_connection({"deviceType": "switch", **m}),
+                "Profile": _flatten(m.get("profileName", "")),
+            }
+            for m in lag["members"] if isinstance(m, dict)
+        ]
+        sections.append((f"{_flatten(lag.get('deviceName', ''))} {_lag_label(lag)} members", members))
+    mlag = []
+    for group in data.get("mlagGroups") or []:
+        if not isinstance(group, dict):
+            continue
+        members = group.get("members") or []
+        mlag.append({
+            "Name": _flatten(group.get("name", "")),
+            "Status": _profile_code(group["status"], _MLAG_STATUS_MAP) if group.get("status") is not None else "",
+            "Members": ", ".join(
+                f"{_flatten(m.get('name') or m.get('mac', ''))}" + (f" ({m['role']})" if m.get("role") else "")
+                for m in members if isinstance(m, dict)
+            ),
+            "Peer Link Ports": "; ".join(
+                f"{_flatten(m.get('name') or m.get('mac', ''))}: {_flatten(m.get('peerLinkPorts'))}"
+                for m in members if isinstance(m, dict) and m.get("peerLinkPorts")
+            ),
+        })
+    if mlag:
+        sections.append(("M-LAG Groups", mlag))
+    hash_alg = data.get("hashAlgorithm")
+    if isinstance(hash_alg, dict) and hash_alg.get("type") is not None:
+        sections.append(("Site LAG Settings", [
+            {"Setting": "Hash Algorithm", "Value": _profile_code(hash_alg["type"], _LAG_HASH_MAP)},
+        ]))
+    return sections
+
+
 # Band bits: 1=2.4GHz, 2=5GHz, 4=6GHz  (7=all, 3=2.4+5, etc.)
 _BAND_MAP: dict[int, str] = {
     1: "2.4 GHz",
@@ -2679,7 +2793,11 @@ def _port_operation(p: dict[str, Any]) -> str:
             return "Mirroring"
         return _map_code(p.get("mode", ""), _GATEWAY_PORT_MODE_MAP)
     operation = p.get("operation", "")
-    return str(operation).title() if isinstance(operation, str) else _flatten(operation)
+    text = str(operation).title() if isinstance(operation, str) else _flatten(operation)
+    lag = p.get("lagSetting") if isinstance(p.get("lagSetting"), dict) else {}
+    if str(operation).upper() == "AGGREGATING" and lag.get("lagId") is not None:
+        text += f" (LAG {lag['lagId']})"
+    return text
 
 
 def _network_lookups(context: dict[str, Any] | None) -> tuple[dict[str, str], dict[str, str]]:
@@ -2911,6 +3029,14 @@ RESOURCES: list[ResourceDefinition] = [
         sort_key="",
         needs_context=True,
         detail_formatter=_multicast_services_details,
+    ),
+    ResourceDefinition(
+        name="lags",
+        title="Link Aggregation (LAGs)",
+        fetch_method="get_lags",
+        row_formatter=_lag_rows,
+        sort_key="Device",  # stable sort keeps LAG order within each device
+        detail_formatter=_lag_details,
     ),
     ResourceDefinition(
         name="dhcp_reservations",

@@ -1357,3 +1357,119 @@ class OmadaOpenApiClient:
         if isinstance(bonjour, dict):  # {"data": [...]} wrapper
             data["bonjourServices"] = bonjour.get("data", [])
         return data
+
+    # ------------------------------------------------------------------
+    # Link aggregation
+    # ------------------------------------------------------------------
+
+    def get_lags(self, site_id: str) -> dict[str, Any]:
+        """Return link aggregation groups (LAGs), M-LAG groups and hash setting.
+
+        * ``lags``: one record per LAG.
+
+          - Standalone switches have no LAG list endpoint, so groups are
+            rebuilt from ``GET /sites/{siteId}/switches/ports/overview``:
+            every port whose ``lagSetting`` carries a ``lagId`` is grouped by
+            (switch, ``lagId``), and membership is the union of each member's
+            ``lagSetting.ports`` -- not just the ports showing
+            ``operation: AGGREGATING``.  Mode comes from ``lagType``.
+          - A switch missing from the overview falls back to
+            ``GET .../switches/{mac}``; ports flagged ``lagPort`` are listed
+            in a group with ``lagId: null`` (group unknown).
+          - Stacks: ``GET /sites/{siteId}/stacks`` then
+            ``GET /sites/{siteId}/stacks/{stackId}/lags`` (best-effort).
+
+        * ``mlagGroups``: ``GET /sites/{siteId}/mlag`` (best-effort).
+        * ``hashAlgorithm``: ``GET /sites/{siteId}/lag-hash-alg`` (best-effort).
+        """
+        devices = self.get_devices(site_id)
+        overview = self._get_switch_port_overview(site_id, devices)
+        lags: list[dict[str, Any]] = []
+        for device in devices:
+            if str(device.get("type", device.get("deviceType", ""))).lower() != "switch":
+                continue
+            mac = device.get("mac", device.get("deviceMac", ""))
+            if not mac:
+                continue
+            ports = overview.get(_normalize_mac(mac))
+            if ports is not None:
+                lags.extend(_lags_from_overview(device, ports))
+                continue
+            try:
+                port_list = self._get_switch_ports(site_id, str(mac))
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.debug("LAG membership unavailable for switch %s: %s", mac, exc)
+                continue
+            members = [p for p in port_list if p.get("lagPort")]
+            if members:
+                lags.append({
+                    "deviceName": device.get("name", ""), "deviceMac": mac, "deviceType": "switch",
+                    "lagId": None, "memberPorts": sorted(p.get("port") for p in members if p.get("port") is not None),
+                    "members": members, "source": "switch-info",
+                })
+
+        try:
+            stacks = self._get_paged(f"sites/{site_id}/stacks")
+        except (OmadaAPIError, requests.RequestException) as exc:
+            logger.debug("Switch stacks unavailable: %s", exc)
+            stacks = []
+        for stack in stacks:
+            if not isinstance(stack, dict) or not stack.get("id"):
+                continue
+            try:
+                stack_lags = self._get(f"sites/{site_id}/stacks/{quote(str(stack['id']), safe='')}/lags")
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.warning("LAGs unavailable for stack %s: %s", stack.get("name", stack["id"]), exc)
+                continue
+            for lag in stack_lags if isinstance(stack_lags, list) else []:
+                if isinstance(lag, dict):
+                    lags.append({
+                        "deviceName": stack.get("name", ""), "deviceType": "stack", "stackId": stack["id"],
+                        "memberPorts": sorted(lag.get("ports") or []), "source": "stack", **lag,
+                    })
+
+        data: dict[str, Any] = {"lags": lags}
+        for key, path, paged in (("mlagGroups", "mlag", True), ("hashAlgorithm", "lag-hash-alg", False)):
+            try:
+                value = self._get_paged(f"sites/{site_id}/{path}") if paged else self._get(f"sites/{site_id}/{path}")
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.debug("LAG %s unavailable: %s", path, exc)
+                continue
+            data[key] = value
+        return data
+
+
+def _lags_from_overview(device: dict[str, Any], ports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rebuild LAG groups for one switch from its port-overview records."""
+    by_port = {p.get("port"): p for p in ports if isinstance(p, dict)}
+    groups: dict[Any, dict[str, Any]] = {}
+    for port in by_port.values():
+        setting = port.get("lagSetting") if isinstance(port.get("lagSetting"), dict) else None
+        lag_id = setting.get("lagId") if setting else None
+        aggregating = str(port.get("operation", "")).upper() == "AGGREGATING"
+        if lag_id is None and not aggregating:
+            continue
+        group = groups.setdefault(lag_id, {
+            "deviceName": device.get("name", ""),
+            "deviceMac": device.get("mac", device.get("deviceMac", "")),
+            "deviceType": "switch",
+            "lagId": lag_id,
+            "source": "port-overview",
+            "_members": set(),
+        })
+        group["_members"].add(port.get("port"))
+        if setting:
+            group["_members"].update(p for p in setting.get("ports") or [] if p is not None)
+            for key in ("lagType", "mlagName", "mlagEnable", "mlagPeerSetting", "standPorts"):
+                if setting.get(key) not in (None, "", []):
+                    group.setdefault(key, setting[key])
+        for key in ("profileName", "profileId"):
+            if port.get(key) and key not in group:
+                group[key] = port[key]
+    records = []
+    for group in groups.values():
+        members = sorted(m for m in group.pop("_members") if m is not None)
+        group["memberPorts"] = members
+        group["members"] = [by_port[m] for m in members if m in by_port]
+        records.append(group)
+    return sorted(records, key=lambda g: (g["lagId"] is None, g["lagId"] if g["lagId"] is not None else 0))
