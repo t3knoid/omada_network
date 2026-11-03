@@ -187,6 +187,10 @@ Omada Open API client tests.
 | | `test_get_gateway_settings_all_fail` | Returns empty dict when all endpoints fail |
 | | `test_get_ssids` | Fetches SSIDs with WLAN group names |
 | | `test_get_ssids_no_wlans` | Returns empty list when WLAN endpoint fails |
+| | `test_get_wan_failover_collects_config_and_health` | Combines load-balance, basic-info, and per-gateway WAN health |
+| | `test_collect_tolerates_partial_and_raises_on_total_failure` | Multi-endpoint resources tolerate partial failure; DDNS password redacted |
+| | `test_get_time_settings_uses_site_info_without_trailing_slash` | Reads time zone / NTP from site info, keeping only time-related fields |
+| | `test_get_multicast_services_unwraps_bonjour` | Collects multicast/Bonjour/UPnP settings and unwraps the Bonjour list |
 | | `test_get_ssids_merges_detail_and_overrides_and_redacts` | Merges SSID detail and AP overrides; redacts passphrase and override password |
 | | `test_get_ssids_detail_falls_back_to_wlan_path` | Falls back to the WLAN-scoped SSID detail endpoint |
 | | `test_get_radius_profiles_redacts_all_secrets` | Redacts RADIUS auth, accounting, CoA, and built-in secrets |
@@ -225,7 +229,7 @@ Resource registry and `generate_from_yaml` tests.
 
 | Class | Test | Description |
 | --- | --- | --- |
-| `TestRegistry` | `test_all_thirty_one_resources_defined` | All 31 resource types are registered |
+| `TestRegistry` | `test_all_thirty_five_resources_defined` | All 35 resource types are registered |
 | | `test_registry_lookup_matches_resources` | Registry lookup matches `RESOURCES` list |
 | | `test_all_definitions_are_resource_definition` | All entries are `ResourceDefinition` instances |
 | | `test_all_row_formatters_callable` | All row formatters are callable |
@@ -270,6 +274,12 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_dhcp_scope_details_switch_relay` | Switch DHCP relay interface and target servers |
 | | `test_dhcp_lease_rows_sorted_by_network_then_ip` | DHCP leases sorted by network and numeric IP |
 | | `test_dhcp_reservation_rows_sorted_with_description_and_options` | Reservations sorted by network and IP, with description and options |
+| | `test_wan_failover_rows` | Health-check interval, link backup (primary/backup WAN, trigger, mode), and per-WAN weights |
+| | `test_wan_failover_health_snapshot` | WAN health snapshot (link, internet, latency, loss), skipping LAN-mode ports |
+| | `test_dns_settings_rows_per_proxy_type` | DNS proxy as DoH, DoT, DNSSEC, and DNS Override, plus DNS cache |
+| | `test_dns_settings_details` | LAN DNS records (IP / CNAME / forward, TTL) and Dynamic DNS entries |
+| | `test_time_settings_rows` | Time zone, region, NTP servers, and DST |
+| | `test_multicast_services_rows_and_details` | IGMP/MLD proxy, IPTV, UPnP, mDNS rules, Bonjour profiles, and snooping |
 | | `test_switch_port_profile_rows` | Formats switch port profile rows |
 | | `test_switch_port_profile_rows_vlan_columns` | Resolves native, untagged, and tagged networks in the profile summary |
 | | `test_switch_port_profile_details_lists_all_properties` | Per-profile detail rows cover every property group, plus unmapped keys |

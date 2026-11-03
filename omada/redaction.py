@@ -60,4 +60,3 @@ def contains_secrets(data: Any) -> bool:
     if isinstance(data, list):
         return any(contains_secrets(v) for v in data)
     return False
-

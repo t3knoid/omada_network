@@ -494,3 +494,54 @@ does not state its unit.
 > *Get user group / user / resource / resource group list for SSL VPN server*,
 > *Get radius server for SSL VPN server*, *Get EoGRE tunnel config*,
 > *Get IPsec failover list*.
+
+---
+
+## WAN Failover and Site Services
+
+These resources each combine several endpoints. Every part is best-effort: a
+failing endpoint is logged and left out, and the resource only fails if all
+of its endpoints fail.
+
+### WAN Failover & Load Balancing (`wan_failover`)
+
+| Part | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| `loadBalance` | `GET` | `sites/{siteId}/internet/load-balance` | Weights, link backup, primary / backup WANs, backup mode and trigger, schedule, application-optimized routing, virtual WAN weights |
+| `internet` | `GET` | `sites/{siteId}/internet/basic-info` | WAN port list, and the online-detection (health check) interval: `0` = disabled |
+| `wanHealth` | `GET` | `sites/{siteId}/gateways/{gatewayMac}/wan-status` | Per gateway: link, internet state, online detection, latency, packet loss, health level |
+
+- **Backup trigger** (`mode`): 0 when any primary WAN fails, 1 when all fail, 2 on schedule (time range profile).
+- **Backup mode** (`backupMode`): 0 stays on backup until it fails, 1 returns to primary when it recovers.
+- **Weights** are listed "sorted by port ID". They are matched to the WAN-mode ports from `basic-info` in port-number order, and shown unlabelled if the counts differ.
+- **Health checks:** the Open API exposes only the detection *interval*. The ping / DNS-lookup targets are not available. `wanHealth` is the status at export time, not configuration, so it changes between runs.
+
+### DNS (`dns_settings`)
+
+| Part | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| `dnsProxy` | `GET` | `sites/{siteId}/setting/service/dns-proxy` | DNSSEC (servers, bogus-reply policy), DoH / DoT (preset and custom servers), DNS Override (servers, networks) |
+| `dnsCache` | `GET` | `sites/{siteId}/setting/service/dns-cache` | Enabled, TTL |
+| `lanDns` | `GET` | `sites/{siteId}/setting/lan/dns` | Paginated. Local records: IP (A/AAAA), CNAME, or forward; aliases, networks, TTL |
+| `ddns` | `GET` | `sites/{siteId}/setting/service/ddns` | Paginated. Provider, domain, interface, username, interval, custom URL; password redacted |
+
+### Time & NTP (`time_settings`)
+
+| Part | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| `site` | `GET` | `sites/{siteId}` | Only `timeZone`, `ntpServers`, `region`, `name`, `scenario` are kept |
+| `dst` | `GET` | `sites/{siteId}/dst-info` | DST mode (disabled / automatic / manual), offset, start / end |
+| `ntpStatus` | `GET` | `sites/{siteId}/setting/ntp` | Gateway NTP server status; returned as-is (untyped in the spec) |
+
+### Multicast, Bonjour & UPnP (`multicast_services`)
+
+| Part | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| `igmp` | `GET` | `sites/{siteId}/setting/service/igmp` | IGMP proxy: version, upstream WAN / virtual WAN |
+| `mld` | `GET` | `sites/{siteId}/setting/service/mld` | MLD proxy: version, upstream WAN |
+| `iptv` | `GET` | `sites/{siteId}/setting/service/iptv` | Bridge / custom mode, IPTV and IP-phone VLANs with priority, LAN port roles |
+| `upnp` | `GET` | `sites/{siteId}/upnp` | Enabled, WAN ports, LAN networks |
+| `mdnsRules` | `GET` | `sites/{siteId}/setting/service/mdns` | Paginated. Bonjour services forwarded between service and client networks (by network or VLAN) |
+| `bonjourServices` | `GET` | `sites/{siteId}/profiles/bonjour-service` | Service profiles and their `_service._proto.local` IDs |
+| `lanMulticasts` | `GET` | `sites/{siteId}/lan-multicasts` | Paginated. IGMP / MLD snooping: networks, unknown-multicast handling, querier, router ports, report suppression, leave time |
+

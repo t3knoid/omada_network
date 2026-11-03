@@ -1325,6 +1325,411 @@ def _ipsec_failover_rows(data: Any) -> list[dict[str, Any]]:
     return rows
 
 
+# --- WAN failover / load balancing ------------------------------------------------
+
+_BACKUP_MODE_MAP: dict[int, str] = {
+    0: "Stay on backup until it fails (no automatic switch-back)",
+    1: "Return to primary when it recovers",
+}
+_BACKUP_TRIGGER_MAP: dict[int, str] = {
+    0: "When any primary WAN fails",
+    1: "When all primary WANs fail",
+    2: "On schedule",
+}
+
+
+def _port_number(port_id: Any) -> tuple[int, str]:
+    prefix = str(port_id).split("_", 1)[0]
+    return (int(prefix), str(port_id)) if prefix.isdigit() else (10**6, str(port_id))
+
+
+def _wan_failover_names(data: dict[str, Any], context: dict[str, Any] | None) -> dict[str, str]:
+    names = dict(_wan_port_names(context))
+    internet = data.get("internet") if isinstance(data.get("internet"), dict) else {}
+    for port in internet.get("portList") or []:
+        if isinstance(port, dict) and port.get("portId"):
+            names.setdefault(str(port["portId"]), _flatten(port.get("portName") or port["portId"]))
+    return names
+
+
+def _wan_failover_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if not isinstance(data, dict) or not data:
+        return []
+    names = _wan_failover_names(data, context)
+    lb = data.get("loadBalance") if isinstance(data.get("loadBalance"), dict) else {}
+    internet = data.get("internet") if isinstance(data.get("internet"), dict) else {}
+    rows: list[tuple[str, str]] = []
+    if "interval" in internet:
+        interval = internet["interval"]
+        rows.append(("Health Check (Online Detection)",
+                     "Disabled" if interval == 0 else f"Every {interval} s"))
+    if lb:
+        rows.append(("Link Backup (Failover)", _enabled(lb.get("linkBackup"))))
+        if lb.get("linkBackup"):
+            rows.append(("Primary WANs", _nat_interfaces(lb.get("primaryWans"), names)))
+            if lb.get("backupWan"):
+                rows.append(("Backup WAN", names.get(str(lb["backupWan"]), str(lb["backupWan"]))))
+            if lb.get("mode") is not None:
+                trigger = _profile_code(lb["mode"], _BACKUP_TRIGGER_MAP)
+                if lb["mode"] == 2 and lb.get("timeRangeId"):
+                    schedule = _ssid_lookups(context)["schedule"].get(str(lb["timeRangeId"]), lb["timeRangeId"])
+                    trigger += f" ({schedule})"
+                rows.append(("Backup Trigger", trigger))
+            if lb.get("backupMode") is not None:
+                rows.append(("Backup Mode", _profile_code(lb["backupMode"], _BACKUP_MODE_MAP)))
+            if lb.get("method"):
+                rows.append(("Backup Method", _flatten(lb["method"])))
+        if "appOptRouting" in lb:
+            rows.append(("Application Optimized Routing", _enabled(lb["appOptRouting"])))
+        weights = lb.get("weights")
+        if isinstance(weights, list) and weights:
+            wan_ports = sorted(
+                (str(p["portId"]) for p in internet.get("portList") or []
+                 if isinstance(p, dict) and p.get("portId") and p.get("portMode", 0) == 0),
+                key=_port_number,
+            )
+            if len(wan_ports) == len(weights):
+                text = ", ".join(f"{names.get(pid, pid)}: {w}" for pid, w in zip(wan_ports, weights))
+            else:
+                text = ", ".join(str(w) for w in weights)
+            rows.append(("Load Balancing Weights", text))
+        vw = [
+            f"{_flatten(v.get('name') or v.get('virtualWanId', ''))}: {v.get('weight', '')}"
+            for v in lb.get("virtualWanWeights") or [] if isinstance(v, dict)
+        ]
+        if vw:
+            rows.append(("Virtual WAN Weights", ", ".join(vw)))
+    return [{"Setting": k, "Value": v} for k, v in rows if v != ""]
+
+
+def _wan_failover_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    if not isinstance(data, dict):
+        return []
+    health = []
+    for h in data.get("wanHealth") or []:
+        if not isinstance(h, dict):
+            continue
+        mode = h.get("mode")
+        if mode == 1:  # LAN-mode port: no WAN health to report
+            continue
+        speed = _profile_code(h.get("speed", ""), _STATUS_SPEED_MAP) if h.get("speed") else ""
+        health.append({
+            "Gateway": _flatten(h.get("gatewayName", "")),
+            "WAN": _flatten(h.get("name", "")),
+            "Link": ("Connected" if h.get("status") == 1 else "Disconnected") if "status" in h else "",
+            "Internet": ("Online" if h.get("internetState") == 1 else "Offline") if "internetState" in h else "",
+            "Online Detection": ("Online" if h.get("onlineDetection") == 1 else "Offline")
+            if "onlineDetection" in h else "",
+            "IP": _flatten(h.get("ip", "")),
+            "Connection": _flatten(h.get("proto", "")),
+            "Speed": speed,
+            "Latency": f"{h['latency']} ms" if h.get("latency") is not None else "",
+            "Packet Loss": f"{h['loss']}%" if h.get("loss") is not None else "",
+            "Health Level": _flatten(h.get("healthLevel", "")),
+        })
+    return [("WAN Health (status at export time)", health)] if health else []
+
+
+# --- DNS ----------------------------------------------------------------------------
+
+_DNS_PROXY_TYPE_MAP: dict[int, str] = {0: "DNSSEC", 1: "DNS over HTTPS", 2: "DNS over TLS", 3: "DNS Override"}
+_DOH_SERVER_MAP: dict[int, str] = {0: "Google", 1: "Cloudflare", 4: "CleanBrowsing", 5: "Quad9 (1)", 6: "Quad9 (2)"}
+_DOT_SERVER_MAP: dict[int, str] = {0: "Google", 1: "Cloudflare", 2: "OpenDNS", 3: "Quad9", 4: "CleanBrowsing"}
+_BOGUS_REPLY_MAP: dict[int, str] = {0: "Pass", 1: "Drop"}
+_LAN_DNS_TYPE_MAP: dict[int, str] = {0: "IP", 1: "CNAME", 2: "Forward"}
+_DDNS_SERVICE_MAP: dict[int, str] = {
+    0: "DynDNS", 1: "NO-IP", 2: "Peanuthull", 3: "Comexe", 4: "Custom", 5: "TP-Link DDNS",
+}
+
+
+def _dns_custom_servers(servers: Any, key: str) -> list[str]:
+    out = []
+    for srv in servers or []:
+        if isinstance(srv, dict) and srv.get("enable", True):
+            target = srv.get(key)
+            target = ", ".join(str(t) for t in target) if isinstance(target, list) else _flatten(target)
+            out.append(f"{srv.get('name', 'Custom')} ({target})" if target else _flatten(srv.get("name", "")))
+    return out
+
+
+def _dns_settings_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if not isinstance(data, dict) or not data:
+        return []
+    lookup = _build_id_lookup(context)
+    rows: list[tuple[str, str]] = []
+    proxy = data.get("dnsProxy") if isinstance(data.get("dnsProxy"), dict) else None
+    if proxy is not None:
+        rows.append(("DNS Proxy", _enabled(proxy.get("enable"))))
+        if proxy.get("enable"):
+            kind = proxy.get("type")
+            rows.append(("DNS Proxy Type", _profile_code(kind, _DNS_PROXY_TYPE_MAP) if kind is not None else ""))
+            if kind == 0 and isinstance(proxy.get("dnsSecSetting"), dict):
+                sec = proxy["dnsSecSetting"]
+                rows.append(("DNSSEC Servers", ", ".join(str(x) for x in sec.get("servers") or [])))
+                if sec.get("replyPolicy") is not None:
+                    rows.append(("Bogus Reply Policy", _profile_code(sec["replyPolicy"], _BOGUS_REPLY_MAP)))
+            for k, key, smap, ckey in ((1, "dohSetting", _DOH_SERVER_MAP, "server"),
+                                       (2, "dotSetting", _DOT_SERVER_MAP, "servers")):
+                if kind == k and isinstance(proxy.get(key), dict):
+                    cfg = proxy[key]
+                    servers = [_profile_code(x, smap) for x in cfg.get("defaultServers") or []]
+                    servers += _dns_custom_servers(cfg.get("customizedServers"), ckey)
+                    rows.append(("Upstream Servers", ", ".join(servers)))
+            if kind == 3 and isinstance(proxy.get("dnsOverrideSetting"), dict):
+                ov = proxy["dnsOverrideSetting"]
+                rows.append(("Override Servers", ", ".join(
+                    str(x) for x in (ov.get("primaryDnsServer"), ov.get("secondaryDnsServer")) if x)))
+                rows.append(("Override Applies To", _resolve_ids(ov.get("applyNetwork") or [], lookup)))
+    cache = data.get("dnsCache") if isinstance(data.get("dnsCache"), dict) else None
+    if cache is not None:
+        text = _enabled(cache.get("enable"))
+        if cache.get("enable") and cache.get("ttl") is not None:
+            text += f" (TTL {cache['ttl']} s)"
+        rows.append(("DNS Cache", text))
+    if isinstance(data.get("lanDns"), list):
+        rows.append(("LAN DNS Records", str(len(data["lanDns"]))))
+    if isinstance(data.get("ddns"), list):
+        rows.append(("Dynamic DNS Entries", str(len(data["ddns"]))))
+    return [{"Setting": k, "Value": v} for k, v in rows if v != ""]
+
+
+def _dns_settings_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    if not isinstance(data, dict):
+        return []
+    lookup = _build_id_lookup(context)
+    wan_names = _wan_port_names(context)
+    records = []
+    for r in data.get("lanDns") or []:
+        if not isinstance(r, dict):
+            continue
+        kind = r.get("type")
+        if kind == 1:
+            answer = _flatten(r.get("cname", ""))
+        elif kind == 2:
+            answer = "Forward to " + ", ".join(str(x) for x in r.get("dnsServers") or [])
+        else:
+            answer = ", ".join(str(x) for x in (r.get("ipAddresses") or []) + (r.get("ipv6Addresses") or []))
+        records.append({
+            "Name": _flatten(r.get("name", "")),
+            "Status": _enabled(r.get("enable")),
+            "Domain": _flatten(r.get("domain", "")),
+            "Aliases": ", ".join(str(a) for a in r.get("aliases") or []),
+            "Type": _profile_code(kind, _LAN_DNS_TYPE_MAP) if kind is not None else "",
+            "Answer": answer,
+            "Networks": _resolve_ids(r.get("lanNetworkIds") or [], lookup),
+            "TTL": f"{r['ttl']} s" if r.get("customTtl") and r.get("ttl") is not None else "Default (3600 s)",
+        })
+    ddns = []
+    for r in data.get("ddns") or []:
+        if not isinstance(r, dict):
+            continue
+        if r.get("customInterval"):
+            interval = f"{r['customInterval']} min"
+        else:
+            interval = f"{r['updateInterval']} h" if r.get("updateInterval") is not None else ""
+        ddns.append({
+            "Service": _profile_code(r.get("service", ""), _DDNS_SERVICE_MAP),
+            "Status": _enabled(r.get("status")),
+            "Domain": _flatten(r.get("domainName", "")),
+            "Interface": wan_names.get(str(r.get("interfacePortId", "")), _flatten(r.get("interfacePortId", ""))),
+            "Username": _flatten(r.get("username", "")),
+            "Password": _secret_state(r.get("password")),
+            "Update Interval": interval,
+            "Update URL": _flatten(r.get("updateUrl", "")),
+        })
+    sections = []
+    if records:
+        sections.append(("LAN DNS Records", sorted(records, key=lambda x: str(x["Domain"]).lower())))
+    if ddns:
+        sections.append(("Dynamic DNS", ddns))
+    return sections
+
+
+# --- Time / NTP ---------------------------------------------------------------------
+
+_DST_MODE_MAP: dict[int, str] = {0: "Disabled", 1: "Automatic", 2: "Manual"}
+
+
+def _time_settings_rows(data: Any) -> list[dict[str, Any]]:
+    if not isinstance(data, dict) or not data:
+        return []
+    rows: list[tuple[str, str]] = []
+    site = data.get("site") if isinstance(data.get("site"), dict) else {}
+    if site.get("timeZone"):
+        rows.append(("Time Zone", _flatten(site["timeZone"])))
+    if site.get("region"):
+        rows.append(("Region", _flatten(site["region"])))
+    if "ntpServers" in site:
+        rows.append(("NTP Servers", ", ".join(str(n) for n in site.get("ntpServers") or []) or "Default"))
+    dst = data.get("dst") if isinstance(data.get("dst"), dict) else {}
+    if dst:
+        if "mode" in dst:
+            mode = _profile_code(dst["mode"], _DST_MODE_MAP)
+        else:
+            mode = _enabled(dst.get("enable"))
+        rows.append(("Daylight Saving Time", mode))
+        if dst.get("enable") and dst.get("offset"):
+            rows.append(("DST Offset", f"{int(dst['offset']) // 60000} min"))
+        if dst.get("mode") == 2:
+            for key, label in (("start", "DST Start"), ("end", "DST End")):
+                if isinstance(dst.get(key), dict):
+                    rows.append((label, ", ".join(f"{k}={v}" for k, v in dst[key].items())))
+    ntp = data.get("ntpStatus")
+    if isinstance(ntp, dict) and ntp:
+        rows.append(("NTP Status", ", ".join(f"{k}={_flatten(v)}" for k, v in ntp.items())))
+    elif ntp not in (None, "", {}):
+        rows.append(("NTP Status", _flatten(ntp)))
+    return [{"Setting": k, "Value": v} for k, v in rows if v != ""]
+
+
+# --- Multicast / Bonjour ----------------------------------------------------------------
+
+_IPTV_MODE_MAP: dict[int, str] = {0: "Bridge", 1: "Custom"}
+_IPTV_PORT_TYPE_MAP: dict[int, str] = {1: "Internet", 2: "IPTV", 3: "IP Phone"}
+_MDNS_TYPE_MAP: dict[int, str] = {0: "By VLAN ID", 1: "By Network"}
+_SNOOP_PROTOCOL_MAP: dict[int, str] = {0: "IGMP Snooping", 1: "MLD Snooping"}
+_UNKNOWN_MCAST_MAP: dict[int, str] = {0: "Forward", 1: "Discard", 2: "Router port first"}
+
+
+def _multicast_services_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if not isinstance(data, dict) or not data:
+        return []
+    lookup = _build_id_lookup(context)
+    wan_names = _wan_port_names(context)
+    rows: list[tuple[str, str, str]] = []
+
+    def wan(port_id: Any) -> str:
+        return wan_names.get(str(port_id), str(port_id)) if port_id else ""
+
+    for key, label, versions in (("igmp", "IGMP Proxy", {2: "v2", 3: "v3"}), ("mld", "MLD Proxy", {1: "v1", 2: "v2"})):
+        cfg = data.get(key)
+        if isinstance(cfg, dict) and cfg:
+            text = _enabled(cfg.get("enable"))
+            if cfg.get("enable"):
+                extras = [versions.get(cfg.get("version"), str(cfg.get("version", "")))]
+                upstream = wan(cfg.get("wanPortId")) or (
+                    f"Virtual WAN {cfg['virtualWanId']}" if cfg.get("virtualWanId") else "")
+                if upstream:
+                    extras.append(f"upstream {upstream}")
+                text += f" ({', '.join(e for e in extras if e)})"
+            rows.append(("Multicast", label, text))
+    iptv = data.get("iptv")
+    if isinstance(iptv, dict) and iptv:
+        text = _enabled(iptv.get("enable"))
+        if iptv.get("enable"):
+            text += f" ({_profile_code(iptv.get('mode', ''), _IPTV_MODE_MAP)}"
+            text += f", WAN {wan(iptv.get('wanPortId'))})" if iptv.get("wanPortId") else ")"
+        rows.append(("Multicast", "IPTV", text))
+        custom = iptv.get("customConfig") if isinstance(iptv.get("customConfig"), dict) else {}
+        if iptv.get("enable") and iptv.get("mode") == 1 and custom:
+            rows.append(("Multicast", "IPTV VLAN",
+                         f"{custom.get('iptvVlanId', '')} (priority {custom.get('iptvVlanPriority', '')})"))
+            rows.append(("Multicast", "IP Phone VLAN",
+                         f"{custom.get('ipPhoneVlanId', '')} (priority {custom.get('ipPhoneVlanPriority', '')})"))
+        ports = [
+            f"{p.get('name') or p.get('portId', '')}: {_profile_code(p.get('type', ''), _IPTV_PORT_TYPE_MAP)}"
+            for p in iptv.get("portConfig") or [] if isinstance(p, dict)
+        ]
+        if iptv.get("enable") and ports:
+            rows.append(("Multicast", "IPTV Port Roles", ", ".join(ports)))
+    upnp = data.get("upnp")
+    if isinstance(upnp, dict) and upnp:
+        text = _enabled(upnp.get("enable"))
+        if upnp.get("enable"):
+            parts = []
+            if upnp.get("wanPortIds"):
+                parts.append("WAN " + _nat_interfaces(upnp["wanPortIds"], wan_names))
+            if upnp.get("networkIds"):
+                parts.append("LAN " + _resolve_ids(upnp["networkIds"], lookup))
+            if parts:
+                text += f" ({'; '.join(parts)})"
+        rows.append(("Services", "UPnP", text))
+    if isinstance(data.get("mdnsRules"), list):
+        enabled = sum(1 for r in data["mdnsRules"] if isinstance(r, dict) and r.get("status"))
+        rows.append(("Bonjour / mDNS", "mDNS Rules", f"{len(data['mdnsRules'])} ({enabled} enabled)"))
+    if isinstance(data.get("bonjourServices"), list):
+        rows.append(("Bonjour / mDNS", "Bonjour Service Profiles", str(len(data["bonjourServices"]))))
+    if isinstance(data.get("lanMulticasts"), list):
+        rows.append(("Multicast", "Multicast Snooping Configs", str(len(data["lanMulticasts"]))))
+    return [{"Category": c, "Setting": s, "Value": v} for c, s, v in rows]
+
+
+def _multicast_services_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    if not isinstance(data, dict):
+        return []
+    lookup = _build_id_lookup(context)
+    profiles = {
+        str(b["id"]): _flatten(b.get("name") or b["id"])
+        for b in data.get("bonjourServices") or [] if isinstance(b, dict) and b.get("id")
+    }
+    rules = []
+    for r in data.get("mdnsRules") or []:
+        if not isinstance(r, dict):
+            continue
+        if r.get("type") == 1:
+            osg = r.get("osg") if isinstance(r.get("osg"), dict) else {}
+            service = _resolve_ids(osg.get("serviceNetworks") or [], lookup)
+            client = _resolve_ids(osg.get("clientNetworks") or [], lookup)
+        else:
+            ap = r.get("ap") if isinstance(r.get("ap"), dict) else {}
+            service = f"VLAN {ap['serviceVlan']}" if ap.get("serviceVlan") else ""
+            client = f"VLAN {ap['clientVlan']}" if ap.get("clientVlan") else ""
+        rules.append({
+            "Name": _flatten(r.get("name", "")),
+            "Status": _enabled(r.get("status")),
+            "Services": ", ".join(profiles.get(str(i), str(i)) for i in r.get("profileIds") or []),
+            "Mode": _profile_code(r.get("type", ""), _MDNS_TYPE_MAP),
+            "Service Networks": service,
+            "Client Networks": client,
+        })
+    bonjour = [
+        {
+            "Name": _flatten(b.get("name", "")),
+            "Service IDs": ", ".join(str(s) for s in b.get("serviceIds") or []),
+            "Built-in": "Yes" if b.get("defaultProfile") else "No",
+        }
+        for b in data.get("bonjourServices") or [] if isinstance(b, dict)
+    ]
+    snooping = []
+    for m in data.get("lanMulticasts") or []:
+        if not isinstance(m, dict):
+            continue
+        nets = []
+        for n in m.get("networks") or []:
+            if isinstance(n, dict):
+                nets.append(_flatten(n.get("name") or lookup.get(str(n.get("id", "")), n.get("id", ""))))
+            else:
+                nets.append(lookup.get(str(n), str(n)))
+        snoop = m.get("snoopConfig") if isinstance(m.get("snoopConfig"), dict) else {}
+        snooping.append({
+            "Name": _flatten(m.get("name", "")),
+            "Protocol": _profile_code(m.get("protocol", ""), _SNOOP_PROTOCOL_MAP),
+            "Networks": ", ".join(x for x in nets if x),
+            "Unknown Multicast": _profile_code(m.get("unknownMulticastRule", ""), _UNKNOWN_MCAST_MAP)
+            if m.get("unknownMulticastRule") is not None else "",
+            "Querier": _enabled(m.get("querierEnable")),
+            "Flood Known": _enabled(m.get("floodKnownEnable")),
+            "Manual Router Ports": _enabled(m.get("routerPortEnable")),
+            "Report Suppression": _enabled(snoop["reportSuppressionEnable"])
+            if "reportSuppressionEnable" in snoop else "",
+            "Leave Time": f"{snoop['leaveTime']} s" if snoop.get("leaveTime") is not None else "",
+        })
+    sections = []
+    if rules:
+        sections.append(("mDNS (Bonjour) Rules", rules))
+    if bonjour:
+        sections.append(("Bonjour Service Profiles", sorted(bonjour, key=lambda b: str(b["Name"]).lower())))
+    if snooping:
+        sections.append(("Multicast Snooping", snooping))
+    return sections
+
+
 # Band bits: 1=2.4GHz, 2=5GHz, 4=6GHz  (7=all, 3=2.4+5, etc.)
 _BAND_MAP: dict[int, str] = {
     1: "2.4 GHz",
@@ -2472,6 +2877,40 @@ RESOURCES: list[ResourceDefinition] = [
         fetch_method="get_ap_radios",
         row_formatter=_ap_radio_rows,
         sort_key="AP",  # stable sort keeps band order within each AP
+    ),
+    ResourceDefinition(
+        name="wan_failover",
+        title="WAN Failover & Load Balancing",
+        fetch_method="get_wan_failover",
+        row_formatter=_wan_failover_rows,
+        sort_key="",
+        needs_context=True,
+        detail_formatter=_wan_failover_details,
+    ),
+    ResourceDefinition(
+        name="dns_settings",
+        title="DNS",
+        fetch_method="get_dns_settings",
+        row_formatter=_dns_settings_rows,
+        sort_key="",
+        needs_context=True,
+        detail_formatter=_dns_settings_details,
+    ),
+    ResourceDefinition(
+        name="time_settings",
+        title="Time & NTP",
+        fetch_method="get_time_settings",
+        row_formatter=_time_settings_rows,
+        sort_key="",
+    ),
+    ResourceDefinition(
+        name="multicast_services",
+        title="Multicast, Bonjour & UPnP",
+        fetch_method="get_multicast_services",
+        row_formatter=_multicast_services_rows,
+        sort_key="",
+        needs_context=True,
+        detail_formatter=_multicast_services_details,
     ),
     ResourceDefinition(
         name="dhcp_reservations",

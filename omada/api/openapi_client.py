@@ -1240,3 +1240,120 @@ class OmadaOpenApiClient:
                 "radios": radios,
             })
         return records
+
+    # ------------------------------------------------------------------
+    # WAN failover and site services
+    # ------------------------------------------------------------------
+
+    def _collect(
+        self, site_id: str, parts: tuple[tuple[str, str, bool], ...], label: str,
+    ) -> dict[str, Any]:
+        """Fetch several site endpoints into one dict, each part best-effort.
+
+        *parts* holds ``(key, path, paged)``.  A failing part is logged and
+        omitted; :class:`OmadaAPIError` is raised only if every part fails.
+        """
+        result: dict[str, Any] = {}
+        errors: list[Exception] = []
+        for key, path, paged in parts:
+            url = f"sites/{site_id}/{path}" if path else f"sites/{site_id}"
+            try:
+                value = self._get_paged(url) if paged else self._get(url)
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.warning("%s: %s unavailable: %s", label, path, exc)
+                errors.append(exc)
+                continue
+            result[key] = value
+        if errors and len(errors) == len(parts):
+            raise errors[0]
+        return result
+
+    def get_wan_failover(self, site_id: str) -> dict[str, Any]:
+        """Return WAN load balancing / failover config and WAN health.
+
+        * ``loadBalance``: ``GET /sites/{siteId}/internet/load-balance``
+          (weights, link backup, primary / backup WANs, backup mode, trigger).
+        * ``internet``: ``GET /sites/{siteId}/internet/basic-info`` (WAN port
+          list and the online-detection (health check) interval).
+        * ``wanHealth``: per gateway, ``GET .../gateways/{mac}/wan-status``
+          (online / internet state, latency, packet loss, health level).
+          This is a status snapshot, not configuration; best-effort.
+        """
+        data = self._collect(site_id, (
+            ("loadBalance", "internet/load-balance", False),
+            ("internet", "internet/basic-info", False),
+        ), "WAN failover")
+        health: list[dict[str, Any]] = []
+        for device in self.get_devices(site_id):
+            if str(device.get("type", device.get("deviceType", ""))).lower() != "gateway":
+                continue
+            mac = device.get("mac", device.get("deviceMac", ""))
+            if not mac:
+                continue
+            try:
+                status = self._get(f"sites/{site_id}/gateways/{quote(str(mac), safe='')}/wan-status")
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.debug("WAN status unavailable for gateway %s: %s", mac, exc)
+                continue
+            for port in status if isinstance(status, list) else []:
+                if isinstance(port, dict):
+                    health.append({"gatewayName": device.get("name", ""), **port})
+        if health:
+            data["wanHealth"] = health
+        return self._redact(data)
+
+    def get_dns_settings(self, site_id: str) -> dict[str, Any]:
+        """Return DNS proxy, DNS cache, LAN DNS records and Dynamic DNS.
+
+        Endpoints: ``/setting/service/dns-proxy``, ``/setting/service/dns-cache``,
+        ``/setting/lan/dns`` (paged) and ``/setting/service/ddns`` (paged).
+        DDNS passwords are redacted.
+        """
+        return self._redact(self._collect(site_id, (
+            ("dnsProxy", "setting/service/dns-proxy", False),
+            ("dnsCache", "setting/service/dns-cache", False),
+            ("lanDns", "setting/lan/dns", True),
+            ("ddns", "setting/service/ddns", True),
+        ), "DNS settings"))
+
+    def get_time_settings(self, site_id: str) -> dict[str, Any]:
+        """Return site timezone, NTP servers, DST and gateway NTP status.
+
+        ``site`` from ``GET /sites/{siteId}`` (only ``name``, ``region``,
+        ``timeZone``, ``ntpServers``, ``scenario`` are kept), ``dst`` from
+        ``/dst-info`` and ``ntpStatus`` from ``/setting/ntp``.
+        """
+        data = self._collect(site_id, (
+            ("site", "", False),
+            ("dst", "dst-info", False),
+            ("ntpStatus", "setting/ntp", False),
+        ), "Time settings")
+        site = data.get("site")
+        if isinstance(site, dict):
+            data["site"] = {
+                k: site[k] for k in ("name", "region", "timeZone", "ntpServers", "scenario") if k in site
+            }
+        return data
+
+    def get_multicast_services(self, site_id: str) -> dict[str, Any]:
+        """Return multicast and service-discovery settings.
+
+        IGMP proxy (``/setting/service/igmp``), MLD proxy
+        (``/setting/service/mld``), IPTV (``/setting/service/iptv``), UPnP
+        (``/upnp``), mDNS / Bonjour rules (``/setting/service/mdns``, paged),
+        Bonjour service profiles (``/profiles/bonjour-service``) and LAN
+        multicast (IGMP / MLD) snooping (``/lan-multicasts``, paged).
+        """
+        data = self._collect(site_id, (
+            ("igmp", "setting/service/igmp", False),
+            ("mld", "setting/service/mld", False),
+            ("iptv", "setting/service/iptv", False),
+            ("upnp", "upnp", False),
+            ("mdnsRules", "setting/service/mdns", True),
+            ("bonjourServices", "profiles/bonjour-service", False),
+            ("lanMulticasts", "lan-multicasts", True),
+        ), "Multicast services")
+        bonjour = data.get("bonjourServices")
+        if isinstance(bonjour, dict):  # {"data": [...]} wrapper
+            data["bonjourServices"] = bonjour.get("data", [])
+        return data

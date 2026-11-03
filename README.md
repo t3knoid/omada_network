@@ -30,6 +30,10 @@ Supports both official Open API authentication modes:
 | Rate Limit Profiles | ✓ | ✓ |
 | Wireless Site Settings (band steering, roaming, mesh, multicast) | ✓ | ✓ |
 | AP Radio Settings | ✓ | ✓ |
+| WAN Failover & Load Balancing (with WAN health snapshot) | ✓ | ✓ |
+| DNS (proxy / DoH / DoT, cache, LAN DNS records, Dynamic DNS) | ✓ | ✓ |
+| Time & NTP | ✓ | ✓ |
+| Multicast, Bonjour (mDNS) & UPnP | ✓ | ✓ |
 | DHCP Reservations | ✓ | ✓ |
 | DHCP Scopes (pools, DNS/domain, options, relay, guard) | ✓ | ✓ |
 | DHCP Leases | ✓ | ✓ |
@@ -599,7 +603,15 @@ docs/
     ├── wireless_settings.yaml
     ├── wireless_settings.md
     ├── ap_radios.yaml
-    └── ap_radios.md
+    ├── ap_radios.md
+    ├── wan_failover.yaml
+    ├── wan_failover.md
+    ├── dns_settings.yaml
+    ├── dns_settings.md
+    ├── time_settings.yaml
+    ├── time_settings.md
+    ├── multicast_services.yaml
+    └── multicast_services.md
 ```
 
 ### Example – DHCP Reservations Markdown

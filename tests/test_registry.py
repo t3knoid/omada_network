@@ -12,7 +12,7 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_thirty_one_resources_defined(self) -> None:
+    def test_all_thirty_five_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
@@ -46,6 +46,10 @@ class TestRegistry:
             "rate_limit_profiles",
             "wireless_settings",
             "ap_radios",
+            "wan_failover",
+            "dns_settings",
+            "time_settings",
+            "multicast_services",
         }
 
     def test_registry_lookup_matches_resources(self) -> None:
@@ -973,6 +977,178 @@ class TestRowFormatters:
         }
         assert six["Radio"] == "Disabled"
         assert six["Channel"] == "" and six["Tx Power"] == ""
+
+    _SERVICES_CONTEXT = {
+        "gateway_settings": {"wanPortsConfig": [{"portId": "1_abc", "portName": "WAN"}]},
+        "networks": [{"id": "net-lan", "name": "LAN"}, {"id": "net-iot", "name": "IoT Devices"}],
+        "time_range_profiles": [{"profileId": "t1", "name": "Business hours"}],
+    }
+
+    def test_wan_failover_rows(self) -> None:
+        from omada.registry import _wan_failover_rows
+        data = {
+            "internet": {"interval": 10, "portList": [
+                {"portId": "2_def", "portName": "WAN/LAN1", "portMode": 0},
+                {"portId": "1_abc", "portName": "WAN", "portMode": 0},
+                {"portId": "3_ghi", "portName": "WAN/LAN2", "portMode": 1},
+            ]},
+            "loadBalance": {"linkBackup": True, "primaryWans": ["1_abc"], "backupWan": "2_def",
+                            "mode": 2, "timeRangeId": "t1", "backupMode": 1,
+                            "appOptRouting": True, "weights": [3, 1]},
+        }
+        values = {r["Setting"]: r["Value"] for r in _wan_failover_rows(data, self._SERVICES_CONTEXT)}
+        assert values == {
+            "Health Check (Online Detection)": "Every 10 s",
+            "Link Backup (Failover)": "Enabled",
+            "Primary WANs": "WAN",
+            "Backup WAN": "WAN/LAN1",
+            "Backup Trigger": "On schedule (Business hours)",
+            "Backup Mode": "Return to primary when it recovers",
+            "Application Optimized Routing": "Enabled",
+            # weights follow WAN-mode ports in port-ID order
+            "Load Balancing Weights": "WAN: 3, WAN/LAN1: 1",
+        }
+        off = {r["Setting"]: r["Value"] for r in _wan_failover_rows(
+            {"internet": {"interval": 0}, "loadBalance": {"linkBackup": False, "weights": [1, 2, 3]}})}
+        assert off["Health Check (Online Detection)"] == "Disabled"
+        assert off["Link Backup (Failover)"] == "Disabled"
+        assert off["Load Balancing Weights"] == "1, 2, 3"  # port list unknown: raw order
+        assert "Backup WAN" not in off
+
+    def test_wan_failover_health_snapshot(self) -> None:
+        from omada.registry import _wan_failover_details
+        [(title, rows)] = _wan_failover_details({"wanHealth": [
+            {"gatewayName": "GW", "name": "WAN", "mode": 0, "status": 1, "internetState": 1,
+             "onlineDetection": 1, "ip": "203.0.113.4", "proto": "DHCP", "speed": 3,
+             "latency": 9, "loss": 0.5, "healthLevel": 0},
+            {"gatewayName": "GW", "name": "WAN/LAN1", "mode": 1, "status": 1},
+        ]})
+        assert title == "WAN Health (status at export time)"
+        assert rows == [{
+            "Gateway": "GW", "WAN": "WAN", "Link": "Connected", "Internet": "Online",
+            "Online Detection": "Online", "IP": "203.0.113.4", "Connection": "DHCP",
+            "Speed": "1000M", "Latency": "9 ms", "Packet Loss": "0.5%", "Health Level": "0",
+        }]
+
+    def test_dns_settings_rows_per_proxy_type(self) -> None:
+        from omada.registry import _dns_settings_rows
+
+        def values(proxy: dict) -> dict:
+            return {r["Setting"]: r["Value"] for r in _dns_settings_rows(
+                {"dnsProxy": proxy, "dnsCache": {"enable": True, "ttl": 300}, "lanDns": [{}], "ddns": []},
+                self._SERVICES_CONTEXT)}
+
+        doh = values({"enable": True, "type": 1, "dohSetting": {
+            "defaultServers": [1, 5],
+            "customizedServers": [{"enable": True, "name": "NextDNS", "server": "dns.nextdns.io"},
+                                  {"enable": False, "name": "Off", "server": "x"}]}})
+        assert doh["DNS Proxy Type"] == "DNS over HTTPS"
+        assert doh["Upstream Servers"] == "Cloudflare, Quad9 (1), NextDNS (dns.nextdns.io)"
+        assert doh["DNS Cache"] == "Enabled (TTL 300 s)"
+        assert doh["LAN DNS Records"] == "1"
+        assert doh["Dynamic DNS Entries"] == "0"
+        dot = values({"enable": True, "type": 2, "dotSetting": {
+            "defaultServers": [2],
+            "customizedServers": [{"enable": True, "name": "Mine", "servers": ["1.1.1.1", "9.9.9.9"]}]}})
+        assert dot["Upstream Servers"] == "OpenDNS, Mine (1.1.1.1, 9.9.9.9)"
+        sec = values({"enable": True, "type": 0, "dnsSecSetting": {"servers": ["1.1.1.1"], "replyPolicy": 1}})
+        assert sec["DNSSEC Servers"] == "1.1.1.1" and sec["Bogus Reply Policy"] == "Drop"
+        override = values({"enable": True, "type": 3, "dnsOverrideSetting": {
+            "primaryDnsServer": "192.168.20.253", "secondaryDnsServer": "", "applyNetwork": ["net-iot"]}})
+        assert override["Override Servers"] == "192.168.20.253"
+        assert override["Override Applies To"] == "IoT Devices"
+        assert values({"enable": False})["DNS Proxy"] == "Disabled"
+
+    def test_dns_settings_details(self) -> None:
+        from omada.registry import _dns_settings_details
+        sections = dict(_dns_settings_details({
+            "lanDns": [
+                {"name": "nas", "enable": True, "domain": "nas.home.arpa", "aliases": ["files.home.arpa"],
+                 "type": 0, "ipAddresses": ["192.168.2.250"], "lanNetworkIds": ["net-lan"], "customTtl": False},
+                {"name": "corp", "enable": True, "domain": "corp.example", "type": 2,
+                 "dnsServers": ["10.0.0.53"], "customTtl": True, "ttl": 60},
+                {"name": "www", "enable": False, "domain": "app.home.arpa", "type": 1, "cname": "nas.home.arpa"},
+            ],
+            "ddns": [{"service": 1, "status": True, "domainName": "astoria.ddns.net", "interfacePortId": "1_abc",
+                      "username": "frank", "password": "<redacted>", "updateInterval": 1}],
+        }, self._SERVICES_CONTEXT))
+        records = sections["LAN DNS Records"]
+        assert [r["Domain"] for r in records] == ["app.home.arpa", "corp.example", "nas.home.arpa"]
+        assert records[0]["Answer"] == "nas.home.arpa" and records[0]["Type"] == "CNAME"
+        assert records[1]["Answer"] == "Forward to 10.0.0.53" and records[1]["TTL"] == "60 s"
+        assert records[2]["Answer"] == "192.168.2.250" and records[2]["Networks"] == "LAN"
+        assert records[2]["TTL"] == "Default (3600 s)"
+        assert sections["Dynamic DNS"] == [{
+            "Service": "NO-IP", "Status": "Enabled", "Domain": "astoria.ddns.net", "Interface": "WAN",
+            "Username": "frank", "Password": "Configured", "Update Interval": "1 h", "Update URL": "",
+        }]
+
+    def test_time_settings_rows(self) -> None:
+        from omada.registry import _time_settings_rows
+        values = {r["Setting"]: r["Value"] for r in _time_settings_rows({
+            "site": {"timeZone": "America/New_York", "region": "US",
+                     "ntpServers": ["time.google.com", "pool.ntp.org"]},
+            "dst": {"enable": True, "mode": 1, "offset": 3600000},
+        })}
+        assert values == {
+            "Time Zone": "America/New_York", "Region": "US",
+            "NTP Servers": "time.google.com, pool.ntp.org",
+            "Daylight Saving Time": "Automatic", "DST Offset": "60 min",
+        }
+        assert {r["Setting"]: r["Value"] for r in _time_settings_rows(
+            {"site": {"ntpServers": []}})}["NTP Servers"] == "Default"
+
+    def test_multicast_services_rows_and_details(self) -> None:
+        from omada.registry import _multicast_services_details, _multicast_services_rows
+        data = {
+            "igmp": {"enable": True, "version": 3, "wanPortId": "1_abc"},
+            "mld": {"enable": False, "version": 2},
+            "iptv": {"enable": True, "mode": 1, "wanPortId": "1_abc",
+                     "customConfig": {"iptvVlanId": 85, "iptvVlanPriority": 4,
+                                      "ipPhoneVlanId": 86, "ipPhoneVlanPriority": 5},
+                     "portConfig": [{"portId": "4_x", "name": "LAN3", "type": 2}]},
+            "upnp": {"enable": True, "wanPortIds": ["1_abc"], "networkIds": ["net-lan"]},
+            "bonjourServices": [{"id": "b1", "name": "AirPlay", "serviceIds": ["_airplay._tcp.local"],
+                                 "defaultProfile": True},
+                                {"id": "b2", "name": "Chromecast", "serviceIds": ["_googlecast._tcp.local"]}],
+            "mdnsRules": [
+                {"name": "Cast to IoT", "status": True, "profileIds": ["b1", "b2"], "type": 1,
+                 "osg": {"serviceNetworks": ["net-iot"], "clientNetworks": ["net-lan"]}},
+                {"name": "AP rule", "status": False, "profileIds": ["b1"], "type": 0,
+                 "ap": {"serviceVlan": "40", "clientVlan": "10,20"}},
+            ],
+            "lanMulticasts": [{"name": "IGMP LAN", "protocol": 0, "networks": [{"id": "net-lan"}],
+                               "unknownMulticastRule": 1, "querierEnable": True, "floodKnownEnable": False,
+                               "routerPortEnable": False,
+                               "snoopConfig": {"reportSuppressionEnable": True, "leaveTime": 1}}],
+        }
+        values = {(r["Category"], r["Setting"]): r["Value"]
+                  for r in _multicast_services_rows(data, self._SERVICES_CONTEXT)}
+        assert values[("Multicast", "IGMP Proxy")] == "Enabled (v3, upstream WAN)"
+        assert values[("Multicast", "MLD Proxy")] == "Disabled"
+        assert values[("Multicast", "IPTV")] == "Enabled (Custom, WAN WAN)"
+        assert values[("Multicast", "IPTV VLAN")] == "85 (priority 4)"
+        assert values[("Multicast", "IP Phone VLAN")] == "86 (priority 5)"
+        assert values[("Multicast", "IPTV Port Roles")] == "LAN3: IPTV"
+        assert values[("Services", "UPnP")] == "Enabled (WAN WAN; LAN LAN)"
+        assert values[("Bonjour / mDNS", "mDNS Rules")] == "2 (1 enabled)"
+        assert values[("Bonjour / mDNS", "Bonjour Service Profiles")] == "2"
+        assert values[("Multicast", "Multicast Snooping Configs")] == "1"
+
+        sections = dict(_multicast_services_details(data, self._SERVICES_CONTEXT))
+        assert sections["mDNS (Bonjour) Rules"] == [
+            {"Name": "Cast to IoT", "Status": "Enabled", "Services": "AirPlay, Chromecast",
+             "Mode": "By Network", "Service Networks": "IoT Devices", "Client Networks": "LAN"},
+            {"Name": "AP rule", "Status": "Disabled", "Services": "AirPlay",
+             "Mode": "By VLAN ID", "Service Networks": "VLAN 40", "Client Networks": "VLAN 10,20"},
+        ]
+        assert sections["Bonjour Service Profiles"][0] == {
+            "Name": "AirPlay", "Service IDs": "_airplay._tcp.local", "Built-in": "Yes"}
+        assert sections["Multicast Snooping"] == [{
+            "Name": "IGMP LAN", "Protocol": "IGMP Snooping", "Networks": "LAN",
+            "Unknown Multicast": "Discard", "Querier": "Enabled", "Flood Known": "Disabled",
+            "Manual Router Ports": "Disabled", "Report Suppression": "Enabled", "Leave Time": "1 s",
+        }]
 
     def test_switch_port_profile_rows(self) -> None:
         from omada.registry import _switch_port_profile_rows

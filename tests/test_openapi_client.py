@@ -889,6 +889,86 @@ class TestOpenApiResourceMethods:
         }]
         assert "Radio config unavailable for AP Broken AP" in caplog.text
 
+    def test_get_wan_failover_collects_config_and_health(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        devices = [{"name": "Astoria Gateway", "type": "gateway", "mac": "6C-5A"},
+                   {"name": "AP", "type": "ap", "mac": "AA"}]
+        responses = {
+            "sites/site-001/internet/load-balance": {"linkBackup": True, "weights": [1, 1]},
+            "sites/site-001/internet/basic-info": {"interval": 10, "portList": []},
+            "sites/site-001/gateways/6C-5A/wan-status": [{"port": 1, "name": "WAN", "latency": 8}],
+        }
+        with (
+            patch.object(openapi_client, "_get_paged", return_value=devices),
+            patch.object(openapi_client, "_get", side_effect=responses.__getitem__),
+        ):
+            result = openapi_client.get_wan_failover("site-001")
+        assert result["loadBalance"]["linkBackup"] is True
+        assert result["internet"]["interval"] == 10
+        assert result["wanHealth"] == [{"gatewayName": "Astoria Gateway", "port": 1, "name": "WAN", "latency": 8}]
+
+    def test_collect_tolerates_partial_and_raises_on_total_failure(
+        self, openapi_client: OmadaOpenApiClient, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        def fake_get(path: str) -> dict:
+            if path.endswith("dns-cache"):
+                raise OmadaAPIError(-1600, "Unsupported")
+            return {"enable": True}
+
+        with (
+            patch.object(openapi_client, "_get", side_effect=fake_get),
+            patch.object(openapi_client, "_get_paged", return_value=[{"username": "u", "password": "ddns-pw"}]),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = openapi_client.get_dns_settings("site-001")
+        assert set(result) == {"dnsProxy", "lanDns", "ddns"}
+        assert result["ddns"][0]["password"] == "<redacted>"
+        assert "setting/service/dns-cache unavailable" in caplog.text
+        with (
+            patch.object(openapi_client, "_get", side_effect=OmadaAPIError(-1, "x")),
+            patch.object(openapi_client, "_get_paged", side_effect=OmadaAPIError(-1, "x")),
+        ):
+            with pytest.raises(OmadaAPIError):
+                openapi_client.get_dns_settings("site-001")
+
+    def test_get_time_settings_uses_site_info_without_trailing_slash(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        responses = {
+            "sites/site-001": {"name": "Astoria", "timeZone": "America/New_York",
+                               "ntpServers": ["pool.ntp.org"], "region": "US", "scenario": "Home",
+                               "type": 0, "id": "site-001"},
+            "sites/site-001/dst-info": {"enable": True, "mode": 1},
+            "sites/site-001/setting/ntp": {"enable": True},
+        }
+        with patch.object(openapi_client, "_get", side_effect=responses.__getitem__):
+            result = openapi_client.get_time_settings("site-001")
+        assert result["site"] == {"name": "Astoria", "region": "US", "timeZone": "America/New_York",
+                                  "ntpServers": ["pool.ntp.org"], "scenario": "Home"}
+        assert result["dst"]["mode"] == 1
+
+    def test_get_multicast_services_unwraps_bonjour(self, openapi_client: OmadaOpenApiClient) -> None:
+        get_responses = {
+            "sites/site-001/setting/service/igmp": {"enable": False},
+            "sites/site-001/setting/service/mld": {"enable": False},
+            "sites/site-001/setting/service/iptv": {"enable": False},
+            "sites/site-001/upnp": {"enable": True},
+            "sites/site-001/profiles/bonjour-service": {"data": [{"id": "b1", "name": "AirPlay"}]},
+        }
+        paged = {
+            "sites/site-001/setting/service/mdns": [{"name": "Cast to IoT"}],
+            "sites/site-001/lan-multicasts": [],
+        }
+        with (
+            patch.object(openapi_client, "_get", side_effect=get_responses.__getitem__),
+            patch.object(openapi_client, "_get_paged", side_effect=paged.__getitem__),
+        ):
+            result = openapi_client.get_multicast_services("site-001")
+        assert result["bonjourServices"] == [{"id": "b1", "name": "AirPlay"}]
+        assert result["mdnsRules"] == [{"name": "Cast to IoT"}]
+        assert result["upnp"] == {"enable": True}
+
     def test_get_ssids_no_wlans(self, openapi_client: OmadaOpenApiClient) -> None:
         with patch.object(openapi_client, "_get_paged") as mock:
             mock.side_effect = OmadaAPIError(-1600, "Unsupported")
@@ -1210,6 +1290,10 @@ class TestServiceWithOpenApiClient:
         mock_client.get_rate_limit_profiles.return_value = []
         mock_client.get_wireless_settings.return_value = {}
         mock_client.get_ap_radios.return_value = []
+        mock_client.get_wan_failover.return_value = {}
+        mock_client.get_dns_settings.return_value = {}
+        mock_client.get_time_settings.return_value = {}
+        mock_client.get_multicast_services.return_value = {}
 
         service = OmadaService(
             client=mock_client,

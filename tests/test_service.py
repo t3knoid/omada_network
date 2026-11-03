@@ -44,6 +44,10 @@ def mock_client() -> MagicMock:
     client.get_rate_limit_profiles.return_value = []
     client.get_wireless_settings.return_value = {}
     client.get_ap_radios.return_value = []
+    client.get_wan_failover.return_value = {}
+    client.get_dns_settings.return_value = {}
+    client.get_time_settings.return_value = {}
+    client.get_multicast_services.return_value = {}
     return client
 
 
@@ -90,6 +94,10 @@ def _empty_data() -> dict:
         "rate_limit_profiles": [],
         "wireless_settings": {},
         "ap_radios": [],
+        "wan_failover": {},
+        "dns_settings": {},
+        "time_settings": {},
+        "multicast_services": {},
     }
 
 
