@@ -189,13 +189,23 @@ docker run -p 5000:5000 \
 
 The application supports two authentication modes, both using the official Omada Open API (Northbound API):
 
+### Generate Open API credentials
+
+1. Sign in to the Omada SDN Controller with an administrator account.
+2. In **Global View**, open **Settings → Platform Integration → Open API**. Menu labels may vary slightly between controller versions.
+3. Enable the Open API if it is not already enabled.
+4. Choose **Create New Application**, enter a name for this integration, and create the application.
+5. Copy the generated **Client ID** and **Client Secret** and store them securely. Do not commit the secret to source control.
+
+These are API application credentials, not your controller username and password. The username and password are only needed for Authorization Code Mode.
+
 ### Option A — Client Credentials Mode (simplest)
 
 Direct token exchange using the Client ID and Client Secret only. No
 controller login credentials are needed.
 
-**Prerequisites:** Enable the Open API on your Omada controller and generate
-a Client ID and Client Secret in the controller settings.
+**Prerequisites:** Enable the Open API and generate credentials as described
+in [Generate Open API credentials](#generate-open-api-credentials).
 
 | Parameter | CLI Option | Environment Variable | Default |
 | --- | --- | --- | --- |
