@@ -1048,6 +1048,48 @@ class TestOpenApiResourceMethods:
         assert stack["name"] == "Uplink" and stack["memberPorts"] == [1, 2]
         assert "mlagGroups" not in result and "hashAlgorithm" not in result
 
+    def test_get_switch_settings(self, openapi_client: OmadaOpenApiClient) -> None:
+        devices = [
+            {"name": "Main Switch", "type": "switch", "mac": "54-AF", "model": "TL-SG2428P"},
+            {"name": "Lab Switch", "type": "switch", "mac": "20-23"},
+            {"name": "GW", "type": "gateway", "mac": "6C-5A"},
+        ]
+        gets = {
+            "sites/site-001/jumbo": {"size": 9216},
+            "sites/site-001/switches/54-AF/general-config": {
+                "ledSetting": 2, "jumboFollowSite": True,
+                "location": {"latitude": 40.7, "longitude": -73.9, "address": "Home"}},
+            "sites/site-001/switches/54-AF/rpvst-instances": [{"vlan": 10, "priority": 4096, "enable": True}],
+        }
+        paged = {
+            "sites/site-001/devices": devices,
+            "sites/site-001/switches/54-AF/networks": [{"vlan": 1, "mvlan": True}],
+        }
+
+        def fake_get(path: str):
+            if path in gets:
+                return gets[path]
+            raise OmadaAPIError(-1600, "Unsupported")
+
+        def fake_paged(path: str):
+            if path in paged:
+                return paged[path]
+            raise OmadaAPIError(-1600, "Unsupported")
+
+        with (
+            patch.object(openapi_client, "_get", side_effect=fake_get),
+            patch.object(openapi_client, "_get_paged", side_effect=fake_paged),
+        ):
+            result = openapi_client.get_switch_settings("site-001")
+
+        assert result["site"] == {"jumbo": {"size": 9216}}  # lldp unavailable: omitted
+        main, lab = result["switches"]
+        assert main["deviceName"] == "Main Switch" and main["deviceModel"] == "TL-SG2428P"
+        assert main["general"] == {"ledSetting": 2, "jumboFollowSite": True}  # GPS location dropped
+        assert main["networks"] == [{"vlan": 1, "mvlan": True}]
+        assert main["rpvst"] == [{"vlan": 10, "priority": 4096, "enable": True}]
+        assert lab == {"deviceName": "Lab Switch", "deviceMac": "20-23", "deviceModel": ""}
+
     def test_get_ssids_no_wlans(self, openapi_client: OmadaOpenApiClient) -> None:
         with patch.object(openapi_client, "_get_paged") as mock:
             mock.side_effect = OmadaAPIError(-1600, "Unsupported")
@@ -1374,6 +1416,7 @@ class TestServiceWithOpenApiClient:
         mock_client.get_time_settings.return_value = {}
         mock_client.get_multicast_services.return_value = {}
         mock_client.get_lags.return_value = {}
+        mock_client.get_switch_settings.return_value = {}
 
         service = OmadaService(
             client=mock_client,

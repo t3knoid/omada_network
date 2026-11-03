@@ -35,6 +35,7 @@ Supports both official Open API authentication modes:
 | Time & NTP | ✓ | ✓ |
 | Multicast, Bonjour (mDNS) & UPnP | ✓ | ✓ |
 | Link Aggregation (LAGs, M-LAG) | ✓ | ✓ |
+| Switch Settings (management VLAN, jumbo, STP / loop prevention, IGMP snooping) | ✓ | ✓ |
 | DHCP Reservations | ✓ | ✓ |
 | DHCP Scopes (pools, DNS/domain, options, relay, guard) | ✓ | ✓ |
 | DHCP Leases | ✓ | ✓ |
@@ -614,7 +615,9 @@ docs/
     ├── multicast_services.yaml
     ├── multicast_services.md
     ├── lags.yaml
-    └── lags.md
+    ├── lags.md
+    ├── switch_settings.yaml
+    └── switch_settings.md
 ```
 
 ### Example – DHCP Reservations Markdown

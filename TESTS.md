@@ -187,6 +187,7 @@ Omada Open API client tests.
 | | `test_get_gateway_settings_all_fail` | Returns empty dict when all endpoints fail |
 | | `test_get_ssids` | Fetches SSIDs with WLAN group names |
 | | `test_get_ssids_no_wlans` | Returns empty list when WLAN endpoint fails |
+| | `test_get_switch_settings` | Collects site jumbo/LLDP and per-switch general config, VLAN interfaces, RPVST (best-effort; GPS dropped) |
 | | `test_get_lags_rebuilds_groups_from_port_overview` | Rebuilds LAG groups per switch from member `lagSetting`, taking the union of member lists |
 | | `test_get_lags_fallback_and_stacks` | Falls back to `lagPort` flags when the overview is unavailable; adds stack LAGs |
 | | `test_get_wan_failover_collects_config_and_health` | Combines load-balance, basic-info, and per-gateway WAN health |
@@ -231,7 +232,7 @@ Resource registry and `generate_from_yaml` tests.
 
 | Class | Test | Description |
 | --- | --- | --- |
-| `TestRegistry` | `test_all_thirty_six_resources_defined` | All 36 resource types are registered |
+| `TestRegistry` | `test_all_thirty_seven_resources_defined` | All 37 resource types are registered |
 | | `test_registry_lookup_matches_resources` | Registry lookup matches `RESOURCES` list |
 | | `test_all_definitions_are_resource_definition` | All entries are `ResourceDefinition` instances |
 | | `test_all_row_formatters_callable` | All row formatters are callable |
@@ -284,6 +285,8 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_multicast_services_rows_and_details` | IGMP/MLD proxy, IPTV, UPnP, mDNS rules, Bonjour profiles, and snooping |
 | | `test_lag_rows_and_details` | LAG summary (mode, members, link, M-LAG), per-LAG member tables, M-LAG groups, hash algorithm |
 | | `test_device_port_operation_names_lag` | Device-port Operation column names the LAG an aggregating port belongs to |
+| | `test_switch_settings_rows` | Per-switch management VLAN, jumbo frames, STP / loopback coverage, LAG hash, LED |
+| | `test_switch_settings_details` | Site switch settings (jumbo, LLDP, IGMP snooping), per-switch detail, VLAN interfaces, RPVST |
 | | `test_switch_port_profile_rows` | Formats switch port profile rows |
 | | `test_switch_port_profile_rows_vlan_columns` | Resolves native, untagged, and tagged networks in the profile summary |
 | | `test_switch_port_profile_details_lists_all_properties` | Per-profile detail rows cover every property group, plus unmapped keys |

@@ -1844,6 +1844,226 @@ def _lag_details(
     return sections
 
 
+# --- Switch-wide settings ---------------------------------------------------------------
+
+_LED_MAP: dict[int, str] = {0: "Off", 1: "On", 2: "Site setting"}
+_SNMP_TYPE_MAP: dict[int, str] = {0: "Site setting", 1: "Custom"}
+_SWITCH_STP_NOTE = (
+    "Not exposed by the Open API (switch-wide STP mode / bridge priority); "
+    "see RPVST instances and per-port STP below"
+)
+
+
+def _site_jumbo(data: dict[str, Any]) -> Any:
+    jumbo = (data.get("site") or {}).get("jumbo") if isinstance(data.get("site"), dict) else None
+    return jumbo.get("size") if isinstance(jumbo, dict) else None
+
+
+def _switch_jumbo(general: dict[str, Any], site_size: Any) -> str:
+    if not general:
+        return ""
+    if general.get("jumboFollowSite", True):
+        return f"Site setting ({site_size} bytes)" if site_size else "Site setting"
+    return f"{general.get('jumbo', '')} bytes (custom)"
+
+
+def _switch_ip(ip: Any) -> str:
+    """Switch VLAN-interface addressing: ``Static 10.0.0.2 255.255.255.0 (gw 10.0.0.1)`` / ``DHCP``."""
+    if not isinstance(ip, dict) or not ip:
+        return ""
+    if ip.get("mode") == 1:
+        text = "DHCP"
+        if ip.get("useFixedAddr") and ip.get("dhcpIp"):
+            text += f" (reserved {ip['dhcpIp']})"
+        if ip.get("fallback") and ip.get("fallbackIp"):
+            text += f", fallback {ip['fallbackIp']}"
+        return text
+    text = " ".join(str(x) for x in (ip.get("ip"), ip.get("netmask")) if x)
+    if ip.get("mode") == 0:
+        text = f"Static {text}".strip()
+    if ip.get("gateway"):
+        text += f" (gw {ip['gateway']})"
+    return text
+
+
+def _switch_mgmt_vlan(networks: Any) -> str:
+    for n in networks if isinstance(networks, list) else []:
+        if isinstance(n, dict) and n.get("mvlan"):
+            name = _flatten(n.get("name", ""))
+            text = f"VLAN {n.get('vlan', '')}" + (f" ({name})" if name else "")
+            addressing = _switch_ip(n.get("ip"))
+            return f"{text}, {addressing}" if addressing else text
+    return ""
+
+
+def _rpvst_instances(raw: Any) -> list[dict[str, Any]]:
+    """RPVST instances; the spec leaves the shape untyped, so accept common wrappers."""
+    if isinstance(raw, dict):
+        for key in ("data", "instances", "rpvstInstances", "list"):
+            if isinstance(raw.get(key), list):
+                raw = raw[key]
+                break
+    return [i for i in raw if isinstance(i, dict)] if isinstance(raw, list) else []
+
+
+def _switch_port_protection(mac: Any, context: dict[str, Any] | None) -> dict[str, Any]:
+    """Loop-prevention coverage of a switch's ports, via each port's profile."""
+    ctx = context or {}
+    profiles = {
+        str(pr.get("id")): pr for pr in ctx.get("switch_port_profiles") or []
+        if isinstance(pr, dict) and pr.get("id")
+    }
+    by_name = {str(pr.get("name")): pr for pr in profiles.values() if pr.get("name")}
+    totals = {"ports": 0, "loopback": 0, "loopbackVlan": 0, "stp": 0, "unknown": 0, "overridden": 0}
+    for port in ctx.get("device_ports") or []:
+        if not isinstance(port, dict) or str(port.get("deviceMac", "")).upper() != str(mac).upper():
+            continue
+        if port.get("deviceType") not in (None, "switch"):
+            continue
+        totals["ports"] += 1
+        if port.get("profileOverrideEnable"):
+            totals["overridden"] += 1
+        profile = profiles.get(str(port.get("profileId", ""))) or by_name.get(str(port.get("profileName", "")))
+        if profile is None:
+            totals["unknown"] += 1
+            continue
+        totals["loopback"] += bool(profile.get("loopbackDetectEnable"))
+        totals["loopbackVlan"] += bool(profile.get("loopbackDetectVlanBasedEnable"))
+        totals["stp"] += bool(profile.get("spanningTreeEnable"))
+    return totals
+
+
+def _protection_text(t: dict[str, Any], key: str) -> str:
+    if not t["ports"]:
+        return ""
+    known = t["ports"] - t["unknown"]
+    text = f"{t[key]}/{known} ports"
+    if t["unknown"]:
+        text += f" ({t['unknown']} with unknown profile)"
+    return text
+
+
+def _switch_settings_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if not isinstance(data, dict):
+        return []
+    site_size = _site_jumbo(data)
+    rows = []
+    for sw in data.get("switches") or []:
+        if not isinstance(sw, dict):
+            continue
+        general = sw.get("general") if isinstance(sw.get("general"), dict) else {}
+        protection = _switch_port_protection(sw.get("deviceMac", ""), context)
+        rpvst = [i for i in _rpvst_instances(sw.get("rpvst")) if i.get("enable", True)]
+        stp = _protection_text(protection, "stp")
+        if rpvst:
+            stp = (stp + "; " if stp else "") + f"RPVST: {len(rpvst)} VLAN instance(s)"
+        rows.append({
+            "Switch": _flatten(sw.get("deviceName", "")),
+            "Model": _flatten(sw.get("deviceModel", "")),
+            "Management VLAN": _switch_mgmt_vlan(sw.get("networks")),
+            "Jumbo Frames": _switch_jumbo(general, site_size),
+            "STP (ports)": stp,
+            "Loopback Detection (ports)": _protection_text(protection, "loopback"),
+            "LAG Hash": (
+                "Site setting" if general.get("lagHashAlgFollowSite", True)
+                else _profile_code(general.get("lagHashAlg", ""), _LAG_HASH_MAP)
+            ) if general else "",
+            "LED": _profile_code(general["ledSetting"], _LED_MAP) if general.get("ledSetting") is not None else "",
+        })
+    return rows
+
+
+def _switch_settings_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    if not isinstance(data, dict):
+        return []
+    sections: list[tuple[str, list[dict[str, Any]]]] = []
+
+    site_rows: list[tuple[str, str]] = []
+    size = _site_jumbo(data)
+    if size:
+        site_rows.append(("Jumbo Frame Size", f"{size} bytes"))
+    lldp = (data.get("site") or {}).get("lldp") if isinstance(data.get("site"), dict) else None
+    if isinstance(lldp, dict):
+        inner = lldp.get("lldp") if isinstance(lldp.get("lldp"), dict) else lldp
+        if "enable" in inner:
+            site_rows.append(("LLDP", _enabled(inner["enable"])))
+    site_rows.append(("Switch-wide STP Mode / Priority", _SWITCH_STP_NOTE))
+    snooping = [
+        f"{_flatten(n.get('name', ''))}: {_enabled(n.get('igmpSnoopEnable'))}"
+        for n in (context or {}).get("networks") or []
+        if isinstance(n, dict) and "igmpSnoopEnable" in n
+    ]
+    if snooping:
+        site_rows.append(("IGMP Snooping (per network)", "; ".join(snooping)))
+    sections.append(("Site Switch Settings", [{"Setting": k, "Value": v} for k, v in site_rows]))
+
+    for sw in data.get("switches") or []:
+        if not isinstance(sw, dict):
+            continue
+        name = _flatten(sw.get("deviceName", "")) or _flatten(sw.get("deviceMac", ""))
+        general = sw.get("general") if isinstance(sw.get("general"), dict) else {}
+        protection = _switch_port_protection(sw.get("deviceMac", ""), context)
+        rows: list[tuple[str, str, str]] = [
+            ("General", "Management VLAN", _switch_mgmt_vlan(sw.get("networks")) or "Not identified"),
+            ("General", "Jumbo Frames", _switch_jumbo(general, size)),
+        ]
+        if general.get("ledSetting") is not None:
+            rows.append(("General", "LED", _profile_code(general["ledSetting"], _LED_MAP)))
+        snmp = general.get("snmp") if isinstance(general.get("snmp"), dict) else {}
+        if snmp:
+            if snmp.get("type") == 1:
+                rows.append(("General", "SNMP", f"Custom (location {snmp.get('location', '')!s}, "
+                                                f"contact {snmp.get('contact', '')!s})"))
+            else:
+                rows.append(("General", "SNMP", "Site setting"))
+        sdm = general.get("sdm") if isinstance(general.get("sdm"), dict) else {}
+        if sdm.get("inUse"):
+            rows.append(("General", "SDM Template", _flatten(sdm["inUse"])))
+        if general:
+            rows.append(("General", "LAG Hash Algorithm",
+                         "Site setting" if general.get("lagHashAlgFollowSite", True)
+                         else _profile_code(general.get("lagHashAlg", ""), _LAG_HASH_MAP)))
+        rows.append(("Loop Prevention", "STP Enabled", _protection_text(protection, "stp")))
+        rows.append(("Loop Prevention", "Loopback Detection (port based)", _protection_text(protection, "loopback")))
+        rows.append(("Loop Prevention", "Loopback Detection (VLAN based)",
+                     _protection_text(protection, "loopbackVlan")))
+        if protection["overridden"]:
+            rows.append(("Loop Prevention", "Ports with Profile Override",
+                         f"{protection['overridden']} (their own settings may differ from the profile)"))
+        rows.append(("Spanning Tree", "Switch-wide Mode / Priority", _SWITCH_STP_NOTE))
+        rows = [r for r in rows if r[2] != ""]
+        sections.append((name, _detail_rows(rows)))
+
+        interfaces = []
+        for n in sw.get("networks") if isinstance(sw.get("networks"), list) else []:
+            if not isinstance(n, dict):
+                continue
+            interfaces.append({
+                "VLAN": _flatten(n.get("vlan", "")),
+                "Name": _flatten(n.get("name", "")),
+                "Management": "Yes" if n.get("mvlan") else "No",
+                "IP": _switch_ip(n.get("ip")),
+                "MTU": _flatten(n.get("mtu", "")),
+                "DHCP": _profile_code(n["mode"], _SWITCH_DHCP_MODE_MAP) if n.get("mode") is not None else "",
+                "IPv6": _enabled(n["ipv6Enable"]) if "ipv6Enable" in n else "",
+            })
+        if interfaces:
+            sections.append((f"{name} VLAN interfaces", interfaces))
+        rpvst = _rpvst_instances(sw.get("rpvst"))
+        if rpvst:
+            sections.append((f"{name} RPVST instances", [
+                {
+                    "VLAN": _flatten(i.get("vlan", "")),
+                    "Priority": _flatten(i.get("priority", "")),
+                    "Enabled": _enabled(i["enable"]) if "enable" in i else "",
+                }
+                for i in rpvst
+            ]))
+    return sections
+
+
 # Band bits: 1=2.4GHz, 2=5GHz, 4=6GHz  (7=all, 3=2.4+5, etc.)
 _BAND_MAP: dict[int, str] = {
     1: "2.4 GHz",
@@ -3037,6 +3257,15 @@ RESOURCES: list[ResourceDefinition] = [
         row_formatter=_lag_rows,
         sort_key="Device",  # stable sort keeps LAG order within each device
         detail_formatter=_lag_details,
+    ),
+    ResourceDefinition(
+        name="switch_settings",
+        title="Switch Settings",
+        fetch_method="get_switch_settings",
+        row_formatter=_switch_settings_rows,
+        sort_key="Switch",
+        needs_context=True,
+        detail_formatter=_switch_settings_details,
     ),
     ResourceDefinition(
         name="dhcp_reservations",

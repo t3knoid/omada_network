@@ -12,7 +12,7 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_thirty_six_resources_defined(self) -> None:
+    def test_all_thirty_seven_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
@@ -51,6 +51,7 @@ class TestRegistry:
             "time_settings",
             "multicast_services",
             "lags",
+            "switch_settings",
         }
 
     def test_registry_lookup_matches_resources(self) -> None:
@@ -1203,6 +1204,78 @@ class TestRowFormatters:
         ])
         assert rows[0]["Operation"] == "Aggregating (LAG 1)"
         assert rows[1]["Operation"] == "Aggregating"
+
+    _SWITCH_CONTEXT = {
+        "switch_port_profiles": [
+            {"id": "p-all", "name": "All", "spanningTreeEnable": True, "loopbackDetectEnable": False},
+            {"id": "p-edge", "name": "Edge", "spanningTreeEnable": False, "loopbackDetectEnable": True,
+             "loopbackDetectVlanBasedEnable": True},
+        ],
+        "device_ports": [
+            {"deviceMac": "54-AF", "deviceType": "switch", "port": 1, "profileId": "p-all"},
+            {"deviceMac": "54-AF", "deviceType": "switch", "port": 2, "profileName": "Edge",
+             "profileOverrideEnable": True},
+            {"deviceMac": "54-AF", "deviceType": "switch", "port": 3, "profileId": "p-missing"},
+            {"deviceMac": "OTHER", "deviceType": "switch", "port": 1, "profileId": "p-edge"},
+        ],
+        "networks": [{"name": "LAN", "igmpSnoopEnable": True}, {"name": "IoT", "igmpSnoopEnable": False}],
+    }
+    _SWITCH_DATA = {
+        "site": {"jumbo": {"size": 9216}, "lldp": {"lldp": {"enable": True}}},
+        "switches": [{
+            "deviceName": "Main Switch", "deviceMac": "54-af", "deviceModel": "TL-SG2428P",
+            "general": {"ledSetting": 0, "jumboFollowSite": False, "jumbo": 9000,
+                        "lagHashAlgFollowSite": False, "lagHashAlg": 2,
+                        "snmp": {"type": 1, "location": "Closet", "contact": "admin"},
+                        "sdm": {"inUse": "default"}},
+            "networks": [
+                {"vlan": 1, "name": "Default", "mvlan": True, "mtu": 1500, "mode": 0,
+                 "ip": {"mode": 0, "ip": "192.168.2.21", "netmask": "255.255.255.0", "gateway": "192.168.2.1"}},
+                {"vlan": 20, "name": "Infra", "mvlan": False, "ip": {"mode": 1, "useFixedAddr": True,
+                                                                     "dhcpIp": "192.168.20.5"}},
+            ],
+            "rpvst": {"data": [{"vlan": 10, "priority": 4096, "enable": True},
+                               {"vlan": 20, "priority": 32768, "enable": False}]},
+        }],
+    }
+
+    def test_switch_settings_rows(self) -> None:
+        from omada.registry import _switch_settings_rows
+        assert _switch_settings_rows(self._SWITCH_DATA, self._SWITCH_CONTEXT) == [{
+            "Switch": "Main Switch", "Model": "TL-SG2428P",
+            "Management VLAN": "VLAN 1 (Default), Static 192.168.2.21 255.255.255.0 (gw 192.168.2.1)",
+            "Jumbo Frames": "9000 bytes (custom)",
+            "STP (ports)": "1/2 ports (1 with unknown profile); RPVST: 1 VLAN instance(s)",
+            "Loopback Detection (ports)": "1/2 ports (1 with unknown profile)",
+            "LAG Hash": "Source + Destination MAC",
+            "LED": "Off",
+        }]
+        follow = {"switches": [{"deviceName": "S", "general": {"jumboFollowSite": True}}],
+                  "site": {"jumbo": {"size": 1518}}}
+        assert _switch_settings_rows(follow)[0]["Jumbo Frames"] == "Site setting (1518 bytes)"
+        assert _switch_settings_rows({}) == []
+
+    def test_switch_settings_details(self) -> None:
+        from omada.registry import _switch_settings_details
+        sections = dict(_switch_settings_details(self._SWITCH_DATA, self._SWITCH_CONTEXT))
+        site = {r["Setting"]: r["Value"] for r in sections["Site Switch Settings"]}
+        assert site["Jumbo Frame Size"] == "9216 bytes"
+        assert site["LLDP"] == "Enabled"
+        assert site["IGMP Snooping (per network)"] == "LAN: Enabled; IoT: Disabled"
+        assert "Not exposed by the Open API" in site["Switch-wide STP Mode / Priority"]
+        main = {(r["Category"], r["Setting"]): r["Value"] for r in sections["Main Switch"]}
+        assert main[("General", "SNMP")] == "Custom (location Closet, contact admin)"
+        assert main[("General", "SDM Template")] == "default"
+        assert main[("Loop Prevention", "Loopback Detection (VLAN based)")] == "1/2 ports (1 with unknown profile)"
+        assert main[("Loop Prevention", "Ports with Profile Override")].startswith("1 ")
+        assert sections["Main Switch VLAN interfaces"][1] == {
+            "VLAN": "20", "Name": "Infra", "Management": "No", "IP": "DHCP (reserved 192.168.20.5)",
+            "MTU": "", "DHCP": "", "IPv6": "",
+        }
+        assert sections["Main Switch RPVST instances"] == [
+            {"VLAN": "10", "Priority": "4096", "Enabled": "Enabled"},
+            {"VLAN": "20", "Priority": "32768", "Enabled": "Disabled"},
+        ]
 
     def test_switch_port_profile_rows(self) -> None:
         from omada.registry import _switch_port_profile_rows

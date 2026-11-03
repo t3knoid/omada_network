@@ -1438,6 +1438,65 @@ class OmadaOpenApiClient:
             data[key] = value
         return data
 
+    # ------------------------------------------------------------------
+    # Switch-wide settings
+    # ------------------------------------------------------------------
+
+    def get_switch_settings(self, site_id: str) -> dict[str, Any]:
+        """Return site switch settings and per-switch settings.
+
+        * ``site``: ``jumbo`` (``GET /sites/{siteId}/jumbo``) and ``lldp``
+          (``GET /sites/{siteId}/lldp``), each best-effort.
+        * ``switches``: per switch (``type: switch``):
+
+          - ``general``: ``GET .../switches/{mac}/general-config`` (LED, jumbo
+            and LAG-hash overrides, SNMP location / contact, SDM template).
+            The GPS ``location`` is dropped.
+          - ``networks``: ``GET .../switches/{mac}/networks`` (VLAN
+            interfaces; ``mvlan`` marks the management VLAN).
+          - ``rpvst``: ``GET .../switches/{mac}/rpvst-instances`` (per-VLAN
+            STP priority; untyped in the spec, stored as returned).
+
+          Each part is best-effort.  The switch-wide STP mode / bridge
+          priority and site loopback control are not readable through the
+          Open API.
+        """
+        site: dict[str, Any] = {}
+        for key, path in (("jumbo", "jumbo"), ("lldp", "lldp")):
+            try:
+                site[key] = self._get(f"sites/{site_id}/{path}")
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.debug("Site %s setting unavailable: %s", path, exc)
+
+        switches: list[dict[str, Any]] = []
+        for device in self.get_devices(site_id):
+            if str(device.get("type", device.get("deviceType", ""))).lower() != "switch":
+                continue
+            mac = device.get("mac", device.get("deviceMac", ""))
+            if not mac:
+                continue
+            base = f"sites/{site_id}/switches/{quote(str(mac), safe='')}"
+            record: dict[str, Any] = {
+                "deviceName": device.get("name", ""),
+                "deviceMac": mac,
+                "deviceModel": device.get("model", ""),
+            }
+            for key, path, paged in (
+                ("general", "general-config", False),
+                ("networks", "networks", True),
+                ("rpvst", "rpvst-instances", False),
+            ):
+                try:
+                    value = self._get_paged(f"{base}/{path}") if paged else self._get(f"{base}/{path}")
+                except (OmadaAPIError, requests.RequestException) as exc:
+                    logger.debug("Switch %s %s unavailable: %s", mac, path, exc)
+                    continue
+                if key == "general" and isinstance(value, dict):
+                    value = {k: v for k, v in value.items() if k != "location"}
+                record[key] = value
+            switches.append(record)
+        return self._redact({"site": site, "switches": switches})
+
 
 def _lags_from_overview(device: dict[str, Any], ports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Rebuild LAG groups for one switch from its port-overview records."""

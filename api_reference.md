@@ -572,3 +572,32 @@ then a member-port table for each LAG, the M-LAG groups, and the site hash
 algorithm. In `device_ports`, the Operation column of an aggregating port
 names its group, e.g. `Aggregating (LAG 1)`.
 
+---
+
+### Switch Settings (`switch_settings`)
+
+| Part | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| `site.jumbo` | `GET` | `sites/{siteId}/jumbo` | Site jumbo frame size (1518–9216 bytes) |
+| `site.lldp` | `GET` | `sites/{siteId}/lldp` | Site LLDP |
+| `switches[].general` | `GET` | `sites/{siteId}/switches/{switchMac}/general-config` | LED, jumbo override, LAG-hash override, SNMP location / contact, SDM template (GPS location dropped) |
+| `switches[].networks` | `GET` | `sites/{siteId}/switches/{switchMac}/networks` | Paginated. VLAN interfaces; `mvlan` marks the **management VLAN**; static / DHCP addressing, MTU, DHCP mode |
+| `switches[].rpvst` | `GET` | `sites/{siteId}/switches/{switchMac}/rpvst-instances` | Per-VLAN STP priority (untyped in the spec; common wrappers accepted) |
+
+Every part is best-effort.
+
+**Derived from other resources** (no extra API calls):
+
+- **Loop prevention / STP per switch:** each switch port (`device_ports`) is
+  matched to its profile (`switch_port_profiles`, by ID, then by name). The
+  table counts ports with STP, port-based loopback detection, and VLAN-based
+  loopback detection. Ports with an unknown profile, and ports with a profile
+  override (whose own settings may differ), are reported separately.
+- **IGMP snooping:** the per-network `igmpSnoopEnable` from `networks`.
+  Snooping details (querier, unknown multicast, …) are in
+  `multicast_services`.
+
+**Not available through the Open API:** the switch-wide STP mode
+(STP / RSTP / MSTP / RPVST) and bridge priority, and site loopback control,
+can be set but not read. The Markdown says so instead of leaving a blank.
+
