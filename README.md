@@ -189,6 +189,17 @@ docker run -p 5000:5000 \
 
 The application supports two authentication modes, both using the official Omada Open API (Northbound API):
 
+For **Controller IP / hostname**, enter an address that this application can
+reach. It does not have to be a numeric IP: if you open the controller UI at
+`https://omada.example.com:8043`, use `omada.example.com` as the controller
+value. The API port is configured separately and defaults to `443`; the UI
+port in the browser address may be different. If you specifically need the
+numeric IP for an OC200, open the network where the controller is connected
+in the Omada UI, select **Clients**, and search for **OC200**. Use the IP
+address shown for that client. For a software controller, check the host
+machine's network settings; a router's DHCP client list is another option for
+hardware controllers.
+
 ### Generate Open API credentials
 
 1. Sign in to the Omada SDN Controller with an administrator account.
