@@ -203,6 +203,9 @@ Omada Open API client tests.
 | | `test_get_ssl_vpn_setting_failure_propagates` | A failing SSL VPN setting call is reported as a fetch failure |
 | | `test_get_eogre_tunnel` | Fetches EoGRE tunnel settings |
 | | `test_get_ipsec_failover` | Fetches IPsec failover groups |
+| | `test_get_dhcp_scopes_extracts_dhcp_fields_and_pool_status` | Extracts DHCP fields per network and adds pool usage for serving networks |
+| | `test_get_dhcp_scopes_tolerates_pool_status_failure` | Pool-usage lookup failure does not fail the export |
+| | `test_get_dhcp_leases` | Fetches DHCP leases across all servers |
 | `TestServiceWithOpenApiClient` | `test_service_accepts_injected_client` | Service uses injected client |
 | | `test_service_fetch_all_uses_injected_client` | `fetch_all` calls injected client methods |
 
@@ -214,7 +217,7 @@ Resource registry and `generate_from_yaml` tests.
 
 | Class | Test | Description |
 | --- | --- | --- |
-| `TestRegistry` | `test_all_twenty_three_resources_defined` | All 23 resource types are registered |
+| `TestRegistry` | `test_all_twenty_five_resources_defined` | All 25 resource types are registered |
 | | `test_registry_lookup_matches_resources` | Registry lookup matches `RESOURCES` list |
 | | `test_all_definitions_are_resource_definition` | All entries are `ResourceDefinition` instances |
 | | `test_all_row_formatters_callable` | All row formatters are callable |
@@ -245,6 +248,12 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_ssl_vpn_details` | SSL VPN user group, user, resource, and resource group sections |
 | | `test_eogre_rows` | EoGRE tunnel settings as Setting / Value rows |
 | | `test_ipsec_failover_rows` | IPsec failover primary, ordered candidates, and failback |
+| | `test_dhcp_scope_rows` | DHCP scope summary for gateway, switch relay, disabled, external, and legacy networks |
+| | `test_dhcp_scope_details_gateway_options_and_guard` | Gateway scope pools, DNS/domain, options 3/60/66/138/next-server, custom options, and guard |
+| | `test_dhcp_scope_details_switch_server_uses_switch_option_types` | Switch DHCP server scope with switch option-type codes |
+| | `test_dhcp_scope_details_switch_relay` | Switch DHCP relay interface and target servers |
+| | `test_dhcp_lease_rows_sorted_by_network_then_ip` | DHCP leases sorted by network and numeric IP |
+| | `test_dhcp_reservation_rows_sorted_with_description_and_options` | Reservations sorted by network and IP, with description and options |
 | | `test_switch_port_profile_rows` | Formats switch port profile rows |
 | | `test_switch_port_profile_rows_vlan_columns` | Resolves native, untagged, and tagged networks in the profile summary |
 | | `test_switch_port_profile_details_lists_all_properties` | Per-profile detail rows cover every property group, plus unmapped keys |

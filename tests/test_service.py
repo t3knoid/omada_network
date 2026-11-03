@@ -36,6 +36,8 @@ def mock_client() -> MagicMock:
     client.get_ssl_vpn.return_value = {}
     client.get_eogre_tunnel.return_value = {}
     client.get_ipsec_failover.return_value = []
+    client.get_dhcp_scopes.return_value = []
+    client.get_dhcp_leases.return_value = []
     return client
 
 
@@ -74,6 +76,8 @@ def _empty_data() -> dict:
         "ssl_vpn": {},
         "eogre_tunnel": {},
         "ipsec_failover": [],
+        "dhcp_scopes": [],
+        "dhcp_leases": [],
     }
 
 

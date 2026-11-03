@@ -184,8 +184,49 @@ Each SSID is enriched with the parent WLAN's `name` as `wlanName`.
 | --- | --- | --- |
 | `GET` | `sites/{siteId}/setting/service/dhcp` | Paginated |
 
+Rows are sorted by network, then numerically by IP, and include the
+reservation description and any per-reservation DHCP options.
+
 > **API docs:** Documented under the [Service](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Service) tag —
 > *Get DHCP Reservation List*.
+
+### DHCP Scopes
+
+Reservations alone don't recreate the DHCP service, so `dhcp_scopes` holds
+the DHCP definition of every LAN network: one YAML record per network
+containing only DHCP-related fields.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GET` | `sites/{siteId}/lan-networks/all` | Via `get_networks()`; DHCP fields are extracted per network |
+| `GET` | `sites/{siteId}/networks/{networkId}/dhcp-server-info` | Pool usage (`poolStatus`), only for networks serving DHCP; best-effort |
+
+Fields kept per network: identity (`id`, `name`, `vlan`, `gatewaySubnet`,
+`purpose`), the serving device (`deviceType` 0 External / 1 Gateway / 2 Switch
+/ 3 None, `deviceMac`, and switch `mode` 1 Server / 2 Relay), gateway
+`dhcpSettings` (pools, lease time in minutes, DNS mode and servers, gateway,
+options 60 / 66 / 138, next server, custom options), switch `dhcpServer` /
+`dhcpRelay`, `domain`, `dhcpL2RelayEnable` (option 82), `dhcpGuard` /
+`dhcpv6Guard`, and the network's IPv6 config.
+
+The Markdown summary shows, per network: DHCP server, pools (with free
+addresses), lease time, DNS, gateway, domain, relay targets, and L2 relay.
+Each network then gets a detail section (Server, Pool, DNS / Domain, Options,
+Relay, Guard).
+
+> Custom DHCP option *type* codes differ by server: gateway 0 String /
+> 1 IP Address / 2 Hex Array; switch 0 Hex Array / 1 String / 2 IP Address.
+
+### DHCP Leases
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GET` | `sites/{siteId}/setting/service/dhcp/user-list` | Paginated; leases from every DHCP server in the site |
+
+Network, IP, MAC, name, device/client type, binding (Dynamic / Static), lease
+time remaining, and serving device, sorted by network then IP. Leases are
+runtime state: they change between runs and are not needed to recreate the
+service.
 
 ---
 

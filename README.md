@@ -25,6 +25,8 @@ Supports both official Open API authentication modes:
 | Gateway Settings | ✓ | ✓ |
 | SSIDs | ✓ | ✓ |
 | DHCP Reservations | ✓ | ✓ |
+| DHCP Scopes (pools, DNS/domain, options, relay, guard) | ✓ | ✓ |
+| DHCP Leases | ✓ | ✓ |
 | Devices | ✓ | ✓ |
 | Device Ports (switches & gateways) | ✓ | ✓ |
 | Port Forwarding | ✓ | ✓ |
@@ -551,7 +553,11 @@ docs/
     ├── eogre_tunnel.yaml
     ├── eogre_tunnel.md
     ├── ipsec_failover.yaml
-    └── ipsec_failover.md
+    ├── ipsec_failover.md
+    ├── dhcp_scopes.yaml
+    ├── dhcp_scopes.md
+    ├── dhcp_leases.yaml
+    └── dhcp_leases.md
 ```
 
 ### Example – DHCP Reservations Markdown

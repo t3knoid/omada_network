@@ -1357,17 +1357,250 @@ def _ssid_rows(data: Any) -> list[dict[str, Any]]:
 
 
 def _dhcp_reservation_rows(data: Any) -> list[dict[str, Any]]:
-    items = data if isinstance(data, list) else []
-    return [
-        {
+    """Reservations sorted by network, then numerically by IP."""
+    items = [r for r in (data if isinstance(data, list) else []) if isinstance(r, dict)]
+    items.sort(key=lambda r: (
+        str(r.get("netName", r.get("networkName", ""))).lower(), _ip_sort_key(r.get("ip", "")),
+    ))
+    rows = []
+    for r in items:
+        options = "; ".join(
+            f"Option {o.get('code', '?')}: {_flatten(o.get('value', ''))}" if isinstance(o, dict) else str(o)
+            for o in r.get("options") or []
+        )
+        rows.append({
             "Network": r.get("netName", r.get("networkName", "")),
             "IP Address": r.get("ip", ""),
             "MAC Address": r.get("mac", ""),
             "Name": r.get("name", r.get("clientName", "")),
+            "Description": _flatten(r.get("description", "")),
+            "Options": options,
             "Status": "Enabled" if r.get("status") else "Disabled",
             "Server": r.get("serverName", ""),
+        })
+    return rows
+
+
+_DHCP_DEVICE_TYPE_MAP: dict[int, str] = {0: "External", 1: "Gateway", 2: "Switch", 3: "None"}
+_SWITCH_DHCP_MODE_MAP: dict[int, str] = {0: "None", 1: "DHCP Server", 2: "DHCP Relay"}
+_DHCP_GUARD_MODE_MAP: dict[int, str] = {1: "Follow Server", 2: "Custom"}
+# The option value-type codes differ between gateway and switch DHCP servers.
+_GATEWAY_OPTION_TYPE_MAP: dict[int, str] = {0: "String", 1: "IP Address", 2: "Hex Array"}
+_SWITCH_OPTION_TYPE_MAP: dict[int, str] = {0: "Hex Array", 1: "String", 2: "IP Address"}
+_DHCP_LEASE_BINDING_MAP: dict[int, str] = {0: "Dynamic", 1: "Static"}
+_DHCP_USER_TYPE_MAP: dict[int, str] = {0: "Device", 1: "Client"}
+
+
+def _ip_sort_key(ip: Any) -> tuple[int, ...]:
+    try:
+        return tuple(int(part) for part in str(ip).split("."))
+    except ValueError:
+        return (999,)
+
+
+def _device_names(context: dict[str, Any] | None) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for d in (context or {}).get("devices") or []:
+        if isinstance(d, dict) and d.get("mac"):
+            names[str(d["mac"]).upper()] = _flatten(d.get("name") or d["mac"])
+    return names
+
+
+def _scope_settings(scope: dict[str, Any]) -> dict[str, Any]:
+    settings = scope.get("dhcpSettings") or scope.get("dhcpSettingsVO")
+    return settings if isinstance(settings, dict) else {}
+
+
+def _scope_server(scope: dict[str, Any], devices: dict[str, str]) -> str:
+    """Who answers DHCP on this network, e.g. ``Gateway (Astoria Gateway)``."""
+    settings = _scope_settings(scope)
+    device_type = scope.get("deviceType")
+    if device_type is None:
+        device_type = 1 if settings.get("enable") else 3
+    name = devices.get(str(scope.get("deviceMac", "")).upper(), _flatten(scope.get("deviceMac", "")))
+    if device_type == 1:
+        if not settings.get("enable"):
+            return "Disabled"
+        return f"Gateway ({name})" if name else "Gateway"
+    if device_type == 2:
+        mode = _profile_code(scope.get("mode", 0), _SWITCH_DHCP_MODE_MAP)
+        label = f"Switch {mode}" if scope.get("mode") in (1, 2) else "Switch (no DHCP)"
+        return f"{label} ({name})" if name else label
+    return _profile_code(device_type, _DHCP_DEVICE_TYPE_MAP)
+
+
+def _scope_pools(scope: dict[str, Any]) -> list[str]:
+    status = {
+        (r.get("startIp"), r.get("endIp")): r.get("availableIpNum")
+        for r in scope.get("poolStatus") or [] if isinstance(r, dict)
+    }
+    ranges: list[tuple[Any, Any]] = []
+    if scope.get("deviceType") == 2 and isinstance(scope.get("dhcpServer"), dict):
+        server = scope["dhcpServer"]
+        for r in server.get("range") or server.get("ipRangePool") or []:
+            if isinstance(r, dict):
+                ranges.append((r.get("startIp"), r.get("endIp")))
+    else:
+        settings = _scope_settings(scope)
+        for r in settings.get("ipRangePool") or []:
+            if isinstance(r, dict):
+                ranges.append((r.get("ipaddrStart", r.get("startIp")), r.get("ipaddrEnd", r.get("endIp"))))
+        if not ranges and settings.get("ipaddrStart"):
+            ranges.append((settings.get("ipaddrStart"), settings.get("ipaddrEnd")))
+    pools = []
+    for start, end in ranges:
+        text = f"{start} – {end}"
+        available = status.get((start, end))
+        if available is not None:
+            text += f" ({available} free)"
+        pools.append(text)
+    return pools
+
+
+def _scope_config(scope: dict[str, Any]) -> tuple[dict[str, Any], dict[int, str]]:
+    """The active DHCP server config and its option type map."""
+    if scope.get("deviceType") == 2 and isinstance(scope.get("dhcpServer"), dict):
+        return scope["dhcpServer"], _SWITCH_OPTION_TYPE_MAP
+    return _scope_settings(scope), _GATEWAY_OPTION_TYPE_MAP
+
+
+def _scope_dns(config: dict[str, Any]) -> str:
+    servers = ", ".join(str(x) for x in (config.get("priDns"), config.get("sndDns")) if x)
+    if config.get("dhcpns") == "auto":
+        return "Auto"
+    return servers
+
+
+def _scope_serves(scope: dict[str, Any]) -> bool:
+    if scope.get("deviceType") == 2:
+        return scope.get("mode") == 1
+    return bool(_scope_settings(scope).get("enable"))
+
+
+def _dhcp_scope_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    devices = _device_names(context)
+    rows = []
+    for s in items:
+        if not isinstance(s, dict):
+            continue
+        config, _ = _scope_config(s)
+        serves = _scope_serves(s)
+        relay = s.get("dhcpRelay") if s.get("deviceType") == 2 and s.get("mode") == 2 else None
+        rows.append({
+            "Network": _flatten(s.get("name", "")),
+            "VLAN": _flatten(s.get("vlan", s.get("vlans", ""))),
+            "Subnet": _flatten(s.get("gatewaySubnet", "")),
+            "DHCP Server": _scope_server(s, devices),
+            "Pools": "; ".join(_scope_pools(s)) if serves else "",
+            "Lease Time": f"{config['leasetime']} min" if serves and config.get("leasetime") else "",
+            "DNS": _scope_dns(config) if serves else "",
+            "Gateway": _flatten(config.get("gateway", "")) if serves else "",
+            "Domain": _flatten(s.get("domain", "")),
+            "Relay To": ", ".join(str(a) for a in relay.get("serverAddrs") or [])
+            if isinstance(relay, dict) else "",
+            "L2 Relay (Opt 82)": _enabled(s.get("dhcpL2RelayEnable")),
+        })
+    return rows
+
+
+def _dhcp_option_rows(config: dict[str, Any], type_map: dict[int, str]) -> list[tuple[str, str, str]]:
+    rows = []
+    for key, label in (
+        ("option60", "Option 60 (Vendor Class)"),
+        ("option66", "Option 66 (TFTP Server)"),
+        ("option138", "Option 138 (Controller)"),
+        ("hostIP", "Controller IP"),
+        ("dhcpNextServer", "Next Server (siaddr)"),
+    ):
+        if config.get(key):
+            rows.append(("Options", label, _flatten(config[key])))
+    for opt in config.get("options") or []:
+        if not isinstance(opt, dict):
+            continue
+        name = f" {opt['name']}" if opt.get("name") else ""
+        kind = _profile_code(opt.get("type", ""), type_map)
+        value = _flatten(opt.get("value", ""))
+        rows.append(("Options", f"Option {opt.get('code', '?')}{name}", f"{kind}: {value}" if kind else value))
+    return rows
+
+
+def _dhcp_scope_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    items = data if isinstance(data, list) else []
+    devices = _device_names(context)
+    details = []
+    for s in items:
+        if not isinstance(s, dict):
+            continue
+        config, type_map = _scope_config(s)
+        serves = _scope_serves(s)
+        rows: list[tuple[str, str, str]] = [
+            ("Server", "DHCP Server", _scope_server(s, devices)),
+            ("Server", "Subnet", _flatten(s.get("gatewaySubnet", ""))),
+        ]
+        if s.get("dhcpServerNum") is not None:
+            rows.append(("Server", "Active DHCP Servers", _flatten(s["dhcpServerNum"])))
+        if s.get("deviceType") == 2 and isinstance(s.get("dhcpServer"), dict) and s.get("mode") == 1:
+            server = s["dhcpServer"]
+            if server.get("ip"):
+                mask = f"/{server['netmask']}" if server.get("netmask") else ""
+                rows.append(("Server", "Switch Interface", f"{server['ip']}{mask}"))
+        if serves:
+            for i, pool in enumerate(_scope_pools(s), 1):
+                rows.append(("Pool", f"Range {i}", pool))
+            if config.get("dhcpPoolMask") is not None:
+                rows.append(("Pool", "Pool Mask", f"/{config['dhcpPoolMask']}"))
+            if config.get("leasetime") is not None:
+                rows.append(("Pool", "Lease Time", f"{config['leasetime']} min"))
+            if config.get("dhcpns"):
+                rows.append(("DNS / Domain", "DNS Mode", str(config["dhcpns"]).title()))
+            for key, label in (("priDns", "Primary DNS"), ("sndDns", "Secondary DNS")):
+                if config.get(key):
+                    rows.append(("DNS / Domain", label, _flatten(config[key])))
+        if s.get("domain"):
+            rows.append(("DNS / Domain", "Domain Name", _flatten(s["domain"])))
+        if serves:
+            rows.append(("Options", "Default Gateway (Option 3)", _flatten(config.get("gateway") or "Default")))
+            rows += _dhcp_option_rows(config, type_map)
+        rows.append(("Relay", "DHCP L2 Relay (Option 82)", _enabled(s.get("dhcpL2RelayEnable"))))
+        relay = s.get("dhcpRelay")
+        if s.get("deviceType") == 2 and s.get("mode") == 2 and isinstance(relay, dict):
+            if relay.get("addr"):
+                rows.append(("Relay", "Relay Interface", _flatten(relay["addr"])))
+            rows.append(("Relay", "Relay To", ", ".join(str(a) for a in relay.get("serverAddrs") or [])))
+        for key, label in (("dhcpGuard", "DHCP Guard"), ("dhcpv6Guard", "DHCPv6 Guard")):
+            guard = s.get(key)
+            if not isinstance(guard, dict):
+                continue
+            rows.append(("Guard", label, _enabled(guard.get("enable"))))
+            if guard.get("enable"):
+                if guard.get("mode") is not None:
+                    rows.append(("Guard", f"{label} Mode", _profile_code(guard["mode"], _DHCP_GUARD_MODE_MAP)))
+                trusted = [guard.get(k) for k in ("dhcpSvr1", "dhcpSvr2", "dhcpv6Svr1", "dhcpv6Svr2")]
+                if any(trusted):
+                    rows.append(("Guard", f"{label} Trusted Servers", ", ".join(str(t) for t in trusted if t)))
+        rows = [r for r in rows if r[2] != ""]
+        details.append((_flatten(s.get("name", "")) or _flatten(s.get("id", "")), _detail_rows(rows)))
+    return details
+
+
+def _dhcp_lease_rows(data: Any) -> list[dict[str, Any]]:
+    items = [u for u in (data if isinstance(data, list) else []) if isinstance(u, dict)]
+    items.sort(key=lambda u: (str(u.get("netName", "")).lower(), _ip_sort_key(u.get("ipAddress", ""))))
+    return [
+        {
+            "Network": _flatten(u.get("netName", "")),
+            "IP Address": _flatten(u.get("ipAddress", "")),
+            "MAC Address": _flatten(u.get("macAddress", "")),
+            "Name": _flatten(u.get("name", "")),
+            "Type": _flatten(u.get("showingType", "")) or _profile_code(u.get("type", ""), _DHCP_USER_TYPE_MAP),
+            "Binding": _profile_code(u.get("status", ""), _DHCP_LEASE_BINDING_MAP),
+            "Lease Remaining": _flatten(u.get("leftLeaseTime", "")),
+            "Server": _flatten(u.get("serverName", "")),
         }
-        for r in items
+        for u in items
     ]
 
 
@@ -1592,7 +1825,23 @@ RESOURCES: list[ResourceDefinition] = [
         title="DHCP Reservations",
         fetch_method="get_dhcp_reservations",
         row_formatter=_dhcp_reservation_rows,
-        sort_key="Hostname",
+        sort_key="",  # formatter sorts by network, then IP
+    ),
+    ResourceDefinition(
+        name="dhcp_scopes",
+        title="DHCP Scopes",
+        fetch_method="get_dhcp_scopes",
+        row_formatter=_dhcp_scope_rows,
+        sort_key="Network",
+        needs_context=True,
+        detail_formatter=_dhcp_scope_details,
+    ),
+    ResourceDefinition(
+        name="dhcp_leases",
+        title="DHCP Leases",
+        fetch_method="get_dhcp_leases",
+        row_formatter=_dhcp_lease_rows,
+        sort_key="",  # formatter sorts by network, then IP
     ),
     ResourceDefinition(
         name="port_forwarding",

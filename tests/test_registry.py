@@ -12,7 +12,7 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_twenty_three_resources_defined(self) -> None:
+    def test_all_twenty_five_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
@@ -38,6 +38,8 @@ class TestRegistry:
             "ssl_vpn",
             "eogre_tunnel",
             "ipsec_failover",
+            "dhcp_scopes",
+            "dhcp_leases",
         }
 
     def test_registry_lookup_matches_resources(self) -> None:
@@ -619,6 +621,145 @@ class TestRowFormatters:
         }
         assert rows[1]["Primary Tunnel"] == "BR-1"
         assert rows[1]["Failback"] == "Disabled"
+
+    _DHCP_CONTEXT = {"devices": [
+        {"name": "Astoria Gateway", "mac": "6C-5A-B0-28-3C-77"},
+        {"name": "Core Switch", "mac": "AA-BB-CC-00-11-22"},
+    ]}
+
+    def test_dhcp_scope_rows(self) -> None:
+        from omada.registry import _dhcp_scope_rows
+        rows = _dhcp_scope_rows([
+            {"name": "Client", "vlan": 10, "gatewaySubnet": "192.168.10.1/24",
+             "deviceType": 1, "deviceMac": "6C-5A-B0-28-3C-77", "domain": "home.arpa",
+             "dhcpL2RelayEnable": True,
+             "dhcpSettings": {"enable": True, "dhcpns": "manual", "priDns": "192.168.20.253",
+                              "sndDns": "8.8.8.8", "leasetime": 120, "gateway": "192.168.10.1",
+                              "ipRangePool": [{"ipaddrStart": "192.168.10.50", "ipaddrEnd": "192.168.10.99"},
+                                              {"ipaddrStart": "192.168.10.150", "ipaddrEnd": "192.168.10.199"}]},
+             "poolStatus": [{"startIp": "192.168.10.50", "endIp": "192.168.10.99", "availableIpNum": 7}]},
+            {"name": "Lab", "vlan": 50, "deviceType": 2, "deviceMac": "AA-BB-CC-00-11-22", "mode": 2,
+             "dhcpRelay": {"addr": "10.50.0.1", "serverAddrs": ["10.0.0.5", "10.0.0.6"]}},
+            {"name": "Guest", "deviceType": 1, "dhcpSettings": {"enable": False, "leasetime": 60}},
+            {"name": "Ext", "deviceType": 0},
+            {"name": "Legacy", "dhcpSettings": {"enable": True, "dhcpns": "auto",
+                                                "ipaddrStart": "10.1.1.10", "ipaddrEnd": "10.1.1.20"}},
+        ], self._DHCP_CONTEXT)
+        client, lab, guest, ext, legacy = rows
+        assert client == {
+            "Network": "Client", "VLAN": "10", "Subnet": "192.168.10.1/24",
+            "DHCP Server": "Gateway (Astoria Gateway)",
+            "Pools": "192.168.10.50 – 192.168.10.99 (7 free); 192.168.10.150 – 192.168.10.199",
+            "Lease Time": "120 min", "DNS": "192.168.20.253, 8.8.8.8", "Gateway": "192.168.10.1",
+            "Domain": "home.arpa", "Relay To": "", "L2 Relay (Opt 82)": "Enabled",
+        }
+        assert lab["DHCP Server"] == "Switch DHCP Relay (Core Switch)"
+        assert lab["Relay To"] == "10.0.0.5, 10.0.0.6"
+        assert lab["Pools"] == ""
+        assert guest["DHCP Server"] == "Disabled"
+        assert guest["Lease Time"] == ""  # not serving: settings are not presented as active
+        assert ext["DHCP Server"] == "External"
+        assert legacy["DHCP Server"] == "Gateway"  # no deviceType: inferred from enable
+        assert legacy["Pools"] == "10.1.1.10 – 10.1.1.20"
+        assert legacy["DNS"] == "Auto"
+
+    def test_dhcp_scope_details_gateway_options_and_guard(self) -> None:
+        from omada.registry import _dhcp_scope_details
+        [(title, rows)] = _dhcp_scope_details([{
+            "name": "Voice", "gatewaySubnet": "192.168.60.1/24", "deviceType": 1,
+            "deviceMac": "6C-5A-B0-28-3C-77", "domain": "voice.example",
+            "dhcpSettings": {
+                "enable": True, "dhcpns": "manual", "priDns": "1.1.1.1", "leasetime": 1440,
+                "ipaddrStart": "192.168.60.10", "ipaddrEnd": "192.168.60.200",
+                "option60": "PolycomVVX", "option66": "10.0.0.20", "option138": "10.0.0.2",
+                "dhcpNextServer": "10.0.0.21",
+                "options": [{"code": 150, "name": "TFTP list", "type": 1, "value": "10.0.0.20"},
+                            {"code": 43, "type": 2, "value": "01:04:0a:00:00:02"}],
+            },
+            "dhcpGuard": {"enable": True, "mode": 2, "dhcpSvr1": "192.168.60.1", "dhcpSvr2": ""},
+            "dhcpv6Guard": {"enable": False},
+        }], self._DHCP_CONTEXT)
+        assert title == "Voice"
+        values = {(r["Category"], r["Setting"]): r["Value"] for r in rows}
+        assert values[("Pool", "Range 1")] == "192.168.60.10 – 192.168.60.200"
+        assert values[("Pool", "Lease Time")] == "1440 min"
+        assert values[("DNS / Domain", "DNS Mode")] == "Manual"
+        assert values[("DNS / Domain", "Primary DNS")] == "1.1.1.1"
+        assert values[("DNS / Domain", "Domain Name")] == "voice.example"
+        assert values[("Options", "Default Gateway (Option 3)")] == "Default"
+        assert values[("Options", "Option 60 (Vendor Class)")] == "PolycomVVX"
+        assert values[("Options", "Option 66 (TFTP Server)")] == "10.0.0.20"
+        assert values[("Options", "Option 138 (Controller)")] == "10.0.0.2"
+        assert values[("Options", "Next Server (siaddr)")] == "10.0.0.21"
+        # Gateway option type codes: 1 = IP Address, 2 = Hex Array
+        assert values[("Options", "Option 150 TFTP list")] == "IP Address: 10.0.0.20"
+        assert values[("Options", "Option 43")] == "Hex Array: 01:04:0a:00:00:02"
+        assert values[("Guard", "DHCP Guard")] == "Enabled"
+        assert values[("Guard", "DHCP Guard Mode")] == "Custom"
+        assert values[("Guard", "DHCP Guard Trusted Servers")] == "192.168.60.1"
+        assert values[("Guard", "DHCPv6 Guard")] == "Disabled"
+
+    def test_dhcp_scope_details_switch_server_uses_switch_option_types(self) -> None:
+        from omada.registry import _dhcp_scope_details
+        [(_, rows)] = _dhcp_scope_details([{
+            "name": "Servers", "deviceType": 2, "deviceMac": "AA-BB-CC-00-11-22", "mode": 1,
+            "dhcpServer": {"ip": "10.20.0.1", "netmask": "24", "leasetime": 480,
+                           "range": [{"startIp": "10.20.0.100", "endIp": "10.20.0.150"}],
+                           "priDns": "10.0.0.53", "gateway": "10.20.0.1",
+                           "options": [{"code": 42, "type": 2, "value": "10.0.0.123"}]},
+        }], self._DHCP_CONTEXT)
+        values = {(r["Category"], r["Setting"]): r["Value"] for r in rows}
+        assert values[("Server", "DHCP Server")] == "Switch DHCP Server (Core Switch)"
+        assert values[("Server", "Switch Interface")] == "10.20.0.1/24"
+        assert values[("Pool", "Range 1")] == "10.20.0.100 – 10.20.0.150"
+        assert values[("Pool", "Lease Time")] == "480 min"
+        assert values[("Options", "Default Gateway (Option 3)")] == "10.20.0.1"
+        # Switch option type codes: 2 = IP Address
+        assert values[("Options", "Option 42")] == "IP Address: 10.0.0.123"
+
+    def test_dhcp_scope_details_switch_relay(self) -> None:
+        from omada.registry import _dhcp_scope_details
+        [(_, rows)] = _dhcp_scope_details([{
+            "name": "Lab", "deviceType": 2, "mode": 2, "dhcpL2RelayEnable": False,
+            "dhcpRelay": {"addr": "10.50.0.1", "serverAddrs": ["10.0.0.5"]},
+        }])
+        values = {(r["Category"], r["Setting"]): r["Value"] for r in rows}
+        assert values[("Relay", "Relay Interface")] == "10.50.0.1"
+        assert values[("Relay", "Relay To")] == "10.0.0.5"
+        assert not any(r["Category"] in ("Pool", "Options") for r in rows)
+
+    def test_dhcp_lease_rows_sorted_by_network_then_ip(self) -> None:
+        from omada.registry import _dhcp_lease_rows
+        rows = _dhcp_lease_rows([
+            {"netName": "LAN", "ipAddress": "192.168.2.100", "macAddress": "B", "name": "nas",
+             "type": 1, "showingType": "NAS", "status": 1, "leftLeaseTime": "1h 2m",
+             "serverName": "Astoria Gateway"},
+            {"netName": "LAN", "ipAddress": "192.168.2.20", "macAddress": "A", "name": "pc",
+             "type": 1, "status": 0},
+            {"netName": "IoT", "ipAddress": "192.168.40.9", "macAddress": "C", "type": 0, "status": 0},
+        ])
+        assert [r["IP Address"] for r in rows] == ["192.168.40.9", "192.168.2.20", "192.168.2.100"]
+        assert rows[1]["Type"] == "Client"
+        assert rows[1]["Binding"] == "Dynamic"
+        assert rows[0]["Type"] == "Device"
+        assert rows[2] == {
+            "Network": "LAN", "IP Address": "192.168.2.100", "MAC Address": "B", "Name": "nas",
+            "Type": "NAS", "Binding": "Static", "Lease Remaining": "1h 2m",
+            "Server": "Astoria Gateway",
+        }
+
+    def test_dhcp_reservation_rows_sorted_with_description_and_options(self) -> None:
+        from omada.registry import _dhcp_reservation_rows
+        rows = _dhcp_reservation_rows([
+            {"netName": "LAN", "ip": "192.168.2.250", "mac": "A", "name": "nas", "status": True,
+             "description": "TrueNAS", "options": [{"code": 66, "value": "10.0.0.20"}]},
+            {"netName": "LAN", "ip": "192.168.2.30", "mac": "B", "name": "printer", "status": False},
+            {"netName": "IoT", "ip": "192.168.40.10", "mac": "C", "name": "tv", "status": True},
+        ])
+        assert [r["IP Address"] for r in rows] == ["192.168.40.10", "192.168.2.30", "192.168.2.250"]
+        assert rows[2]["Description"] == "TrueNAS"
+        assert rows[2]["Options"] == "Option 66: 10.0.0.20"
+        assert rows[1]["Status"] == "Disabled"
 
     def test_switch_port_profile_rows(self) -> None:
         from omada.registry import _switch_port_profile_rows

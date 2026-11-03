@@ -384,6 +384,16 @@ def _sort_ports(ports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(ports, key=key)
 
 
+#: LAN-network keys that define the DHCP service for that network.
+_DHCP_SCOPE_KEYS: tuple[str, ...] = (
+    "id", "name", "purpose", "vlan", "vlanType", "vlans", "gatewaySubnet", "domain",
+    "deviceType", "deviceMac", "mode", "dhcpSettings", "dhcpSettingsVO", "dhcpServer",
+    "dhcpRelay", "dhcpL2RelayEnable", "dhcpGuard", "dhcpv6Guard", "dhcpServerNum",
+    "totalIpNum", "existCustomDhcpOption", "existDhcpNextServer",
+    "lanNetworkIpv6Config", "lanNeworkIpv6Config",
+)
+
+
 #: Keys whose string values are credentials; never written to exports.
 _SECRET_KEYS = frozenset({
     "preSharedKey", "presharedKey", "password", "clientPassword", "privateKey",
@@ -1050,3 +1060,45 @@ class OmadaOpenApiClient:
         Endpoint: ``GET /sites/{siteId}/vpn/ipsec_failovers``
         """
         return self._get_paged(f"sites/{site_id}/vpn/ipsec_failovers")
+
+    # ------------------------------------------------------------------
+    # DHCP
+    # ------------------------------------------------------------------
+
+    def get_dhcp_scopes(self, site_id: str) -> list[dict[str, Any]]:
+        """Return the DHCP service definition of every LAN network.
+
+        Extracted from the LAN network list (see :meth:`get_networks`): which
+        device serves DHCP (gateway / switch / external / none), the gateway
+        ``dhcpSettings`` (pools, lease time, DNS, gateway, domain, options),
+        switch ``dhcpServer`` / ``dhcpRelay``, DHCP L2 relay (option 82) and
+        DHCP guarding.  For networks with DHCP enabled, current pool usage
+        from ``GET /sites/{siteId}/networks/{networkId}/dhcp-server-info`` is
+        added as ``poolStatus`` (best-effort).
+        """
+        scopes: list[dict[str, Any]] = []
+        for network in self.get_networks(site_id):
+            if not isinstance(network, dict):
+                continue
+            scope = {key: network[key] for key in _DHCP_SCOPE_KEYS if key in network}
+            settings = scope.get("dhcpSettings") or scope.get("dhcpSettingsVO") or {}
+            serving = (isinstance(settings, dict) and settings.get("enable")) or scope.get("mode") == 1
+            if serving and scope.get("id"):
+                try:
+                    info = self._get(
+                        f"sites/{site_id}/networks/{quote(str(scope['id']), safe='')}/dhcp-server-info",
+                    )
+                    ranges = info.get("ranges") if isinstance(info, dict) else None
+                    if isinstance(ranges, list):
+                        scope["poolStatus"] = ranges
+                except (OmadaAPIError, requests.RequestException) as exc:
+                    logger.debug("DHCP pool status unavailable for %s: %s", scope.get("name"), exc)
+            scopes.append(scope)
+        return scopes
+
+    def get_dhcp_leases(self, site_id: str) -> list[dict[str, Any]]:
+        """Return current DHCP leases across all DHCP servers in the site.
+
+        Endpoint: ``GET /sites/{siteId}/setting/service/dhcp/user-list``
+        """
+        return self._get_paged(f"sites/{site_id}/setting/service/dhcp/user-list")

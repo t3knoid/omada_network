@@ -963,6 +963,51 @@ class TestOpenApiResourceMethods:
             assert openapi_client.get_ipsec_failover("site-001") == groups
         mock.assert_called_once_with("sites/site-001/vpn/ipsec_failovers")
 
+    def test_get_dhcp_scopes_extracts_dhcp_fields_and_pool_status(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        networks = [
+            {"id": "n1", "name": "LAN", "vlan": 1, "gatewaySubnet": "192.168.2.1/24",
+             "deviceType": 1, "deviceMac": "GW", "domain": "lan.example",
+             "dhcpSettings": {"enable": True, "leasetime": 120}, "dhcpL2RelayEnable": False,
+             "igmpSnoopEnable": True, "isolation": False},
+            {"id": "n2", "name": "Relayed", "deviceType": 2, "mode": 2,
+             "dhcpRelay": {"serverAddrs": ["10.0.0.5"]}},
+            {"id": "n3", "name": "Off", "deviceType": 1, "dhcpSettings": {"enable": False}},
+        ]
+        info = {"ranges": [{"startIp": "192.168.2.11", "endIp": "192.168.2.100", "availableIpNum": 42}]}
+        with (
+            patch.object(openapi_client, "get_networks", return_value=networks),
+            patch.object(openapi_client, "_get", return_value=info) as mock_get,
+        ):
+            result = openapi_client.get_dhcp_scopes("site-001")
+
+        # Pool usage only for networks actually serving DHCP
+        mock_get.assert_called_once_with("sites/site-001/networks/n1/dhcp-server-info")
+        assert result[0]["poolStatus"] == info["ranges"]
+        assert result[0]["domain"] == "lan.example"
+        # Non-DHCP network settings are not copied into the scope
+        assert "igmpSnoopEnable" not in result[0] and "isolation" not in result[0]
+        assert result[1]["dhcpRelay"] == {"serverAddrs": ["10.0.0.5"]}
+        assert "poolStatus" not in result[1] and "poolStatus" not in result[2]
+
+    def test_get_dhcp_scopes_tolerates_pool_status_failure(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        networks = [{"id": "n1", "name": "LAN", "dhcpSettings": {"enable": True}}]
+        with (
+            patch.object(openapi_client, "get_networks", return_value=networks),
+            patch.object(openapi_client, "_get", side_effect=OmadaAPIError(-1, "x")),
+        ):
+            result = openapi_client.get_dhcp_scopes("site-001")
+        assert result == [{"id": "n1", "name": "LAN", "dhcpSettings": {"enable": True}}]
+
+    def test_get_dhcp_leases(self, openapi_client: OmadaOpenApiClient) -> None:
+        leases = [{"ipAddress": "192.168.2.50", "macAddress": "AA"}]
+        with patch.object(openapi_client, "_get_paged", return_value=leases) as mock:
+            assert openapi_client.get_dhcp_leases("site-001") == leases
+        mock.assert_called_once_with("sites/site-001/setting/service/dhcp/user-list")
+
     def test_get_dhcp_reservations(self, openapi_client: OmadaOpenApiClient) -> None:
         reservations = [{"netName": "LAN", "ip": "192.168.1.50", "mac": "AA-BB-CC-DD-EE-FF", "name": "printer", "status": True, "serverName": "Gateway"}]
         with patch.object(openapi_client, "_get_paged") as mock:
@@ -1018,6 +1063,8 @@ class TestServiceWithOpenApiClient:
         mock_client.get_ssl_vpn.return_value = {}
         mock_client.get_eogre_tunnel.return_value = {}
         mock_client.get_ipsec_failover.return_value = []
+        mock_client.get_dhcp_scopes.return_value = []
+        mock_client.get_dhcp_leases.return_value = []
 
         service = OmadaService(
             client=mock_client,
