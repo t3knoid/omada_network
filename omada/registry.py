@@ -634,6 +634,100 @@ def _alg_rows(data: Any) -> list[dict[str, Any]]:
     return [{"Setting": setting, "Value": value} for setting, value in rows]
 
 
+_ROUTE_TYPE_MAP: dict[int, str] = {0: "Next Hop", 1: "Interface"}
+
+_STATIC_INTERFACE_TYPE_MAP: dict[int, str] = {
+    0: "WAN", 1: "LAN", 2: "L2TP", 3: "PPTP", 5: "Virtual WAN",
+}
+
+_POLICY_INTERFACE_TYPE_MAP: dict[int, str] = {0: "WAN", 2: "L2TP", 3: "PPTP", 4: "Multiple"}
+
+
+def _static_route_interface(
+    r: dict[str, Any], wan_names: dict[str, str], lookup: dict[str, str],
+) -> str:
+    """Return e.g. ``"WAN: WAN1"`` or ``"LAN: IoT Devices"`` for interface routes."""
+    if r.get("routeType") != 1 and not r.get("interfaceId"):
+        return ""
+    kind = _profile_code(r.get("interfaceType", ""), _STATIC_INTERFACE_TYPE_MAP)
+    iface_id = str(r.get("interfaceId", ""))
+    name = (
+        r.get("interfaceName")
+        or wan_names.get(iface_id)
+        or lookup.get(iface_id)
+        or iface_id
+    )
+    return f"{kind}: {name}" if kind and name else kind or name
+
+
+def _static_route_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    items = data if isinstance(data, list) else []
+    wan_names = _wan_port_names(context)
+    lookup = _build_id_lookup(context)
+    rows = []
+    for r in items:
+        if not isinstance(r, dict):
+            continue
+        is_switch = r.get("routeSource") == "switch"
+        rows.append({
+            "Name": _flatten(r.get("description") if is_switch else r.get("name", "")),
+            "Status": _enabled(r.get("status")),
+            "Device": _flatten(r.get("deviceName", "")) if is_switch else "Gateway",
+            "Destinations": ", ".join(str(d) for d in r.get("destinations") or []),
+            "Route Type": "Next Hop" if is_switch else _profile_code(r.get("routeType", ""), _ROUTE_TYPE_MAP),
+            "Next Hop": _flatten(r.get("nextHopIp", "")),
+            "Interface": "" if is_switch else _static_route_interface(r, wan_names, lookup),
+            "Metric": "" if is_switch else _flatten(r.get("metric", "")),
+            "Distance": _flatten(r.get("distance", "")) if is_switch else "",
+        })
+    return rows
+
+
+def _policy_route_binding(r: dict[str, Any], wan_names: dict[str, str]) -> str:
+    """Describe where a policy route sends traffic (its WAN/VPN binding)."""
+    iface_type = r.get("interfaceType")
+    if iface_type == 4:
+        parts = []
+        if r.get("wanPortIds"):
+            parts.append("WAN: " + _nat_interfaces(r["wanPortIds"], wan_names))
+        if r.get("vpnIds"):
+            parts.append("VPN: " + _nat_interfaces(r["vpnIds"], {}))
+        if r.get("virtualWanIds"):
+            parts.append("Virtual WAN: " + _nat_interfaces(r["virtualWanIds"], {}))
+        return "; ".join(parts)
+    kind = _profile_code(iface_type, _POLICY_INTERFACE_TYPE_MAP) if iface_type is not None else ""
+    iface_id = r.get("interfaceId")
+    if not iface_id:
+        return kind
+    name = wan_names.get(str(iface_id), str(iface_id))
+    return f"{kind}: {name}" if kind else name
+
+
+def _policy_route_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Policy routes in evaluation order (by ``index``)."""
+    items = [r for r in (data if isinstance(data, list) else []) if isinstance(r, dict)]
+    items.sort(key=lambda r: (0, r["index"]) if isinstance(r.get("index"), int) else (1, 0))
+    wan_names = _wan_port_names(context)
+    lookup = _build_id_lookup(context)
+    rows = []
+    for r in items:
+        src_type = _profile_code(r.get("sourceType", ""), _SOURCE_TYPE_MAP)
+        dst_type = _profile_code(r.get("destinationType", ""), _SOURCE_TYPE_MAP)
+        rows.append({
+            "Index": _flatten(r.get("index", "")),
+            "Name": _flatten(r.get("name", "")),
+            "Status": _enabled(r.get("status")),
+            "Protocols": _format_protocols(r.get("protocols", "")),
+            "Source": _resolve_ids(r.get("sourceIds") or [], lookup),
+            "Source Type": src_type,
+            "Destination": _resolve_ids(r.get("destinationIds") or [], lookup),
+            "Destination Type": dst_type,
+            "WAN Binding": _policy_route_binding(r, wan_names),
+            "Backup Interface": "Yes" if r.get("backupInterface") else "No",
+        })
+    return rows
+
+
 # Band bits: 1=2.4GHz, 2=5GHz, 4=6GHz  (7=all, 3=2.4+5, etc.)
 _BAND_MAP: dict[int, str] = {
     1: "2.4 GHz",
@@ -932,6 +1026,22 @@ RESOURCES: list[ResourceDefinition] = [
         fetch_method="get_alg_settings",
         row_formatter=_alg_rows,
         sort_key="",  # keep the logical setting order
+    ),
+    ResourceDefinition(
+        name="static_routes",
+        title="Static Routes",
+        fetch_method="get_static_routes",
+        row_formatter=_static_route_rows,
+        sort_key="Name",
+        needs_context=True,
+    ),
+    ResourceDefinition(
+        name="policy_routes",
+        title="Policy Routes",
+        fetch_method="get_policy_routes",
+        row_formatter=_policy_route_rows,
+        sort_key="",  # formatter keeps evaluation order (index)
+        needs_context=True,
     ),
 ]
 

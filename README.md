@@ -30,6 +30,8 @@ Supports both official Open API authentication modes:
 | Port Forwarding | ✓ | ✓ |
 | One-to-One NAT | ✓ | ✓ |
 | ALG | ✓ | ✓ |
+| Static Routes (gateway & switches) | ✓ | ✓ |
+| Policy Routes | ✓ | ✓ |
 
 ---
 
@@ -518,7 +520,11 @@ docs/
     ├── one_to_one_nat.yaml
     ├── one_to_one_nat.md
     ├── alg.yaml
-    └── alg.md
+    ├── alg.md
+    ├── static_routes.yaml
+    ├── static_routes.md
+    ├── policy_routes.yaml
+    └── policy_routes.md
 ```
 
 ### Example – DHCP Reservations Markdown

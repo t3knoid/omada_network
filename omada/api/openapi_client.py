@@ -846,3 +846,72 @@ class OmadaOpenApiClient:
         """
         result = self._get(f"sites/{site_id}/nat/alg")
         return result if isinstance(result, dict) else {}
+
+    def get_static_routes(self, site_id: str) -> list[dict[str, Any]]:
+        """Return gateway and switch static routes for the site.
+
+        * Gateway: ``GET /sites/{siteId}/routing/static-routings`` (tagged
+          ``routeSource: gateway``).  Interface IDs are resolved to names via
+          ``GET /sites/{siteId}/routing/static-routings/interfaces`` and stored
+          as ``interfaceName``.
+        * Switches: ``GET /sites/{siteId}/switches/{mac}/staticRoutings`` for
+          each switch (tagged ``routeSource: switch`` plus ``deviceName`` /
+          ``deviceMac``).  Switches without L3 routing are skipped quietly.
+        """
+        routes: list[dict[str, Any]] = []
+
+        try:
+            gateway_routes = self._get_paged(f"sites/{site_id}/routing/static-routings")
+        except (OmadaAPIError, requests.RequestException) as exc:
+            logger.warning("Gateway static routes unavailable: %s", exc)
+            gateway_routes = []
+        if gateway_routes:
+            interface_names = self._static_route_interface_names(site_id)
+            for route in gateway_routes:
+                route.setdefault("routeSource", "gateway")
+                name = interface_names.get(str(route.get("interfaceId", "")))
+                if name:
+                    route.setdefault("interfaceName", name)
+            routes.extend(gateway_routes)
+
+        for device in self.get_devices(site_id):
+            if str(device.get("type", device.get("deviceType", ""))).lower() != "switch":
+                continue
+            mac = device.get("mac", device.get("deviceMac", ""))
+            if not mac:
+                continue
+            try:
+                switch_routes = self._get_paged(
+                    f"sites/{site_id}/switches/{quote(str(mac), safe='')}/staticRoutings",
+                )
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.debug("Static routes unavailable for switch %s: %s", mac, exc)
+                continue
+            for route in switch_routes:
+                route["routeSource"] = "switch"
+                route["deviceName"] = device.get("name", route.get("name", ""))
+                route["deviceMac"] = mac
+            routes.extend(switch_routes)
+
+        return routes
+
+    def _static_route_interface_names(self, site_id: str) -> dict[str, str]:
+        """Return static-route interface ID → name; empty if unavailable."""
+        try:
+            result = self._get(f"sites/{site_id}/routing/static-routings/interfaces")
+        except (OmadaAPIError, requests.RequestException) as exc:
+            logger.debug("Static route interface list unavailable: %s", exc)
+            return {}
+        infos = result.get("interfaceInfoList", []) if isinstance(result, dict) else []
+        return {
+            str(i["id"]): str(i.get("name") or i["id"])
+            for i in infos or []
+            if isinstance(i, dict) and i.get("id")
+        }
+
+    def get_policy_routes(self, site_id: str) -> list[dict[str, Any]]:
+        """Return gateway policy routing rules for the site.
+
+        Endpoint: ``GET /sites/{siteId}/routing/policy-routings``
+        """
+        return self._get_paged(f"sites/{site_id}/routing/policy-routings")

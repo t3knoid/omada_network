@@ -27,6 +27,8 @@ def mock_client() -> MagicMock:
     client.get_port_forwarding.return_value = []
     client.get_one_to_one_nat.return_value = []
     client.get_alg_settings.return_value = {}
+    client.get_static_routes.return_value = []
+    client.get_policy_routes.return_value = []
     return client
 
 
@@ -56,6 +58,8 @@ def _empty_data() -> dict:
         "port_forwarding": [],
         "one_to_one_nat": [],
         "alg": {},
+        "static_routes": [],
+        "policy_routes": [],
     }
 
 

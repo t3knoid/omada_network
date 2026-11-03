@@ -191,6 +191,9 @@ Omada Open API client tests.
 | | `test_get_one_to_one_nat` | Fetches One-to-One NAT rules |
 | | `test_get_alg_settings` | Fetches ALG settings |
 | | `test_get_alg_settings_non_dict_result` | Returns `{}` when ALG result is not an object |
+| | `test_get_static_routes_gateway_and_switch` | Combines gateway and switch static routes, resolving interface names |
+| | `test_get_static_routes_tolerates_failures` | Missing gateway/switch routing support does not fail the export |
+| | `test_get_policy_routes` | Fetches policy routing rules |
 | `TestServiceWithOpenApiClient` | `test_service_accepts_injected_client` | Service uses injected client |
 | | `test_service_fetch_all_uses_injected_client` | `fetch_all` calls injected client methods |
 
@@ -202,7 +205,7 @@ Resource registry and `generate_from_yaml` tests.
 
 | Class | Test | Description |
 | --- | --- | --- |
-| `TestRegistry` | `test_all_fourteen_resources_defined` | All 14 resource types are registered |
+| `TestRegistry` | `test_all_sixteen_resources_defined` | All 16 resource types are registered |
 | | `test_registry_lookup_matches_resources` | Registry lookup matches `RESOURCES` list |
 | | `test_all_definitions_are_resource_definition` | All entries are `ResourceDefinition` instances |
 | | `test_all_row_formatters_callable` | All row formatters are callable |
@@ -221,6 +224,9 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_one_to_one_nat_rows` | Formats One-to-One NAT rows |
 | | `test_alg_rows` | Formats ALG settings as Setting / Value rows |
 | | `test_alg_rows_sip_disabled_hides_sip_options` | SIP sub-options are omitted when SIP ALG is off |
+| | `test_static_route_rows` | Formats gateway (next hop / interface) and switch static routes |
+| | `test_static_route_rows_prefers_fetched_interface_name` | Uses the interface name fetched from the API |
+| | `test_policy_route_rows` | Formats policy routes in index order with resolved sources, destinations, and WAN binding |
 | | `test_switch_port_profile_rows` | Formats switch port profile rows |
 | | `test_switch_port_profile_rows_vlan_columns` | Resolves native, untagged, and tagged networks in the profile summary |
 | | `test_switch_port_profile_details_lists_all_properties` | Per-profile detail rows cover every property group, plus unmapped keys |

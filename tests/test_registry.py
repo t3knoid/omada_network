@@ -12,7 +12,7 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_fourteen_resources_defined(self) -> None:
+    def test_all_sixteen_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
@@ -29,6 +29,8 @@ class TestRegistry:
             "port_forwarding",
             "one_to_one_nat",
             "alg",
+            "static_routes",
+            "policy_routes",
         }
 
     def test_registry_lookup_matches_resources(self) -> None:
@@ -291,6 +293,86 @@ class TestRowFormatters:
             {"Setting": "FTP ALG", "Value": "Disabled"},
             {"Setting": "SIP ALG", "Value": "Disabled"},
         ]
+
+    def test_static_route_rows(self) -> None:
+        from omada.registry import _static_route_rows
+        context = {
+            "gateway_settings": {"wanPortsConfig": [{"portId": "1_abc", "portName": "WAN"}]},
+            "networks": [{"id": "net-lab", "name": "Lab"}],
+        }
+        rows = _static_route_rows([
+            {"routeSource": "gateway", "name": "Via ISP", "status": True,
+             "destinations": ["10.10.0.0/16", "10.20.0.0/16"], "routeType": 0,
+             "nextHopIp": "203.0.113.1", "metric": 2},
+            {"routeSource": "gateway", "name": "Out WAN", "status": True,
+             "destinations": ["198.51.100.0/24"], "routeType": 1,
+             "interfaceType": 0, "interfaceId": "1_abc", "nextHopIp": "203.0.113.254",
+             "metric": 0},
+            {"routeSource": "gateway", "name": "To Lab", "status": False,
+             "destinations": ["172.16.0.0/12"], "routeType": 1,
+             "interfaceType": 1, "interfaceId": "net-lab", "metric": 5},
+            {"routeSource": "switch", "deviceName": "Core", "description": "Mgmt",
+             "status": True, "destinations": ["192.168.99.0/24"],
+             "nextHopIp": "192.168.2.1", "distance": 10},
+        ], context)
+        assert rows[0] == {
+            "Name": "Via ISP", "Status": "Enabled", "Device": "Gateway",
+            "Destinations": "10.10.0.0/16, 10.20.0.0/16", "Route Type": "Next Hop",
+            "Next Hop": "203.0.113.1", "Interface": "", "Metric": "2", "Distance": "",
+        }
+        assert rows[1]["Route Type"] == "Interface"
+        assert rows[1]["Interface"] == "WAN: WAN"
+        assert rows[1]["Next Hop"] == "203.0.113.254"
+        assert rows[1]["Metric"] == "0"
+        assert rows[2]["Interface"] == "LAN: Lab"
+        assert rows[2]["Status"] == "Disabled"
+        assert rows[3] == {
+            "Name": "Mgmt", "Status": "Enabled", "Device": "Core",
+            "Destinations": "192.168.99.0/24", "Route Type": "Next Hop",
+            "Next Hop": "192.168.2.1", "Interface": "", "Metric": "", "Distance": "10",
+        }
+
+    def test_static_route_rows_prefers_fetched_interface_name(self) -> None:
+        from omada.registry import _static_route_rows
+        rows = _static_route_rows([
+            {"routeSource": "gateway", "name": "VPN", "routeType": 1, "interfaceType": 2,
+             "interfaceId": "vpn-1", "interfaceName": "Office L2TP"},
+        ])
+        assert rows[0]["Interface"] == "L2TP: Office L2TP"
+
+    def test_policy_route_rows(self) -> None:
+        from omada.registry import _policy_route_rows
+        context = {
+            "gateway_settings": {"wanPortsConfig": [
+                {"portId": "1_abc", "portName": "WAN"},
+                {"portId": "2_def", "portName": "WAN/LAN1"},
+            ]},
+            "networks": [{"id": "net-iot", "name": "IoT"}],
+            "ip_groups": [{"groupId": "grp-1", "name": "Streaming"}],
+        }
+        rows = _policy_route_rows([
+            {"index": 10, "name": "Second", "status": False, "protocols": [256],
+             "interfaceType": 4, "wanPortIds": ["1_abc", "2_def"], "vpnIds": ["vpn-9"],
+             "backupInterface": True, "sourceType": 0, "sourceIds": ["net-iot"],
+             "destinationType": 1, "destinationIds": ["grp-1"]},
+            {"index": 2, "name": "First", "status": True, "protocols": [6, 17],
+             "interfaceType": 0, "interfaceId": "2_def", "backupInterface": False,
+             "sourceType": 0, "sourceIds": ["net-iot"], "destinationType": 0,
+             "destinationIds": []},
+        ], context)
+        # Evaluation order by numeric index, not alphabetical
+        assert [r["Name"] for r in rows] == ["First", "Second"]
+        assert rows[0] == {
+            "Index": "2", "Name": "First", "Status": "Enabled", "Protocols": "TCP, UDP",
+            "Source": "IoT", "Source Type": "Network", "Destination": "",
+            "Destination Type": "Network", "WAN Binding": "WAN: WAN/LAN1",
+            "Backup Interface": "No",
+        }
+        assert rows[1]["Protocols"] == "All"
+        assert rows[1]["Destination"] == "Streaming"
+        assert rows[1]["Destination Type"] == "IP Group"
+        assert rows[1]["WAN Binding"] == "WAN: WAN, WAN/LAN1; VPN: vpn-9"
+        assert rows[1]["Backup Interface"] == "Yes"
 
     def test_switch_port_profile_rows(self) -> None:
         from omada.registry import _switch_port_profile_rows

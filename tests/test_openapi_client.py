@@ -781,6 +781,71 @@ class TestOpenApiResourceMethods:
         with patch.object(openapi_client, "_get", return_value=[]):
             assert openapi_client.get_alg_settings("site-001") == {}
 
+    def test_get_static_routes_gateway_and_switch(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        gateway_routes = [{"name": "To lab", "interfaceId": "net-1", "routeType": 1}]
+        devices = [
+            {"name": "Core", "type": "switch", "mac": "AA-BB"},
+            {"name": "GW", "type": "gateway", "mac": "11-22"},
+        ]
+        switch_routes = [{"description": "Mgmt", "nextHopIp": "10.0.0.1", "distance": 1}]
+
+        def fake_paged(path: str) -> list:
+            return {
+                "sites/site-001/routing/static-routings": gateway_routes,
+                "sites/site-001/devices": devices,
+                "sites/site-001/switches/AA-BB/staticRoutings": switch_routes,
+            }[path]
+
+        interfaces = {"interfaceInfoList": [{"id": "net-1", "name": "Lab LAN", "interfaceType": 1}]}
+        with (
+            patch.object(openapi_client, "_get_paged", side_effect=fake_paged) as mock_paged,
+            patch.object(openapi_client, "_get", return_value=interfaces) as mock_get,
+        ):
+            result = openapi_client.get_static_routes("site-001")
+
+        mock_get.assert_called_once_with("sites/site-001/routing/static-routings/interfaces")
+        # Gateways are not queried for switch static routes
+        assert all("11-22" not in c.args[0] for c in mock_paged.call_args_list)
+        assert result[0]["routeSource"] == "gateway"
+        assert result[0]["interfaceName"] == "Lab LAN"
+        assert result[1]["routeSource"] == "switch"
+        assert result[1]["deviceName"] == "Core"
+        assert result[1]["deviceMac"] == "AA-BB"
+
+    def test_get_static_routes_tolerates_failures(
+        self,
+        openapi_client: OmadaOpenApiClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        devices = [{"name": "Smart", "type": "switch", "mac": "AA"}]
+
+        def fake_paged(path: str) -> list:
+            if path == "sites/site-001/devices":
+                return devices
+            raise OmadaAPIError(-1600, "Unsupported")
+
+        with (
+            patch.object(openapi_client, "_get_paged", side_effect=fake_paged),
+            patch.object(openapi_client, "_get") as mock_get,
+            caplog.at_level(logging.WARNING),
+        ):
+            result = openapi_client.get_static_routes("site-001")
+
+        assert result == []
+        mock_get.assert_not_called()  # no gateway routes -> no interface lookup
+        assert "Gateway static routes unavailable" in caplog.text
+        # L2 switches without static routing are not warned about
+        assert "Static routes unavailable for switch" not in caplog.text
+
+    def test_get_policy_routes(self, openapi_client: OmadaOpenApiClient) -> None:
+        rules = [{"name": "IoT via WAN2", "index": 1}]
+        with patch.object(openapi_client, "_get_paged", return_value=rules) as mock:
+            result = openapi_client.get_policy_routes("site-001")
+        assert result == rules
+        mock.assert_called_once_with("sites/site-001/routing/policy-routings")
+
     def test_get_dhcp_reservations(self, openapi_client: OmadaOpenApiClient) -> None:
         reservations = [{"netName": "LAN", "ip": "192.168.1.50", "mac": "AA-BB-CC-DD-EE-FF", "name": "printer", "status": True, "serverName": "Gateway"}]
         with patch.object(openapi_client, "_get_paged") as mock:
@@ -827,6 +892,8 @@ class TestServiceWithOpenApiClient:
         mock_client.get_port_forwarding.return_value = []
         mock_client.get_one_to_one_nat.return_value = []
         mock_client.get_alg_settings.return_value = {}
+        mock_client.get_static_routes.return_value = []
+        mock_client.get_policy_routes.return_value = []
 
         service = OmadaService(
             client=mock_client,

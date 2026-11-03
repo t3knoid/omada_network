@@ -252,3 +252,47 @@ Gateway NAT settings, exported as three resources. WAN port IDs in the rules
 
 > **API docs:** Documented under the NAT tag —
 > *Get port forwarding list*, *Get One-to-One NAT list*, *Get ALG Info*.
+
+---
+
+### Static Routes
+
+Gateway and switch static routes, combined into one resource. Each route is
+tagged with `routeSource` (`gateway` or `switch`); switch routes also carry
+`deviceName` and `deviceMac`.
+
+| Source | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| Gateway | `GET` | `sites/{siteId}/routing/static-routings` | Paginated. Failure is logged as a warning |
+| Gateway | `GET` | `sites/{siteId}/routing/static-routings/interfaces` | Interface ID → name, stored on each route as `interfaceName` |
+| Switch | `GET` | `sites/{siteId}/switches/{switchMac}/staticRoutings` | Paginated, per switch. Switches without L3 routing are skipped (debug log only) |
+
+| Column | Gateway route | Switch route |
+| --- | --- | --- |
+| Destinations | `destinations` (IP/subnet list) | `destinations` |
+| Route Type | `routeType`: 0 Next Hop, 1 Interface | Next Hop |
+| Next Hop | `nextHopIp` | `nextHopIp` |
+| Interface (WAN binding) | `interfaceType` (0 WAN, 1 LAN, 2 L2TP, 3 PPTP, 5 Virtual WAN) + interface name | — |
+| Metric | `metric` (0–15) | — |
+| Distance | — | `distance` (administrative distance, 1–255) |
+
+> **API docs:** *Get static routing list*, *Get static routing interface list*,
+> *Get grid switch staticRouting*.
+
+---
+
+### Policy Routes
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GET` | `sites/{siteId}/routing/policy-routings` | Paginated |
+
+Rows are listed in evaluation order (`index`). Source and destination IDs are
+resolved to network / IP group / IP-Port group names; protocols use the same
+codes as ACL rules. **WAN Binding** comes from `interfaceType` (0 WAN, 2 L2TP,
+3 PPTP, 4 multiple): a single `interfaceId`, or for type 4 the lists of
+`wanPortIds`, `vpnIds`, and `virtualWanIds`. WAN port IDs are resolved to
+port names from `gateway_settings`. **Backup Interface** shows whether traffic
+fails over to another WAN when the bound one is down.
+
+> **API docs:** *Get policy routing list*.
