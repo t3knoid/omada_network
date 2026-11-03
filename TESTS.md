@@ -52,6 +52,14 @@ python -m pytest tests/ -v
 
 ---
 
+## conftest.py
+
+An autouse fixture, `_block_real_network`, makes any unstubbed HTTP request
+raise `requests.ConnectionError` immediately, so a test that forgets to mock
+an endpoint fails fast instead of waiting for a network timeout.
+
+---
+
 ## test_cli.py
 
 CLI interface tests.
@@ -187,6 +195,11 @@ Omada Open API client tests.
 | | `test_get_gateway_settings_all_fail` | Returns empty dict when all endpoints fail |
 | | `test_get_ssids` | Fetches SSIDs with WLAN group names |
 | | `test_get_ssids_no_wlans` | Returns empty list when WLAN endpoint fails |
+| | `test_post_returns_result_and_raises_on_error` | Read-only POST helper returns `result` and raises on API errors |
+| | `test_get_device_ports_merges_full_config_and_schedules` | Merges full per-port config from `switches/ports/select` and PoE / port schedule membership |
+| | `test_get_device_ports_without_full_config` | Falls back to overview data when the full config is unavailable |
+| | `test_get_lags_uses_full_lag_config` | LAG name, profile, mode, and members filled from the full LAG config |
+| | `test_get_port_schedules` | Fetches PoE and port schedules best-effort |
 | | `test_get_switch_settings` | Collects site jumbo/LLDP and per-switch general config, VLAN interfaces, RPVST (best-effort; GPS dropped) |
 | | `test_get_lags_rebuilds_groups_from_port_overview` | Rebuilds LAG groups per switch from member `lagSetting`, taking the union of member lists |
 | | `test_get_lags_fallback_and_stacks` | Falls back to `lagPort` flags when the overview is unavailable; adds stack LAGs |
@@ -232,7 +245,7 @@ Resource registry and `generate_from_yaml` tests.
 
 | Class | Test | Description |
 | --- | --- | --- |
-| `TestRegistry` | `test_all_thirty_seven_resources_defined` | All 37 resource types are registered |
+| `TestRegistry` | `test_all_thirty_eight_resources_defined` | All 38 resource types are registered |
 | | `test_registry_lookup_matches_resources` | Registry lookup matches `RESOURCES` list |
 | | `test_all_definitions_are_resource_definition` | All entries are `ResourceDefinition` instances |
 | | `test_all_row_formatters_callable` | All row formatters are callable |
@@ -287,6 +300,10 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_device_port_operation_names_lag` | Device-port Operation column names the LAG an aggregating port belongs to |
 | | `test_switch_settings_rows` | Per-switch management VLAN, jumbo frames, STP / loopback coverage, LAG hash, LED |
 | | `test_switch_settings_details` | Site switch settings (jumbo, LLDP, IGMP snooping), per-switch detail, VLAN interfaces, RPVST |
+| | `test_port_overrides_detects_differences` | Port vs profile: PoE, 802.1X, bandwidth/storm control, isolation, voice VLAN, speed/duplex, schedules, VLAN conflict |
+| | `test_port_overrides_matching_port_and_special_cases` | No false positives (set order, PoE "device setting"); mirroring; gateways skipped; unknown profile |
+| | `test_device_port_overrides_column_and_section` | Device-port Overrides column and "Ports differing from their profile" table |
+| | `test_port_schedule_rows` | PoE and port schedules with time range and switch port membership |
 | | `test_switch_port_profile_rows` | Formats switch port profile rows |
 | | `test_switch_port_profile_rows_vlan_columns` | Resolves native, untagged, and tagged networks in the profile summary |
 | | `test_switch_port_profile_details_lists_all_properties` | Per-profile detail rows cover every property group, plus unmapped keys |

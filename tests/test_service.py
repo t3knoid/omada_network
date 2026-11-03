@@ -50,6 +50,7 @@ def mock_client() -> MagicMock:
     client.get_multicast_services.return_value = {}
     client.get_lags.return_value = {}
     client.get_switch_settings.return_value = {}
+    client.get_port_schedules.return_value = {}
     return client
 
 
@@ -102,6 +103,7 @@ def _empty_data() -> dict:
         "multicast_services": {},
         "lags": {},
         "switch_settings": {},
+        "port_schedules": {},
     }
 
 

@@ -315,6 +315,30 @@ Returns the adopted devices for the selected site.
 
 ### Device Ports
 
+> **Per-port overrides.** The port overview only has profile, PoE,
+> speed/duplex, native network and tag mode. Each switch port is therefore
+> merged with its full configuration from `switches/ports/select`, and then
+> compared with its assigned profile (`switch_port_profiles`, matched by ID,
+> then name). Compared settings: PoE, 802.1X, bandwidth control, rate limit,
+> storm control, port isolation, voice network / VLAN / DSCP, loopback
+> detection (port and VLAN based), STP, LLDP-MED, topology notification, EEE,
+> flow control, IGMP / MLD fast leave, DHCP L2 relay, 802.1p priority, trust
+> mode, network tags setting, and native / untagged / tagged networks
+> (compared as sets). Settings with no profile equivalent are always listed
+> as port-level: fixed speed or duplex, mirroring, disabled ports, and PoE /
+> port schedule membership. The controller's `networkConflict` flag is
+> reported too.
+>
+> `device_ports.md` gains an **Overrides** column and a **Ports differing
+> from their profile** table (setting, port value, profile value, and whether
+> the port is in custom-settings / custom-VLAN mode). A profile PoE of "use
+> device setting" isn't counted as a difference. Rate limit and storm
+> control are compared only when both sides use that control type.
+>
+> If the full-config call fails, ports keep their overview data. Only the
+> settings present there (PoE, speed/duplex, native network, tag mode) are
+> compared.
+
 Port configuration for every switch and gateway in the site, exported as one
 record per port. Each record is tagged with `deviceName`, `deviceMac`,
 `deviceType`, and `deviceModel`. Other device types (e.g. access points) are
@@ -325,6 +349,8 @@ skipped.
 | — | `GET` | `sites/{siteId}/devices` | Device list (paginated) |
 | Switch | `GET` | `sites/{siteId}/switches/ports/overview` | One site-wide paginated call: label, connection, type, operation, profile, native network |
 | Switch (fallback) | `GET` | `sites/{siteId}/switches/{switchMac}` | `portList`; used only for switches missing from the overview |
+| Switch (full config) | `POST` | `sites/{siteId}/switches/ports/select` | Read-only query, body `{"selectAll": true, "switchList": []}`. Full per-port config merged into each switch port; best-effort |
+| Switch (schedules) | `GET` | `sites/{siteId}/poe-schedules`, `sites/{siteId}/port-schedules` | Adds `poeSchedules` / `portSchedules` (schedule names) to member ports |
 | Gateway | `GET` | `sites/{siteId}/gateways/{gatewayMac}` | `portConfigs`: link speed, duplex, mirroring, PVID, flow control, enabled |
 | Gateway | `GET` | `sites/{siteId}/gateways/{gatewayMac}/ports` | `osgPortInfos`: name, type, physical type, mode |
 | Gateway | `GET` | `sites/{siteId}/gateways/{gatewayMac}/wan-status` | Link status, speed, duplex — stored as `portStatus` |
@@ -600,4 +626,17 @@ Every part is best-effort.
 **Not available through the Open API:** the switch-wide STP mode
 (STP / RSTP / MSTP / RPVST) and bridge priority, and site loopback control,
 can be set but not read. The Markdown says so instead of leaving a blank.
+
+---
+
+### PoE & Port Schedules (`port_schedules`)
+
+| Part | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| `poeSchedules` | `GET` | `sites/{siteId}/poe-schedules` | Paginated, best-effort. PoE powered only during the time range; `poePortsMap` = switch MAC → ports |
+| `portSchedules` | `GET` | `sites/{siteId}/port-schedules` | Paginated, best-effort. Port enabled only during the time range; `portsMap` = switch MAC → ports |
+
+The Markdown lists each schedule's type, status, time range (by name from
+`time_range_profiles`), and the switch ports it covers. Each member port is
+also tagged in `device_ports` and shows up there as a port-level override.
 

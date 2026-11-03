@@ -2064,6 +2064,208 @@ def _switch_settings_details(
     return sections
 
 
+# --- Per-port overrides (port config vs. assigned profile) ----------------------------
+
+# OswPortVO codes for port-level settings that have no profile equivalent.
+_PORT_CFG_SPEED_MAP: dict[int, str] = {0: "Auto", 1: "10M", 2: "100M", 3: "1000M", 4: "10G"}
+_PORT_CFG_DUPLEX_MAP: dict[int, str] = {0: "Auto", 1: "Half", 2: "Full"}
+_PORT_POE_MAP: dict[int, str] = {0: "Off", 1: "On"}
+
+
+def _ctrl_text(value: Any) -> str:
+    if not isinstance(value, dict) or not value:
+        return ""
+    return ", ".join(f"{k}={_flatten(v)}" for k, v in sorted(value.items()) if v not in (None, ""))
+
+
+def _relay_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return _flatten(value)
+    text = _enabled(value.get("enable"))
+    if value.get("enable") and value.get("format") is not None:
+        text += f" ({_profile_code(value['format'], _RELAY_FORMAT_MAP)})"
+    return text
+
+
+# (key, label, kind): kind is "bool", "net", "nets", "ctrl", "relay", a code map, or None (raw).
+_OVERRIDE_FIELDS: tuple[tuple[str, str, Any], ...] = (
+    ("poe", "PoE", _PORT_POE_MAP),
+    ("dot1x", "802.1X", _DOT1X_MAP),
+    ("bandWidthCtrlType", "Bandwidth Control", _BANDWIDTH_CTRL_MAP),
+    ("bandCtrl", "Rate Limit", "ctrl"),
+    ("stormCtrl", "Storm Control", "ctrl"),
+    ("portIsolationEnable", "Port Isolation", "bool"),
+    ("voiceNetworkEnable", "Voice Network", "bool"),
+    ("voiceNetworkId", "Voice Network VLAN", "net"),
+    ("voiceDscpEnable", "Voice DSCP", "bool"),
+    ("voiceDscp", "Voice DSCP Value", None),
+    ("loopbackDetectEnable", "Loopback Detection", "bool"),
+    ("loopbackDetectVlanBasedEnable", "Loopback Detection (VLAN based)", "bool"),
+    ("spanningTreeEnable", "Spanning Tree", "bool"),
+    ("lldpMedEnable", "LLDP-MED", "bool"),
+    ("topoNotifyEnable", "Topology Change Notification", "bool"),
+    ("eeeEnable", "EEE", "bool"),
+    ("flowControlEnable", "Flow Control", "bool"),
+    ("fastLeaveEnable", "IGMP Snooping Fast Leave", "bool"),
+    ("igmpFastLeaveEnable", "IGMP Fast Leave", "bool"),
+    ("mldFastLeaveEnable", "MLD Fast Leave", "bool"),
+    ("dhcpL2RelaySettings", "DHCP L2 Relay", "relay"),
+    ("dot1pPriority", "802.1p Priority", None),
+    ("trustMode", "Trust Mode", _TRUST_MODE_MAP),
+    ("networkTagsSetting", "Network Tags Setting", _NETWORK_TAGS_MAP),
+    ("nativeNetworkId", "Native Network", "net"),
+    ("untagNetworkIds", "Untagged Networks", "nets"),
+    ("tagNetworkIds", "Tagged Networks", "nets"),
+)
+
+
+def _override_value(value: Any, kind: Any, lookup: dict[str, str]) -> str:
+    if kind == "bool":
+        return _enabled(value)
+    if kind == "net":
+        return lookup.get(str(value), str(value)) if value else "None"
+    if kind == "nets":
+        return _resolve_ids(sorted(value or [], key=lambda i: lookup.get(str(i), str(i))), lookup) or "None"
+    if kind == "ctrl":
+        return _ctrl_text(value)
+    if kind == "relay":
+        return _relay_text(value)
+    if isinstance(kind, dict):
+        return _profile_code(value, kind)
+    return _flatten(value)
+
+
+def _override_equal(port_value: Any, profile_value: Any, kind: Any) -> bool:
+    if kind == "nets":
+        return {str(v) for v in port_value or []} == {str(v) for v in profile_value or []}
+    if kind == "bool":
+        return bool(port_value) == bool(profile_value)
+    if kind in ("ctrl", "relay"):
+        if not isinstance(port_value, dict) or not isinstance(profile_value, dict):
+            return port_value == profile_value
+        common = set(port_value) & set(profile_value)
+        return all(port_value[k] == profile_value[k] for k in common)
+    if kind == "net":
+        return (port_value or None) == (profile_value or None)
+    return port_value == profile_value
+
+
+def _port_profile(p: dict[str, Any], context: dict[str, Any] | None) -> dict[str, Any] | None:
+    profiles = [pr for pr in (context or {}).get("switch_port_profiles") or [] if isinstance(pr, dict)]
+    for pr in profiles:
+        if p.get("profileId") and str(pr.get("id")) == str(p["profileId"]):
+            return pr
+    for pr in profiles:
+        if p.get("profileName") and str(pr.get("name")) == str(p["profileName"]):
+            return pr
+    return None
+
+
+def _port_overrides(p: dict[str, Any], context: dict[str, Any] | None) -> list[tuple[str, str, str]]:
+    """Settings where a switch port differs from its profile, or is set per port.
+
+    Returns ``(setting, port value, profile value)``; port-level settings with
+    no profile equivalent use ``"(port-level)"`` as the profile value.
+    """
+    if p.get("deviceType") not in (None, "switch"):
+        return []
+    lookup = _build_id_lookup(context)
+    diffs: list[tuple[str, str, str]] = []
+    profile = _port_profile(p, context)
+    if profile is not None:
+        port_bw = p.get("bandWidthCtrlType")
+        for key, label, kind in _OVERRIDE_FIELDS:
+            if key not in p or key not in profile:
+                continue
+            if key == "poe" and profile.get("poe") == 2:  # profile: use device setting
+                continue
+            if key == "bandCtrl" and not (port_bw == 1 and profile.get("bandWidthCtrlType") == 1):
+                continue
+            if key == "stormCtrl" and not (port_bw == 2 and profile.get("bandWidthCtrlType") == 2):
+                continue
+            if not _override_equal(p[key], profile[key], kind):
+                diffs.append((label, _override_value(p[key], kind, lookup),
+                              _override_value(profile[key], kind, lookup)))
+    if p.get("linkSpeed") not in (None, 0):
+        diffs.append(("Speed", _profile_code(p["linkSpeed"], _PORT_CFG_SPEED_MAP), "(port-level)"))
+    if p.get("duplex") not in (None, 0):
+        diffs.append(("Duplex", _profile_code(p["duplex"], _PORT_CFG_DUPLEX_MAP), "(port-level)"))
+    if str(p.get("operation", "")).upper() == "MIRRORING":
+        mirrored = ", ".join(str(m) for m in p.get("mirroredPorts") or [])
+        diffs.append(("Operation", f"Mirroring{f' ports {mirrored}' if mirrored else ''}", "(port-level)"))
+    if p.get("disable") is True:
+        diffs.append(("Port", "Disabled", "(port-level)"))
+    for key, label in (("poeSchedules", "PoE Schedule"), ("portSchedules", "Port Schedule")):
+        if p.get(key):
+            diffs.append((label, ", ".join(str(n) for n in p[key]), "(port-level)"))
+    if p.get("networkConflict"):
+        diffs.append(("VLAN Conflict", "Port VLANs differ from the profile", "(reported by controller)"))
+    return diffs
+
+
+def _device_port_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    items = data if isinstance(data, list) else []
+    rows = []
+    for p in items:
+        if not isinstance(p, dict):
+            continue
+        mode = []
+        if p.get("profileOverrideEnable"):
+            mode.append("custom port settings")
+        if p.get("profileVlanOverrideEnable"):
+            mode.append("custom VLANs")
+        for setting, port_value, profile_value in _port_overrides(p, context):
+            rows.append({
+                "Device": _flatten(p.get("deviceName", "")),
+                "Port": _flatten(p.get("port", "")),
+                "Name": _flatten(p.get("name", p.get("portName", ""))),
+                "Profile": _flatten(p.get("profileName", "")),
+                "Override Mode": ", ".join(mode) or "Follow profile",
+                "Setting": setting,
+                "Port Value": port_value,
+                "Profile Value": profile_value,
+            })
+    if not rows:
+        return []
+    return [("Ports differing from their profile", rows)]
+
+
+# --- PoE and port schedules ---------------------------------------------------------------
+
+def _schedule_ports(ports_map: Any, context: dict[str, Any] | None) -> str:
+    names = {
+        str(d.get("mac", "")).upper().replace(":", "-"): _flatten(d.get("name") or d.get("mac"))
+        for d in (context or {}).get("devices") or [] if isinstance(d, dict) and d.get("mac")
+    }
+    parts = []
+    for mac, ports in (ports_map or {}).items() if isinstance(ports_map, dict) else []:
+        label = names.get(str(mac).upper().replace(":", "-"), str(mac))
+        parts.append(f"{label}: {', '.join(str(x) for x in sorted(ports or []))}")
+    return "; ".join(parts)
+
+
+def _port_schedule_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if not isinstance(data, dict):
+        return []
+    time_ranges = _ssid_lookups(context)["schedule"]
+    rows = []
+    for kind, label, map_key in (("poeSchedules", "PoE", "poePortsMap"), ("portSchedules", "Port", "portsMap")):
+        for sched in data.get(kind) or []:
+            if not isinstance(sched, dict):
+                continue
+            tr = sched.get("turnOnTime")
+            rows.append({
+                "Type": label,
+                "Name": _flatten(sched.get("name", "")),
+                "Status": _enabled(sched.get("status")),
+                "On During": time_ranges.get(str(tr), _flatten(tr)) if tr else "",
+                "Ports": _schedule_ports(sched.get(map_key), context),
+            })
+    return rows
+
+
 # Band bits: 1=2.4GHz, 2=5GHz, 4=6GHz  (7=all, 3=2.4+5, etc.)
 _BAND_MAP: dict[int, str] = {
     1: "2.4 GHz",
@@ -3070,6 +3272,7 @@ def _device_port_rows(data: Any, context: dict[str, Any] | None = None) -> list[
             "Operation": _port_operation(p),
             "Profile": _flatten(p.get("profileName", "")),
             "Native Network": _port_native_network(p, by_id, by_vlan),
+            "Overrides": ", ".join(dict.fromkeys(d[0] for d in _port_overrides(p, context))),
         })
     return rows
 
@@ -3109,6 +3312,15 @@ RESOURCES: list[ResourceDefinition] = [
         fetch_method="get_device_ports",
         row_formatter=_device_port_rows,
         sort_key="Device",  # stable sort keeps each device's port order
+        needs_context=True,
+        detail_formatter=_device_port_details,
+    ),
+    ResourceDefinition(
+        name="port_schedules",
+        title="PoE & Port Schedules",
+        fetch_method="get_port_schedules",
+        row_formatter=_port_schedule_rows,
+        sort_key="Name",
         needs_context=True,
     ),
     ResourceDefinition(

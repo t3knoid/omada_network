@@ -12,7 +12,7 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_thirty_seven_resources_defined(self) -> None:
+    def test_all_thirty_eight_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
@@ -52,6 +52,7 @@ class TestRegistry:
             "multicast_services",
             "lags",
             "switch_settings",
+            "port_schedules",
         }
 
     def test_registry_lookup_matches_resources(self) -> None:
@@ -135,6 +136,7 @@ class TestRowFormatters:
             "Label": "NAS", "Connection": "Connected (1000M Full Duplex)",
             "Type": "Copper", "Operation": "Switching", "Profile": "All",
             "Native Network": "IoT Devices",
+            "Overrides": "",  # no profile in context to compare against
         }
         assert rows[1]["Connection"] == "Disconnected"
         assert rows[1]["Type"] == "SFP"
@@ -1275,6 +1277,97 @@ class TestRowFormatters:
         assert sections["Main Switch RPVST instances"] == [
             {"VLAN": "10", "Priority": "4096", "Enabled": "Enabled"},
             {"VLAN": "20", "Priority": "32768", "Enabled": "Disabled"},
+        ]
+
+    _OVERRIDE_CONTEXT = {
+        "networks": [{"id": "n-def", "name": "Default"}, {"id": "n-voice", "name": "Voice"},
+                     {"id": "n-iot", "name": "IoT"}],
+        "switch_port_profiles": [{
+            "id": "p-all", "name": "All", "poe": 1, "dot1x": 2, "portIsolationEnable": False,
+            "voiceNetworkEnable": False, "voiceNetworkId": "", "bandWidthCtrlType": 0,
+            "loopbackDetectEnable": False, "spanningTreeEnable": True, "lldpMedEnable": True,
+            "trustMode": 0, "nativeNetworkId": "n-def", "tagNetworkIds": ["n-iot", "n-voice"],
+            "untagNetworkIds": ["n-def"],
+        }],
+    }
+
+    def test_port_overrides_detects_differences(self) -> None:
+        from omada.registry import _port_overrides
+        port = {
+            "deviceType": "switch", "profileId": "p-all", "profileName": "All",
+            "poe": 0, "dot1x": 0, "portIsolationEnable": True, "voiceNetworkEnable": True,
+            "voiceNetworkId": "n-voice", "bandWidthCtrlType": 2,
+            "stormCtrl": {"broadcastEnable": True, "broadcast": 10},
+            "loopbackDetectEnable": False, "spanningTreeEnable": True, "lldpMedEnable": True,
+            "trustMode": 0, "nativeNetworkId": "n-def",
+            "tagNetworkIds": ["n-voice", "n-iot"],  # same set, different order: not a difference
+            "untagNetworkIds": ["n-def"],
+            "linkSpeed": 2, "duplex": 2, "disable": False,
+            "poeSchedules": ["Night PoE off"], "networkConflict": True,
+        }
+        diffs = {d[0]: (d[1], d[2]) for d in _port_overrides(port, self._OVERRIDE_CONTEXT)}
+        assert diffs == {
+            "PoE": ("Off", "On"),
+            "802.1X": ("Force Unauthorized", "Auto"),
+            "Bandwidth Control": ("Storm Control", "Off"),
+            "Port Isolation": ("Enabled", "Disabled"),
+            "Voice Network": ("Enabled", "Disabled"),
+            "Voice Network VLAN": ("Voice", "None"),
+            "Speed": ("100M", "(port-level)"),
+            "Duplex": ("Full", "(port-level)"),
+            "PoE Schedule": ("Night PoE off", "(port-level)"),
+            "VLAN Conflict": ("Port VLANs differ from the profile", "(reported by controller)"),
+        }
+
+    def test_port_overrides_matching_port_and_special_cases(self) -> None:
+        from omada.registry import _port_overrides
+        ctx = {**self._OVERRIDE_CONTEXT, "switch_port_profiles": [
+            {**self._OVERRIDE_CONTEXT["switch_port_profiles"][0], "poe": 2}]}  # PoE: use device setting
+        same = {"deviceType": "switch", "profileName": "All",  # matched by name
+                "poe": 0, "dot1x": 2, "portIsolationEnable": False, "linkSpeed": 0, "duplex": 0,
+                "tagNetworkIds": ["n-iot", "n-voice"], "operation": "MIRRORING", "mirroredPorts": [5]}
+        assert _port_overrides(same, ctx) == [("Operation", "Mirroring ports 5", "(port-level)")]
+        assert _port_overrides({"deviceType": "gateway", "linkSpeed": 3}, ctx) == []
+        # Unknown profile: only port-level settings are reported
+        assert _port_overrides({"deviceType": "switch", "profileId": "nope", "dot1x": 0, "disable": True}, ctx) == [
+            ("Port", "Disabled", "(port-level)")]
+
+    def test_device_port_overrides_column_and_section(self) -> None:
+        from omada.registry import _device_port_details, _device_port_rows
+        ports = [
+            {"deviceName": "SW", "deviceType": "switch", "port": 3, "name": "Desk", "profileId": "p-all",
+             "profileName": "All", "profileOverrideEnable": True, "profileVlanOverrideEnable": True,
+             "dot1x": 0, "nativeNetworkId": "n-iot"},
+            {"deviceName": "SW", "deviceType": "switch", "port": 4, "profileId": "p-all", "dot1x": 2},
+        ]
+        rows = _device_port_rows(ports, self._OVERRIDE_CONTEXT)
+        assert rows[0]["Overrides"] == "802.1X, Native Network"
+        assert rows[1]["Overrides"] == ""
+        [(title, table)] = _device_port_details(ports, self._OVERRIDE_CONTEXT)
+        assert title == "Ports differing from their profile"
+        assert table == [
+            {"Device": "SW", "Port": "3", "Name": "Desk", "Profile": "All",
+             "Override Mode": "custom port settings, custom VLANs", "Setting": "802.1X",
+             "Port Value": "Force Unauthorized", "Profile Value": "Auto"},
+            {"Device": "SW", "Port": "3", "Name": "Desk", "Profile": "All",
+             "Override Mode": "custom port settings, custom VLANs", "Setting": "Native Network",
+             "Port Value": "IoT", "Profile Value": "Default"},
+        ]
+        assert _device_port_details([ports[1]], self._OVERRIDE_CONTEXT) == []
+
+    def test_port_schedule_rows(self) -> None:
+        from omada.registry import _port_schedule_rows
+        rows = _port_schedule_rows({
+            "poeSchedules": [{"name": "Night PoE off", "status": True, "turnOnTime": "t1",
+                              "poePortsMap": {"54-AF": [4, 3]}}],
+            "portSchedules": [{"name": "Lab", "status": False, "turnOnTime": "t-x",
+                               "portsMap": {"20:23": [1]}}],
+        }, {"devices": [{"name": "Main Switch", "mac": "54-AF"}],
+            "time_range_profiles": [{"profileId": "t1", "name": "Office hours"}]})
+        assert rows == [
+            {"Type": "PoE", "Name": "Night PoE off", "Status": "Enabled", "On During": "Office hours",
+             "Ports": "Main Switch: 3, 4"},
+            {"Type": "Port", "Name": "Lab", "Status": "Disabled", "On During": "t-x", "Ports": "20:23: 1"},
         ]
 
     def test_switch_port_profile_rows(self) -> None:

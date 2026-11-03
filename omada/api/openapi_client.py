@@ -516,6 +516,21 @@ class OmadaOpenApiClient:
             logger.debug("OpenAPI result for %s: list with %d item(s)", path, len(result))
         return result
 
+    def _post(self, path: str, payload: dict[str, Any], *, api_version: str = "v1") -> Any:
+        """Perform a read-only POST query and return the ``result`` payload.
+
+        Only used for Open API endpoints that take their query in the body
+        (e.g. ``switches/ports/select``); nothing is modified.
+        """
+        url = self._api_url(path, api_version=api_version)
+        logger.debug("OPENAPI POST %s", url)
+        resp = self._session.post(url, json=payload, timeout=self.timeout)
+        resp.raise_for_status()
+        body: dict[str, Any] = resp.json()
+        if "errorCode" in body and body["errorCode"] != 0:
+            raise OmadaAPIError(body["errorCode"], body.get("msg", "unknown error"))
+        return body.get("result", body)
+
     def _get_paged(
         self,
         path: str,
@@ -586,6 +601,13 @@ class OmadaOpenApiClient:
           site-wide call: label, connection, type, operation, profile, native
           network).  Falls back to ``portList`` from
           ``GET sites/{siteId}/switches/{mac}`` for any switch missing there.
+          Each switch port is then merged with its full configuration from
+          ``POST sites/{siteId}/switches/ports/select`` (``selectAll``) --
+          the settings a port can override (speed/duplex, PoE, 802.1X,
+          bandwidth / storm control, isolation, voice network, loopback,
+          STP, LLDP-MED, QoS, VLANs) -- and tagged with the PoE / port
+          schedules that include it (``poeSchedules`` / ``portSchedules``).
+          Both lookups are best-effort.
         * Gateways: ``portConfigs`` from ``GET sites/{siteId}/gateways/{mac}``,
           ``osgPortInfos`` from ``GET sites/{siteId}/gateways/{mac}/ports`` and
           link status from ``GET sites/{siteId}/gateways/{mac}/wan-status``,
@@ -600,6 +622,8 @@ class OmadaOpenApiClient:
         }
         devices = self.get_devices(site_id)
         overview = self._get_switch_port_overview(site_id, devices)
+        details = self._get_switch_port_details(site_id, devices)
+        schedules = _schedule_membership(self.get_port_schedules(site_id)) if details or overview else {}
         all_ports: list[dict[str, Any]] = []
         for device in devices:
             device_type = str(device.get("type", device.get("deviceType", ""))).lower()
@@ -619,15 +643,74 @@ class OmadaOpenApiClient:
                     device_type, device_name or "unknown", device_mac, exc,
                 )
                 continue
+            switch_detail = details.get(_normalize_mac(device_mac), {}).get("ports", {})
             for port in ports:
-                all_ports.append({
+                record = {
                     "deviceName": device_name,
                     "deviceMac": device_mac,
                     "deviceType": device_type,
                     "deviceModel": device.get("model", ""),
                     **port,
-                })
+                }
+                if device_type == "switch":
+                    full = switch_detail.get(port.get("port"))
+                    if full:
+                        # Full config wins; overview-only status fields are kept.
+                        record.update({k: v for k, v in full.items() if k not in ("site", "switchId")})
+                    for kind in ("poeSchedules", "portSchedules"):
+                        names = schedules.get(kind, {}).get((_normalize_mac(device_mac), port.get("port")))
+                        if names:
+                            record[kind] = names
+                all_ports.append(record)
         return all_ports
+
+    def _get_switch_port_details(
+        self, site_id: str, devices: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """Full per-port and per-LAG config for every switch, by normalized MAC.
+
+        ``POST /sites/{siteId}/switches/ports/select`` with ``selectAll``
+        (a read-only query).  Returns ``{mac: {"ports": {port: cfg},
+        "lags": {lagId: cfg}}}``; empty when there are no switches or the
+        endpoint is unavailable.
+        """
+        if not any(str(d.get("type", d.get("deviceType", ""))).lower() == "switch" for d in devices):
+            return {}
+        try:
+            result = self._post(f"sites/{site_id}/switches/ports/select",
+                                {"selectAll": True, "switchList": []})
+        except (OmadaAPIError, requests.RequestException) as exc:
+            logger.warning("Full switch port config unavailable; exporting overview only: %s", exc)
+            return {}
+        details: dict[str, dict[str, Any]] = {}
+        for switch in result if isinstance(result, list) else []:
+            if not isinstance(switch, dict) or not switch.get("mac"):
+                continue
+            entry = details.setdefault(_normalize_mac(switch["mac"]), {"ports": {}, "lags": {}})
+            for port in switch.get("ports") or []:
+                if isinstance(port, dict) and port.get("port") is not None:
+                    entry["ports"][port["port"]] = port
+            for lag in switch.get("lags") or []:
+                if isinstance(lag, dict) and lag.get("lagId") is not None:
+                    entry["lags"][lag["lagId"]] = lag
+        return details
+
+    def get_port_schedules(self, site_id: str) -> dict[str, Any]:
+        """Return PoE schedules and port (on/off) schedules.
+
+        ``poeSchedules`` from ``GET /sites/{siteId}/poe-schedules`` and
+        ``portSchedules`` from ``GET /sites/{siteId}/port-schedules`` (both
+        paginated, best-effort).  Each maps switch MACs to port numbers
+        (``poePortsMap`` / ``portsMap``) and references a time range profile
+        (``turnOnTime``).
+        """
+        schedules: dict[str, Any] = {}
+        for key, path in (("poeSchedules", "poe-schedules"), ("portSchedules", "port-schedules")):
+            try:
+                schedules[key] = self._get_paged(f"sites/{site_id}/{path}")
+            except (OmadaAPIError, requests.RequestException) as exc:
+                logger.debug("%s unavailable: %s", path, exc)
+        return schedules
 
     def _get_switch_port_overview(
         self, site_id: str, devices: list[dict[str, Any]],
@@ -1384,6 +1467,7 @@ class OmadaOpenApiClient:
         """
         devices = self.get_devices(site_id)
         overview = self._get_switch_port_overview(site_id, devices)
+        details = self._get_switch_port_details(site_id, devices)
         lags: list[dict[str, Any]] = []
         for device in devices:
             if str(device.get("type", device.get("deviceType", ""))).lower() != "switch":
@@ -1393,7 +1477,17 @@ class OmadaOpenApiClient:
                 continue
             ports = overview.get(_normalize_mac(mac))
             if ports is not None:
-                lags.extend(_lags_from_overview(device, ports))
+                full_lags = details.get(_normalize_mac(mac), {}).get("lags", {})
+                for group in _lags_from_overview(device, ports):
+                    full = full_lags.get(group.get("lagId"))
+                    if full:
+                        for key in ("name", "profileName", "profileId", "lagType", "lagStatus"):
+                            if full.get(key) not in (None, "") and key not in group:
+                                group[key] = full[key]
+                        extra = [p for p in full.get("ports") or [] if p not in group["memberPorts"]]
+                        if extra:
+                            group["memberPorts"] = sorted(group["memberPorts"] + extra)
+                    lags.append(group)
                 continue
             try:
                 port_list = self._get_switch_ports(site_id, str(mac))
@@ -1532,3 +1626,19 @@ def _lags_from_overview(device: dict[str, Any], ports: list[dict[str, Any]]) -> 
         group["members"] = [by_port[m] for m in members if m in by_port]
         records.append(group)
     return sorted(records, key=lambda g: (g["lagId"] is None, g["lagId"] if g["lagId"] is not None else 0))
+
+
+def _schedule_membership(schedules: dict[str, Any]) -> dict[str, dict[tuple[str, Any], list[str]]]:
+    """Map ``(normalized MAC, port)`` to schedule names, per schedule kind."""
+    membership: dict[str, dict[tuple[str, Any], list[str]]] = {}
+    for kind, map_key in (("poeSchedules", "poePortsMap"), ("portSchedules", "portsMap")):
+        by_port: dict[tuple[str, Any], list[str]] = {}
+        for sched in schedules.get(kind) or []:
+            if not isinstance(sched, dict):
+                continue
+            ports_map = sched.get(map_key) if isinstance(sched.get(map_key), dict) else {}
+            for mac, ports in ports_map.items():
+                for port in ports or []:
+                    by_port.setdefault((_normalize_mac(mac), port), []).append(str(sched.get("name", "")))
+        membership[kind] = by_port
+    return membership

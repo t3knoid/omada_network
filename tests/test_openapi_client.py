@@ -546,8 +546,10 @@ class TestOpenApiResourceMethods:
             {"switchMac": "CC-DD", "port": 1, "portName": "Other"},
         ]
         with (
-            patch.object(openapi_client, "_get_paged", side_effect=[devices, overview]) as mock_paged,
+            patch.object(openapi_client, "_get_paged",
+                         side_effect=[devices, overview, [], []]) as mock_paged,
             patch.object(openapi_client, "_get") as mock_get,
+            patch.object(openapi_client, "_post", return_value=[]),
         ):
             result = openapi_client.get_device_ports("site-001")
 
@@ -1090,6 +1092,96 @@ class TestOpenApiResourceMethods:
         assert main["rpvst"] == [{"vlan": 10, "priority": 4096, "enable": True}]
         assert lab == {"deviceName": "Lab Switch", "deviceMac": "20-23", "deviceModel": ""}
 
+    def test_post_returns_result_and_raises_on_error(self, openapi_client: OmadaOpenApiClient) -> None:
+        ok = _mock_response({"errorCode": 0, "result": [{"mac": "AA"}]})
+        with patch.object(openapi_client._session, "post", return_value=ok) as mock_post:
+            assert openapi_client._post("sites/s1/switches/ports/select", {"selectAll": True}) == [{"mac": "AA"}]
+        assert mock_post.call_args.kwargs["json"] == {"selectAll": True}
+        bad = _mock_response({"errorCode": -1600, "msg": "Unsupported"})
+        with patch.object(openapi_client._session, "post", return_value=bad):
+            with pytest.raises(OmadaAPIError):
+                openapi_client._post("sites/s1/switches/ports/select", {})
+
+    def test_get_device_ports_merges_full_config_and_schedules(
+        self, openapi_client: OmadaOpenApiClient,
+    ) -> None:
+        devices = [{"name": "Main Switch", "type": "switch", "mac": "54-AF"}]
+        overview = [{"switchMac": "54-AF", "port": 3, "portName": "Port3", "connectedStatus": 0,
+                     "profileName": "All", "profileOverrideEnable": False}]
+        selected = [{"mac": "54-af", "ports": [
+            {"port": 3, "name": "Port3", "dot1x": 0, "portIsolationEnable": True,
+             "voiceNetworkEnable": True, "voiceNetworkId": "net-voice", "bandWidthCtrlType": 2,
+             "stormCtrl": {"broadcastEnable": True, "broadcast": 10}, "site": "s", "switchId": "x"},
+        ], "lags": []}]
+        schedules = {
+            "sites/site-001/poe-schedules": [{"name": "Night PoE off", "poePortsMap": {"54-AF": [3, 4]}}],
+            "sites/site-001/port-schedules": [{"name": "Lab hours", "portsMap": {"54:af": [3]}}],
+        }
+
+        def fake_paged(path: str) -> list:
+            return {"sites/site-001/devices": devices,
+                    "sites/site-001/switches/ports/overview": overview, **schedules}[path]
+
+        with (
+            patch.object(openapi_client, "_get_paged", side_effect=fake_paged),
+            patch.object(openapi_client, "_post", return_value=selected) as mock_post,
+        ):
+            [port] = openapi_client.get_device_ports("site-001")
+
+        mock_post.assert_called_once_with("sites/site-001/switches/ports/select",
+                                          {"selectAll": True, "switchList": []})
+        assert port["connectedStatus"] == 0            # overview status kept
+        assert port["portIsolationEnable"] is True     # full config merged in
+        assert port["voiceNetworkId"] == "net-voice"
+        assert port["stormCtrl"] == {"broadcastEnable": True, "broadcast": 10}
+        assert "site" not in port and "switchId" not in port
+        assert port["poeSchedules"] == ["Night PoE off"]
+        assert port["portSchedules"] == ["Lab hours"]
+
+    def test_get_device_ports_without_full_config(
+        self, openapi_client: OmadaOpenApiClient, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        devices = [{"name": "Main Switch", "type": "switch", "mac": "54-AF"}]
+        overview = [{"switchMac": "54-AF", "port": 3, "portName": "Port3"}]
+        with (
+            patch.object(openapi_client, "_get_paged", side_effect=[devices, overview, [], []]),
+            patch.object(openapi_client, "_post", side_effect=OmadaAPIError(-1600, "Unsupported")),
+            caplog.at_level(logging.WARNING),
+        ):
+            [port] = openapi_client.get_device_ports("site-001")
+        assert port["portName"] == "Port3"
+        assert "exporting overview only" in caplog.text
+
+    def test_get_lags_uses_full_lag_config(self, openapi_client: OmadaOpenApiClient) -> None:
+        devices = [{"name": "Main Switch", "type": "switch", "mac": "54-AF"}]
+        overview = [{"switchMac": "54-AF", "port": 25, "operation": "AGGREGATING",
+                     "lagSetting": {"lagId": 1, "ports": [25]}}]
+        selected = [{"mac": "54-AF", "ports": [], "lags": [
+            {"lagId": 1, "name": "NAS bond", "profileName": "Infra", "lagType": 2, "ports": [25, 26]}]}]
+
+        def fake_paged(path: str) -> list:
+            return {"sites/site-001/devices": devices, "sites/site-001/switches/ports/overview": overview,
+                    "sites/site-001/stacks": [], "sites/site-001/mlag": []}[path]
+
+        with (
+            patch.object(openapi_client, "_get_paged", side_effect=fake_paged),
+            patch.object(openapi_client, "_post", return_value=selected),
+            patch.object(openapi_client, "_get", return_value={}),
+        ):
+            [lag] = openapi_client.get_lags("site-001")["lags"]
+        assert lag["name"] == "NAS bond" and lag["profileName"] == "Infra"
+        assert lag["lagType"] == 2
+        assert lag["memberPorts"] == [25, 26]
+
+    def test_get_port_schedules(self, openapi_client: OmadaOpenApiClient) -> None:
+        def fake_paged(path: str) -> list:
+            if path.endswith("port-schedules"):
+                raise OmadaAPIError(-1600, "Unsupported")
+            return [{"name": "Night PoE off"}]
+
+        with patch.object(openapi_client, "_get_paged", side_effect=fake_paged):
+            assert openapi_client.get_port_schedules("site-001") == {"poeSchedules": [{"name": "Night PoE off"}]}
+
     def test_get_ssids_no_wlans(self, openapi_client: OmadaOpenApiClient) -> None:
         with patch.object(openapi_client, "_get_paged") as mock:
             mock.side_effect = OmadaAPIError(-1600, "Unsupported")
@@ -1417,6 +1509,7 @@ class TestServiceWithOpenApiClient:
         mock_client.get_multicast_services.return_value = {}
         mock_client.get_lags.return_value = {}
         mock_client.get_switch_settings.return_value = {}
+        mock_client.get_port_schedules.return_value = {}
 
         service = OmadaService(
             client=mock_client,

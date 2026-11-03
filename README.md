@@ -36,6 +36,8 @@ Supports both official Open API authentication modes:
 | Multicast, Bonjour (mDNS) & UPnP | ✓ | ✓ |
 | Link Aggregation (LAGs, M-LAG) | ✓ | ✓ |
 | Switch Settings (management VLAN, jumbo, STP / loop prevention, IGMP snooping) | ✓ | ✓ |
+| Per-port overrides vs. profile (in Device Ports) | ✓ | ✓ |
+| PoE & Port Schedules | ✓ | ✓ |
 | DHCP Reservations | ✓ | ✓ |
 | DHCP Scopes (pools, DNS/domain, options, relay, guard) | ✓ | ✓ |
 | DHCP Leases | ✓ | ✓ |
@@ -87,6 +89,7 @@ omada_network/
 │   ├── registry.py                # Resource registry (single place to add a resource)
 │   └── service.py                 # Orchestration service layer
 ├── tests/
+│   ├── conftest.py               # Blocks real network access during tests
 │   ├── test_cli.py
 │   ├── test_exporters.py
 │   ├── test_logging_config.py
@@ -617,7 +620,9 @@ docs/
     ├── lags.yaml
     ├── lags.md
     ├── switch_settings.yaml
-    └── switch_settings.md
+    ├── switch_settings.md
+    ├── port_schedules.yaml
+    └── port_schedules.md
 ```
 
 ### Example – DHCP Reservations Markdown
