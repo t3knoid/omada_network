@@ -33,6 +33,16 @@ class TestIndexRoute:
         assert "client_id" in html
         assert "client_secret" in html
 
+    def test_index_lists_nested_markdown_paths(self, app_client, tmp_path: Path) -> None:
+        site_dir = tmp_path / "Home Office"
+        site_dir.mkdir()
+        (site_dir / "acl_rules.md").write_text("# ACL Rules\n")
+
+        resp = app_client.get("/")
+
+        assert resp.status_code == 200
+        assert b"Home Office/acl_rules.md" in resp.data
+
     def test_index_contains_csrf_token_field(self, app_client) -> None:
         resp = app_client.get("/")
         html = resp.data.decode()
@@ -81,7 +91,7 @@ class TestRunRoute:
             patch("omada.web.app.OmadaService") as MockService,
             patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
             patch("omada.api.openapi_client.openapi_login", return_value=mock_lr),
-            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
             patch("omada.api.openapi_client.OmadaOpenApiClient"),
         ):
             MockService.return_value.run.return_value = mock_paths
@@ -115,7 +125,7 @@ class TestRunRoute:
             patch("omada.web.app.OmadaService") as MockService,
             patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
             patch("omada.api.openapi_client.openapi_auth_code_login", return_value=mock_lr) as mock_ac,
-            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
             patch("omada.api.openapi_client.OmadaOpenApiClient"),
         ):
             MockService.return_value.run.return_value = mock_paths
@@ -153,7 +163,7 @@ class TestRunRoute:
         with (
             patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
             patch("omada.api.openapi_client.openapi_login", return_value=mock_lr),
-            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
             patch("omada.api.openapi_client.OmadaOpenApiClient"),
             patch("omada.web.app.OmadaService") as MockService,
         ):
@@ -216,6 +226,24 @@ class TestRegenerateRoute:
         assert b"Regenerated" in resp.data
         assert (tmp_path / "acl_rules.md").exists()
 
+    def test_regenerate_uses_resolved_site_directory(self, tmp_path: Path) -> None:
+        import yaml
+
+        site_dir = tmp_path / "Home Office"
+        site_dir.mkdir()
+        (site_dir / "acl_rules.yaml").write_text(
+            yaml.dump([{"name": "r1"}]), encoding="utf-8"
+        )
+        app = create_app(output_dir=tmp_path)
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            with client.session_transaction() as session:
+                session["_resolved_site_name"] = "Home Office"
+            resp = client.post("/regenerate", follow_redirects=True)
+
+        assert resp.status_code == 200
+        assert (site_dir / "acl_rules.md").exists()
+
     def test_regenerate_missing_output_dir_flashes_warning(
         self, tmp_path: Path
     ) -> None:
@@ -249,6 +277,16 @@ class TestDocViewPathTraversal:
         assert resp.status_code == 200
         assert b"ACL Rules" in resp.data
 
+    def test_view_nested_doc(self, app_client, tmp_path: Path) -> None:
+        site_dir = tmp_path / "Home Office"
+        site_dir.mkdir()
+        (site_dir / "acl_rules.md").write_text("# ACL Rules\n")
+
+        resp = app_client.get("/docs/Home%20Office/acl_rules.md")
+
+        assert resp.status_code == 200
+        assert b"ACL Rules" in resp.data
+
     def test_view_missing_doc_redirects(self, app_client) -> None:
         resp = app_client.get("/docs/nonexistent.md", follow_redirects=True)
         assert resp.status_code == 200
@@ -264,6 +302,16 @@ class TestDownloadDoc:
         assert resp.status_code == 200
         assert resp.headers["Content-Disposition"].startswith("attachment")
         assert b"# ACL Rules" in resp.data
+
+    def test_download_nested_doc_uses_basename(self, app_client, tmp_path: Path) -> None:
+        site_dir = tmp_path / "Home Office"
+        site_dir.mkdir()
+        (site_dir / "acl_rules.md").write_text("# ACL Rules\n")
+
+        resp = app_client.get("/download/Home%20Office/acl_rules.md")
+
+        assert resp.status_code == 200
+        assert "filename=acl_rules.md" in resp.headers["Content-Disposition"]
 
     def test_download_missing_file_redirects(self, app_client) -> None:
         resp = app_client.get(

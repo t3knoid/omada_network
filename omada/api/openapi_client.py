@@ -283,15 +283,15 @@ def openapi_auth_code_login(
     )
 
 
-def openapi_discover_site_id(
+def openapi_discover_site(
     base_url: str,
     omadac_id: str,
     session: requests.Session,
     *,
     site_name: str = "",
     timeout: int = 30,
-) -> str:
-    """Discover a site ID via the Open API.
+) -> tuple[str, str]:
+    """Discover a site's ID and display name via the Open API.
 
     Parameters
     ----------
@@ -302,8 +302,8 @@ def openapi_discover_site_id(
 
     Returns
     -------
-    str
-        The site ID.
+    tuple[str, str]
+        The site ID and display name.
     """
     url = (
         f"{base_url.rstrip('/')}/openapi/v1/{omadac_id}/sites"
@@ -336,7 +336,7 @@ def openapi_discover_site_id(
                 logger.info(
                     "Matched site by name: %s (%s)", s.get("name"), site_id,
                 )
-                return site_id
+                return site_id, s.get("name", "")
         available = ", ".join(s.get("name", "?") for s in sites)
         raise RuntimeError(
             f"No site named '{site_name.strip()}' found. "
@@ -348,13 +348,32 @@ def openapi_discover_site_id(
         logger.info(
             "Auto-selected site: %s (%s)", sites[0].get("name"), site_id,
         )
-        return site_id
+        return site_id, sites[0].get("name", "")
 
     lines = ["Multiple sites found. Please select a site by name or id:"]
     for s in sites:
         sid = s.get("siteId", s.get("id", "?"))
         lines.append(f"  • {s.get('name', '?')}  (id: {sid})")
     raise RuntimeError("\n".join(lines))
+
+
+def openapi_discover_site_id(
+    base_url: str,
+    omadac_id: str,
+    session: requests.Session,
+    *,
+    site_name: str = "",
+    timeout: int = 30,
+) -> str:
+    """Discover a site ID via the Open API."""
+    site_id, _ = openapi_discover_site(
+        base_url,
+        omadac_id,
+        session,
+        site_name=site_name,
+        timeout=timeout,
+    )
+    return site_id
 
 
 # ---------------------------------------------------------------------------

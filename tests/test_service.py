@@ -31,6 +31,7 @@ def service(tmp_path: Path, mock_client: MagicMock) -> OmadaService:
         client=mock_client,
         site_id="site001",
         output_dir=tmp_path,
+        site_name="Home Office",
     )
 
 
@@ -85,12 +86,14 @@ class TestOmadaServiceExport:
         paths = service.export_yaml(data)
         for name, path in paths.items():
             assert path.exists(), f"{name}.yaml not created"
+            assert path.parent == tmp_path / "Home Office"
 
     def test_generate_docs_writes_files(self, service: OmadaService, tmp_path: Path) -> None:
         data = _empty_data()
         paths = service.generate_docs(data)
         for name, path in paths.items():
             assert path.exists(), f"{name}.md not created"
+            assert path.parent == tmp_path / "Home Office"
 
 
 class TestOmadaServiceRun:
@@ -112,3 +115,5 @@ class TestOmadaServiceRun:
         assert "docs" in result
         assert len(result["yaml"]) == len(OmadaService.RESOURCE_NAMES)
         assert len(result["docs"]) == len(OmadaService.RESOURCE_NAMES)
+        assert all(path.parent.name == "Home Office" for path in result["docs"].values())
+        assert all(path.parent == service.site_output_dir for path in result["yaml"].values())

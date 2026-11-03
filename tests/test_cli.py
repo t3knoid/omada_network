@@ -37,7 +37,7 @@ class TestFetchCommand:
         with (
             patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
             patch("omada.api.openapi_client.openapi_login", return_value=lr),
-            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
             patch("omada.api.openapi_client.OmadaOpenApiClient") as MockClient,
             patch("omada.service.OmadaService") as MockService,
         ):
@@ -61,7 +61,7 @@ class TestFetchCommand:
         with (
             patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
             patch("omada.api.openapi_client.openapi_auth_code_login", return_value=lr) as mock_ac,
-            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
             patch("omada.api.openapi_client.OmadaOpenApiClient"),
             patch("omada.service.OmadaService") as MockService,
         ):
@@ -93,7 +93,7 @@ class TestFetchCommand:
         with (
             patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
             patch("omada.api.openapi_client.openapi_login", return_value=lr),
-            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
             patch("omada.api.openapi_client.OmadaOpenApiClient"),
             patch("omada.service.OmadaService") as MockService,
         ):
@@ -107,7 +107,7 @@ class TestFetchCommand:
         with (
             patch("omada.api.openapi_client.discover_controller_id") as mock_disc,
             patch("omada.api.openapi_client.openapi_login", return_value=lr),
-            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
             patch("omada.api.openapi_client.OmadaOpenApiClient"),
             patch("omada.service.OmadaService") as MockService,
         ):
@@ -185,6 +185,22 @@ class TestGenerateCommand:
         assert result.exit_code == 0, result.output
         assert (out_dir / "networks.md").exists()
 
+    def test_generate_site_specific_directory(self, runner: CliRunner, tmp_path: Path) -> None:
+        import yaml as _yaml
+
+        site_dir = tmp_path / "My Office"
+        site_dir.mkdir()
+        (site_dir / "networks.yaml").write_text(
+            _yaml.dump([{"name": "LAN"}]), encoding="utf-8"
+        )
+        result = runner.invoke(
+            cli,
+            ["generate", "--input-dir", str(tmp_path), "--site-name", "My Office"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert (site_dir / "networks.md").exists()
+
     def test_generate_empty_dir_exits_nonzero(self, runner: CliRunner, tmp_path: Path) -> None:
         result = runner.invoke(
             cli,
@@ -227,7 +243,7 @@ class TestPasswordPromptBehaviour:
         with (
             patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
             patch("omada.api.openapi_client.openapi_login", return_value=lr) as mock_login,
-            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
             patch("omada.api.openapi_client.OmadaOpenApiClient"),
             patch("omada.service.OmadaService") as MockService,
         ):
@@ -252,7 +268,7 @@ class TestPasswordPromptBehaviour:
         with (
             patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
             patch("omada.api.openapi_client.openapi_auth_code_login", return_value=lr) as mock_ac,
-            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
             patch("omada.api.openapi_client.OmadaOpenApiClient"),
             patch("sys.stdin") as mock_stdin,
             patch("click.prompt", return_value="secret") as mock_prompt,
@@ -307,7 +323,7 @@ class TestPasswordPromptBehaviour:
         with (
             patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
             patch("omada.api.openapi_client.openapi_auth_code_login", return_value=lr) as mock_ac,
-            patch("omada.api.openapi_client.openapi_discover_site_id", return_value="sid"),
+            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
             patch("omada.api.openapi_client.OmadaOpenApiClient"),
             patch("omada.service.OmadaService") as MockService,
         ):

@@ -13,6 +13,7 @@ from omada.api.openapi_client import (
     OpenApiLoginResult,
     discover_controller_id,
     openapi_auth_code_login,
+    openapi_discover_site,
     openapi_discover_site_id,
     openapi_login,
 )
@@ -229,6 +230,23 @@ class TestDiscoverControllerId:
 # ---------------------------------------------------------------------------
 
 class TestOpenApiDiscoverSite:
+    def test_site_discovery_returns_id_and_name(self) -> None:
+        resp = {
+            "errorCode": 0,
+            "result": {
+                "data": [{"name": "Home", "siteId": "site-002"}],
+            },
+        }
+        mock_sess = MagicMock(spec=requests.Session)
+        mock_sess.get.return_value = _mock_response(resp)
+
+        site_id, site_name = openapi_discover_site(
+            "https://192.168.1.1", "ctrl-001", mock_sess,
+        )
+
+        assert site_id == "site-002"
+        assert site_name == "Home"
+
     def test_single_site_auto_select(self) -> None:
         resp = {
             "errorCode": 0,

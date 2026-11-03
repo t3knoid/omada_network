@@ -181,7 +181,7 @@ def _build_client(
         OmadaOpenApiClient,
         discover_controller_id,
         openapi_auth_code_login,
-        openapi_discover_site_id,
+        openapi_discover_site,
         openapi_login,
     )
 
@@ -231,7 +231,7 @@ def _build_client(
             verify_ssl=verify_ssl,
         )
 
-    site_id = openapi_discover_site_id(
+    site_id, resolved_site_name = openapi_discover_site(
         login_result.base_url, controller_id, login_result.session,
         site_name=site_name,
     )
@@ -242,7 +242,7 @@ def _build_client(
         session=login_result.session,
     )
 
-    return api_client, site_id, controller_id, login_result
+    return api_client, site_id, resolved_site_name, controller_id, login_result
 
 
 @cli.command()
@@ -266,7 +266,7 @@ def fetch(
     output_dir: str,
 ) -> None:
     """Fetch network data from the controller and generate documentation."""
-    api_client, site_id, controller_id, login_result = _build_client(
+    api_client, site_id, resolved_site_name, controller_id, login_result = _build_client(
         controller, port, controller_id,
         client_id, client_secret,
         username, password,
@@ -281,6 +281,7 @@ def fetch(
         client=api_client,
         site_id=site_id,
         output_dir=output_dir,
+        site_name=resolved_site_name,
     )
 
     paths = service.run()
@@ -303,16 +304,22 @@ def fetch(
     "--output-dir",
     default=None,
     help=(
-        "Directory where Markdown files will be written.  "
-        "Defaults to --input-dir when not specified."
+        "Base directory where Markdown files will be written. "
+        "Defaults to --input-dir when not specified; --site-name adds a subdirectory."
     ),
 )
-def generate(input_dir: str, output_dir: str | None) -> None:
+@click.option(
+    "--site-name",
+    default=lambda: _env("OMADA_SITE_NAME"),
+    show_default="$OMADA_SITE_NAME",
+    help="Use a subdirectory named for this site under the input and output directories.",
+)
+def generate(input_dir: str, output_dir: str | None, site_name: str | None) -> None:
     """Generate Markdown documentation from existing YAML files.
 
     No API credentials are required — this command reads the ``*.yaml``
-    files already present in INPUT_DIR and (re)generates the corresponding
-    Markdown tables.
+    files already present in INPUT_DIR, or in its site-name subdirectory if
+    one is specified, and (re)generates the corresponding Markdown tables.
 
     Useful for local editing workflows and for regenerating docs from
     version-controlled YAML without connecting to the controller.
@@ -322,13 +329,14 @@ def generate(input_dir: str, output_dir: str | None) -> None:
 
     from omada.service import generate_from_yaml
 
-    paths = generate_from_yaml(input_dir, output_dir)
+    paths = generate_from_yaml(input_dir, output_dir, site_name=site_name)
 
     if not paths:
         click.echo(f"No *.yaml files found in '{input_dir}'.", err=True)
         raise SystemExit(1)
 
-    click.echo(f"\nGenerated {len(paths)} Markdown file(s) in '{output_dir}':")
+    output_location = next(iter(paths.values())).parent
+    click.echo(f"\nGenerated {len(paths)} Markdown file(s) in '{output_location}':")
     for name, path in sorted(paths.items()):
         click.echo(f"  {name}: {path}")
 
@@ -369,7 +377,7 @@ def diagnose(
     Use this command to debug missing or empty settings. It shows exactly
     what the controller returns for each resource endpoint.
     """
-    api_client, site_id, controller_id, login_result = _build_client(
+    api_client, site_id, _resolved_site_name, controller_id, login_result = _build_client(
         controller, port, controller_id,
         client_id, client_secret,
         username, password,

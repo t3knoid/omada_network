@@ -202,7 +202,7 @@ def create_app(
                 OmadaOpenApiClient,
                 discover_controller_id,
                 openapi_auth_code_login,
-                openapi_discover_site_id,
+                openapi_discover_site,
                 openapi_login,
             )
 
@@ -230,7 +230,7 @@ def create_app(
                     verify_ssl=verify_ssl,
                 )
 
-            site_id = openapi_discover_site_id(
+            site_id, resolved_site_name = openapi_discover_site(
                 login_result.base_url, controller_id, login_result.session,
                 site_name=site_name,
             )
@@ -246,13 +246,15 @@ def create_app(
                 client=api_client,
                 site_id=site_id,
                 output_dir=output_dir_,
+                site_name=resolved_site_name,
             )
             paths = service.run()
+            session["_resolved_site_name"] = resolved_site_name
             doc_count = len(paths.get("docs", {}))
             yaml_count = len(paths.get("yaml", {}))
             flash(
                 f"Success! Generated {doc_count} Markdown doc(s) and "
-                f"{yaml_count} YAML file(s) in '{output_dir_}'.",
+                f"{yaml_count} YAML file(s) in '{service.site_output_dir}'.",
                 "success",
             )
         except (KeyboardInterrupt, SystemExit):
@@ -278,10 +280,16 @@ def create_app(
             return redirect(url_for("index"))
 
         try:
-            paths = generate_from_yaml(output_dir_, output_dir_)
+            site_name = session.get("_resolved_site_name") or session.get(
+                "_form_values", {},
+            ).get("site_name", "")
+            paths = generate_from_yaml(
+                output_dir_, output_dir_, site_name=site_name,
+            )
             if paths:
+                output_location = next(iter(paths.values())).parent
                 flash(
-                    f"Regenerated {len(paths)} Markdown doc(s) from YAML in '{output_dir_}'.",
+                    f"Regenerated {len(paths)} Markdown doc(s) from YAML in '{output_location}'.",
                     "success",
                 )
             else:
@@ -336,7 +344,7 @@ def create_app(
         return send_file(
             doc_path,
             as_attachment=True,
-            download_name=filename,
+            download_name=Path(filename).name,
         )
 
     @app.route("/download", methods=["POST"])
@@ -369,7 +377,7 @@ def create_app(
             return send_file(
                 doc_path,
                 as_attachment=True,
-                download_name=fname,
+                download_name=Path(fname).name,
             )
 
         # Multiple files: create a ZIP archive in memory
@@ -389,7 +397,10 @@ def create_app(
 
 
 def _list_docs(output_dir: Path) -> list[str]:
-    """Return a sorted list of generated Markdown file names."""
+    """Return sorted, output-relative paths of generated Markdown files."""
     if not output_dir.is_dir():
         return []
-    return sorted(p.name for p in output_dir.glob("*.md"))
+    return sorted(
+        path.relative_to(output_dir).as_posix()
+        for path in output_dir.rglob("*.md")
+    )

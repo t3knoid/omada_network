@@ -379,6 +379,9 @@ python cli.py generate --input-dir docs
 # Write Markdown to a different directory
 python cli.py generate --input-dir docs --output-dir site/docs
 
+# Regenerate from and write to docs/My Office/
+python cli.py generate --input-dir docs --site-name "My Office"
+
 # Via environment variable
 OMADA_OUTPUT_DIR=docs python cli.py generate
 ```
@@ -473,7 +476,8 @@ Repeat for the Bootstrap JS bundle and the GitHub Markdown CSS file.
 
 ## Output
 
-After a successful run the `docs/` directory contains:
+After a successful run, YAML source files and Markdown documentation are
+written under `docs/<site_name>/`:
 
 > **Note:** The `docs/` directory is excluded from version control via
 > `.gitignore`.  Generated output is local to each environment — run
@@ -481,24 +485,25 @@ After a successful run the `docs/` directory contains:
 
 ```text
 docs/
-├── acl_rules.yaml          ← Source of truth (YAML)
-├── acl_rules.md            ← Markdown documentation table
-├── ip_groups.yaml
-├── ip_groups.md
-├── port_groups.yaml
-├── port_groups.md
-├── networks.yaml
-├── networks.md
-├── vlans.yaml
-├── vlans.md
-├── switch_port_profiles.yaml
-├── switch_port_profiles.md
-├── gateway_settings.yaml
-├── gateway_settings.md
-├── ssids.yaml
-├── ssids.md
-├── dhcp_reservations.yaml
-└── dhcp_reservations.md
+└── My Office/
+  ├── acl_rules.yaml      ← Source of truth (YAML)
+  ├── acl_rules.md         ← Markdown documentation table
+  ├── ip_groups.yaml
+  ├── ip_groups.md
+  ├── port_groups.yaml
+  ├── port_groups.md
+  ├── networks.yaml
+  ├── networks.md
+  ├── vlans.yaml
+  ├── vlans.md
+  ├── switch_port_profiles.yaml
+  ├── switch_port_profiles.md
+  ├── gateway_settings.yaml
+  ├── gateway_settings.md
+  ├── ssids.yaml
+  ├── ssids.md
+  ├── dhcp_reservations.yaml
+  └── dhcp_reservations.md
 ```
 
 ### Example – DHCP Reservations Markdown

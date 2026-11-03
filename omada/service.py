@@ -12,6 +12,7 @@ No API credentials are required.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -33,8 +34,12 @@ class OmadaService:
         An authenticated :class:`~omada.api.openapi_client.OmadaOpenApiClient`.
     site_id:
         Site ID to query.
+    site_name:
+        Display name used for the Markdown output subdirectory. Defaults to
+        *site_id* when no name is available.
     output_dir:
-        Directory where YAML and Markdown files will be written.
+        Base directory where site-specific YAML and Markdown files will be
+        written.
     """
 
     #: Ordered tuple of all resource names, derived from the registry.
@@ -45,12 +50,17 @@ class OmadaService:
         client: Any,
         site_id: str,
         output_dir: str | Path = "docs",
+        site_name: str | None = None,
     ) -> None:
         self.site_id = site_id
         self.output_dir = Path(output_dir)
+        self.site_name = site_name or site_id
+        self.site_output_dir = self.output_dir / _safe_site_directory(
+            self.site_name, site_id,
+        )
         self._client = client
-        self._yaml = YamlExporter(self.output_dir)
-        self._md = MarkdownGenerator(self.output_dir)
+        self._yaml = YamlExporter(self.site_output_dir)
+        self._md = MarkdownGenerator(self.site_output_dir)
 
     # ------------------------------------------------------------------
     # Data fetching
@@ -113,8 +123,25 @@ class OmadaService:
         data = self.fetch_all()
         yaml_paths = self.export_yaml(data)
         doc_paths = self.generate_docs(data)
-        logger.info("Done. YAML in %s, docs in %s", self.output_dir, self.output_dir)
+        logger.info(
+            "Done. YAML in %s, docs in %s",
+            self.site_output_dir,
+            self._md.output_dir,
+        )
         return {"yaml": yaml_paths, "docs": doc_paths}
+
+
+def _safe_site_directory(site_name: str, fallback: str) -> str:
+    """Return a filesystem-safe directory name derived from a site name."""
+    directory = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", site_name).strip(" .")
+    if not directory or directory in {".", ".."}:
+        directory = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", fallback).strip(" .")
+    reserved_names = {"CON", "PRN", "AUX", "NUL"}
+    reserved_names.update(f"COM{i}" for i in range(1, 10))
+    reserved_names.update(f"LPT{i}" for i in range(1, 10))
+    if directory.upper() in reserved_names:
+        directory = f"_{directory}"
+    return directory or "site"
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +151,7 @@ class OmadaService:
 def generate_from_yaml(
     input_dir: str | Path,
     output_dir: str | Path,
+    site_name: str | None = None,
 ) -> dict[str, Path]:
     """Generate Markdown documentation by reading ``*.yaml`` files.
 
@@ -134,6 +162,9 @@ def generate_from_yaml(
     output_dir:
         Directory where Markdown files will be written (may be the same as
         *input_dir*).
+    site_name:
+        Optional site name used to select the YAML input subdirectory and place
+        generated Markdown in the corresponding output subdirectory.
 
     Returns
     -------
@@ -142,6 +173,12 @@ def generate_from_yaml(
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
+    if site_name:
+        site_dir = _safe_site_directory(site_name, "site")
+        site_input_dir = input_dir / site_dir
+        if site_input_dir.is_dir():
+            input_dir = site_input_dir
+        output_dir = output_dir / site_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     md_gen = MarkdownGenerator(output_dir)
