@@ -1229,6 +1229,17 @@ class TestOpenApiResourceMethods:
             assert openapi_client.get_uplinks("site-001") == {"switches": [], "stacks": []}
         mock_get.assert_not_called()
 
+    def test_get_switch_port_sheets_lists_switches(self, openapi_client: OmadaOpenApiClient) -> None:
+        devices = [
+            {"name": "Main Switch", "type": "switch", "mac": "54-AF", "model": "TL-SG2428P"},
+            {"name": "GW", "type": "gateway", "mac": "6C-5A"},
+            {"name": "No MAC", "type": "switch"},
+        ]
+        with patch.object(openapi_client, "_get_paged", return_value=devices) as mock:
+            result = openapi_client.get_switch_port_sheets("site-001")
+        mock.assert_called_once_with("sites/site-001/devices")
+        assert result == [{"deviceName": "Main Switch", "deviceMac": "54-AF", "deviceModel": "TL-SG2428P"}]
+
     def test_get_ssids_no_wlans(self, openapi_client: OmadaOpenApiClient) -> None:
         with patch.object(openapi_client, "_get_paged") as mock:
             mock.side_effect = OmadaAPIError(-1600, "Unsupported")
@@ -1558,6 +1569,7 @@ class TestServiceWithOpenApiClient:
         mock_client.get_switch_settings.return_value = {}
         mock_client.get_port_schedules.return_value = {}
         mock_client.get_uplinks.return_value = {}
+        mock_client.get_switch_port_sheets.return_value = []
 
         service = OmadaService(
             client=mock_client,

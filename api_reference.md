@@ -97,6 +97,7 @@ The official API documentation is available at:
 | `lags` | Link Aggregation (LAGs) | [Link Aggregation](#link-aggregation) |
 | `switch_settings` | Switch Settings | [Switch Settings](#switch-settings) |
 | `uplinks` | Uplinks & Stacks | [Uplinks & Stacks](#uplinks--stacks) |
+| `switch_port_sheets` | Switch Port Sheets | [Switch Port Sheets](#switch-port-sheets) |
 | `networks` | Networks | [Networks](#networks) |
 | `vlans` | VLANs | [VLANs](#vlans) |
 | `dhcp_scopes` | DHCP Scopes | [DHCP Scopes](#dhcp-scopes) |
@@ -327,6 +328,39 @@ port whose role depends on the hardware: uplink ports / LAGs, downlink ports,
 stack port groups, and LAG members (from `lags`). On a different switch model
 those port numbers may not exist or may mean something else (e.g. SFP vs.
 copper), so each one needs a deliberate mapping.
+
+
+### Switch Port Sheets
+
+**Resource:** `switch_port_sheets`
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GET` | `sites/{siteId}/devices` | Switch list only; the sheet is built from other resources |
+
+A per-switch record of every port, meant for manually reconfiguring a
+replacement switch, especially one with fewer ports. Built at Markdown time
+from `device_ports` (full port config), `switch_port_profiles`, `uplinks`, and
+`networks`, so it also regenerates from YAML.
+
+**Summary** (one row per switch): ports, connected, ports with custom
+settings, **Must Carry Over**, and how many of those are SFP / Combo or
+powering PoE devices.
+
+**Per switch** (one row per port):
+
+| Column | Source |
+| --- | --- |
+| Name, Label, Type | Port name, label, Copper / Combo / SFP |
+| Connection | `connectedStatus`; speed only when `portStatus` reports link up |
+| Connected To | Uplink / downlink device and peer port, from `uplinks` (LAG links included) |
+| Profile, Native VLAN, Untagged, Tagged | Port values, falling back to the profile's; tags show `All` / `None (blocked)` for allow-all / block-all |
+| PoE, Speed / Duplex, LAG | Port configuration; PoE `n/a` on non-PoE ports |
+| Set Manually (differs from profile) | The per-port overrides (see [Device Ports](#device-ports)) |
+| Carry Over | Why the port matters: connected, uplink, downlink, LAG, custom settings, named / labelled. Otherwise `No (unused, default)` |
+
+The sheet reflects the last export. For an exact record, run `fetch` just
+before replacing a switch.
 
 ---
 

@@ -198,6 +198,7 @@ Omada Open API client tests.
 | | `test_get_gateway_settings_all_fail` | Returns empty dict when all endpoints fail |
 | | `test_get_ssids` | Fetches SSIDs with WLAN group names |
 | | `test_get_ssids_no_wlans` | Returns empty list when WLAN endpoint fails |
+| | `test_get_switch_port_sheets_lists_switches` | Lists the switches that get a port sheet |
 | | `test_get_uplinks_switch_detail_fallback_and_stacks` | Uplinks/downlinks from switch-detail, port-select fallback, stack members |
 | | `test_get_uplinks_no_switches` | No switch lookups when the site has no switches |
 | | `test_post_returns_result_and_raises_on_error` | Read-only POST helper returns `result` and raises on API errors |
@@ -259,7 +260,7 @@ Resource registry and `generate_from_yaml` tests.
 
 | Class | Test | Description |
 | --- | --- | --- |
-| `TestRegistry` | `test_all_thirty_nine_resources_defined` | All 39 resource types are registered |
+| `TestRegistry` | `test_all_forty_resources_defined` | All 40 resource types are registered |
 | | `test_registry_lookup_matches_resources` | Registry lookup matches `RESOURCES` list |
 | | `test_all_definitions_are_resource_definition` | All entries are `ResourceDefinition` instances |
 | | `test_all_row_formatters_callable` | All row formatters are callable |
@@ -320,6 +321,9 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_port_schedule_rows` | PoE and port schedules with time range and switch port membership |
 | | `test_uplink_rows` | Per-switch uplink port / LAG, upstream device and port, speed, downlink count, stack unit |
 | | `test_uplink_details_and_remapping_checklist` | Downlink tables, stack members, and the model-specific port remapping checklist |
+| | `test_switch_port_sheet_rows_summarize_carry_over` | Per-switch summary: ports, connected, custom settings, ports to carry over (SFP / PoE) |
+| | `test_switch_port_sheet_details_per_port` | Per-port sheet: VLANs, PoE, speed, LAG, connected device, manual settings, carry-over reason |
+| | `test_port_connection_ignores_placeholder_port_status` | No negotiated speed shown when `portStatus` reports link down |
 | | `test_switch_port_profile_rows` | Formats switch port profile rows |
 | | `test_switch_port_profile_rows_vlan_columns` | Resolves native, untagged, and tagged networks in the profile summary |
 | | `test_switch_port_profile_details_lists_all_properties` | Per-profile detail rows cover every property group, plus unmapped keys |

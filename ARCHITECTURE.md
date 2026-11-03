@@ -5,9 +5,9 @@
 The application connects to TP-Link Omada controllers via the official
 **Omada Open API (Northbound API)** to extract network configuration data,
 persist it as YAML (source of truth), and generate Markdown documentation
-tables. It currently covers **39 resource types** (see
-[api_reference.md](api_reference.md#resource-index)) and is read-only towards
-the controller.
+tables. The resources it covers are listed in the
+[API reference resource index](api_reference.md#resource-index). It is
+read-only towards the controller.
 
 **Design principles:**
 
@@ -194,7 +194,9 @@ using the other resources as context. Examples: networks, IP / port groups
 limit / schedule profiles (`_ssid_lookups()`); devices. Derived views are
 computed here as well, such as per-port overrides
 (`_port_overrides()` compares each port with its profile), switch
-loop-prevention coverage, and the uplink remapping checklist.
+loop-prevention coverage, the uplink remapping checklist, and the per-switch
+port sheets (`switch_port_sheets`). The sheets are built entirely from other
+resources, so they also regenerate from YAML.
 
 ---
 

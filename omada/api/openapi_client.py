@@ -1670,6 +1670,24 @@ class OmadaOpenApiClient:
             })
         return {"switches": switches, "stacks": stacks}
 
+    # ------------------------------------------------------------------
+    # Switch port sheets (built from other resources)
+    # ------------------------------------------------------------------
+
+    def get_switch_port_sheets(self, site_id: str) -> list[dict[str, Any]]:
+        """Return the switches that get a port sheet.
+
+        The sheets themselves are built at Markdown time from other
+        resources (``device_ports``, ``switch_port_profiles``, ``lags``,
+        ``uplinks``, ``networks``), so they can be regenerated from YAML.
+        Endpoint: ``GET /sites/{siteId}/devices`` (switches only).
+        """
+        return [
+            {"deviceName": d.get("name", ""), "deviceMac": d.get("mac", ""), "deviceModel": d.get("model", "")}
+            for d in self.get_devices(site_id)
+            if str(d.get("type", d.get("deviceType", ""))).lower() == "switch" and d.get("mac")
+        ]
+
 
 def _lags_from_overview(device: dict[str, Any], ports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Rebuild LAG groups for one switch from its port-overview records."""

@@ -2409,6 +2409,163 @@ def _uplink_details(
     return sections
 
 
+# --- Switch port sheets (manual reconfiguration of a replacement switch) --------------
+
+def _is_default_port_name(name: Any, port: Any) -> bool:
+    text = str(name or "").strip().lower().replace(" ", "")
+    return text in ("", f"port{port}")
+
+
+def _sheet_links(mac: Any, context: dict[str, Any] | None) -> dict[Any, str]:
+    """Local port -> what it connects to, from the ``uplinks`` resource."""
+    uplinks = (context or {}).get("uplinks")
+    links: dict[Any, str] = {}
+    switches = uplinks.get("switches") or [] if isinstance(uplinks, dict) else []
+    for sw in switches:
+        if not isinstance(sw, dict) or str(sw.get("deviceMac", "")).upper() != str(mac).upper():
+            continue
+        up = sw.get("uplink") if isinstance(sw.get("uplink"), dict) else {}
+        if up:
+            peer = _peer_port(up)
+            target = f"Uplink → {_link_device(up)}" + (f" port {peer}" if peer else "")
+            if up.get("port") is not None:
+                links[up["port"]] = target
+            if up.get("lagId") is not None:
+                links[f"lag{up['lagId']}"] = target
+        for d in sw.get("downlinks") or []:
+            if isinstance(d, dict):
+                peer = _peer_port(d)
+                target = f"{_link_device(d)}" + (f" port {peer}" if peer else "")
+                if d.get("port") is not None:
+                    links[d["port"]] = target
+                if d.get("lagId") is not None:
+                    links[f"lag{d['lagId']}"] = target
+    return links
+
+
+def _sheet_port_row(p: dict[str, Any], context: dict[str, Any] | None,
+                    links: dict[Any, str]) -> dict[str, Any]:
+    by_id, by_vlan = _network_lookups(context)
+    lookup = _build_id_lookup(context)
+    profile = _port_profile(p, context) or {}
+
+    def effective(key: str) -> Any:
+        return p[key] if key in p else profile.get(key)
+
+    lag = p.get("lagSetting") if isinstance(p.get("lagSetting"), dict) else {}
+    lag_id = lag.get("lagId")
+    lag_text = f"LAG {lag_id}" if lag_id is not None else (
+        "LAG (group unknown)" if str(p.get("operation", "")).upper() == "AGGREGATING" or p.get("lagPort") else "")
+    connected_to = links.get(p.get("port")) or (links.get(f"lag{lag_id}") if lag_id is not None else "") or ""
+
+    native = effective("nativeNetworkId")
+    tags_setting = effective("networkTagsSetting")
+    if tags_setting == 0:
+        tagged = "All"
+    elif tags_setting == 1:
+        tagged = "None (blocked)"
+    else:
+        tagged = _override_value(effective("tagNetworkIds") or [], "nets", lookup)
+    untagged = _override_value(effective("untagNetworkIds") or [], "nets", lookup)
+
+    poe = p.get("poe")
+    if p.get("supportPoe") is False or p.get("poeDisplayType") == -1:
+        poe_text = "n/a"
+    else:
+        poe_text = _profile_code(poe, _PORT_POE_MAP) if poe is not None else ""
+
+    speed = p.get("linkSpeed")
+    duplex = p.get("duplex")
+    speed_text = "Auto" if speed in (None, 0) else _profile_code(speed, _PORT_CFG_SPEED_MAP)
+    if duplex not in (None, 0):
+        speed_text += f" / {_profile_code(duplex, _PORT_CFG_DUPLEX_MAP)}"
+
+    overrides = _port_overrides(p, context)
+    custom = "; ".join(f"{setting}: {value}" for setting, value, _ in overrides)
+
+    connection = _port_connection({"deviceType": "switch", **p})
+    name = _flatten(p.get("name") or p.get("portName") or "")
+    label = _flatten(p.get("tagName", ""))
+    reasons = []
+    if connection.startswith("Connected"):
+        reasons.append("connected")
+    if connected_to.startswith("Uplink"):
+        reasons.append("uplink")
+    elif connected_to:
+        reasons.append("downlink")
+    if lag_text:
+        reasons.append(lag_text)
+    if overrides:
+        reasons.append("custom settings")
+    if not _is_default_port_name(name, p.get("port")) or label:
+        reasons.append("named")
+    return {
+        "Port": _flatten(p.get("port", "")),
+        "Name": name,
+        "Label": label,
+        "Type": _map_code(p.get("type", ""), _SWITCH_PORT_TYPE_MAP) if p.get("type") is not None else "",
+        "Connection": connection,
+        "Connected To": connected_to,
+        "Profile": _flatten(p.get("profileName", "")),
+        "Native VLAN": (by_id.get(str(native), str(native)) if native else ""),
+        "Untagged": untagged if untagged != "None" else "",
+        "Tagged": tagged if tagged != "None" else "",
+        "PoE": poe_text,
+        "Speed / Duplex": speed_text,
+        "LAG": lag_text,
+        "Set Manually (differs from profile)": custom,
+        "Carry Over": ", ".join(reasons) if reasons else "No (unused, default)",
+    }
+
+
+def _switch_sheet_ports(sw: dict[str, Any], context: dict[str, Any] | None) -> list[dict[str, Any]]:
+    mac = str(sw.get("deviceMac", "")).upper()
+    ports = [
+        p for p in (context or {}).get("device_ports") or []
+        if isinstance(p, dict) and str(p.get("deviceMac", "")).upper() == mac
+        and p.get("deviceType") in (None, "switch")
+    ]
+    return sorted(ports, key=lambda p: (0, p["port"]) if isinstance(p.get("port"), int) else (1, str(p.get("port"))))
+
+
+def _switch_port_sheet_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """One summary row per switch: how many ports must move to the new switch."""
+    rows = []
+    for sw in data if isinstance(data, list) else []:
+        if not isinstance(sw, dict):
+            continue
+        links = _sheet_links(sw.get("deviceMac", ""), context)
+        sheet = [_sheet_port_row(p, context, links) for p in _switch_sheet_ports(sw, context)]
+        carry = [r for r in sheet if not r["Carry Over"].startswith("No")]
+        sfp = sum(1 for r in carry if r["Type"] in ("SFP", "Combo"))
+        poe = sum(1 for r in carry if r["PoE"] == "On" and r["Connection"].startswith("Connected"))
+        rows.append({
+            "Switch": _flatten(sw.get("deviceName", "")),
+            "Model": _flatten(sw.get("deviceModel", "")),
+            "Ports": str(len(sheet)),
+            "Connected": str(sum(1 for r in sheet if r["Connection"].startswith("Connected"))),
+            "Custom Settings": str(sum(1 for r in sheet if r["Set Manually (differs from profile)"])),
+            "Must Carry Over": str(len(carry)),
+            "…of which SFP / Combo": str(sfp),
+            "…of which powering PoE": str(poe),
+        })
+    return rows
+
+
+def _switch_port_sheet_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    sections = []
+    for sw in data if isinstance(data, list) else []:
+        if not isinstance(sw, dict):
+            continue
+        links = _sheet_links(sw.get("deviceMac", ""), context)
+        rows = [_sheet_port_row(p, context, links) for p in _switch_sheet_ports(sw, context)]
+        title = f"{_flatten(sw.get('deviceName', ''))} ({_flatten(sw.get('deviceModel', ''))})"
+        sections.append((title, rows))
+    return sections
+
+
 # Band bits: 1=2.4GHz, 2=5GHz, 4=6GHz  (7=all, 3=2.4+5, etc.)
 _BAND_MAP: dict[int, str] = {
     1: "2.4 GHz",
@@ -3348,7 +3505,10 @@ def _port_connection(p: dict[str, Any]) -> str:
             return "Disabled"
         else:
             return ""
-    detail = _link_detail(status) if state == "Connected" else ""
+    # Only trust the negotiated speed when portStatus itself reports link up:
+    # some controllers return a placeholder block (linkStatus 0, linkSpeed 1)
+    # for ports that connectedStatus reports as connected.
+    detail = _link_detail(status) if state == "Connected" and status.get("linkStatus") == 1 else ""
     return f"{state} ({detail})" if detail else state
 
 
@@ -3474,6 +3634,15 @@ RESOURCES: list[ResourceDefinition] = [
         sort_key="Switch",
         needs_context=True,
         detail_formatter=_uplink_details,
+    ),
+    ResourceDefinition(
+        name="switch_port_sheets",
+        title="Switch Port Sheets",
+        fetch_method="get_switch_port_sheets",
+        row_formatter=_switch_port_sheet_rows,
+        sort_key="Switch",
+        needs_context=True,
+        detail_formatter=_switch_port_sheet_details,
     ),
     ResourceDefinition(
         name="acl_rules",

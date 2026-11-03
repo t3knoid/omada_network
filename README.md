@@ -19,7 +19,7 @@ supports both official Open API authentication modes:
 
 ## Features
 
-The tool exports **39 resource types**. Each one is written to `docs/<site>/<resource>.yaml`, which holds the raw API data and is the source of truth, and `docs/<site>/<resource>.md`, which holds formatted tables (a summary table, and for many resources one detail section per item). IDs are resolved to names and numeric codes to labels. Credentials are redacted unless you ask for them (see [Secrets](#secrets)). For the API endpoints behind each resource, see the [API reference](api_reference.md#resource-index).
+The tool exports **40 resource types**. Each one is written to `docs/<site>/<resource>.yaml`, which holds the raw API data and is the source of truth, and `docs/<site>/<resource>.md`, which holds formatted tables (a summary table, and for many resources one detail section per item). IDs are resolved to names and numeric codes to labels. Credentials are redacted unless you ask for them (see [Secrets](#secrets)). For the API endpoints behind each resource, see the [API reference](api_reference.md#resource-index).
 
 ### Devices & switching
 
@@ -32,6 +32,7 @@ The tool exports **39 resource types**. Each one is written to `docs/<site>/<res
 | Link Aggregation (LAGs) | `lags` | LAG groups: static vs. LACP, member ports, link state, M-LAG groups, hash algorithm |
 | Switch Settings | `switch_settings` | Management VLAN, jumbo frames, STP / loopback-detection coverage, IGMP snooping, LLDP, VLAN interfaces, RPVST |
 | Uplinks & Stacks | `uplinks` | Uplink and downlink ports, stack members and stack ports, and a **remapping checklist** for model changes |
+| Switch Port Sheets | `switch_port_sheets` | One printable sheet per switch: every port's VLANs, PoE, speed, LAG, connected device, settings to apply by hand, and whether it must carry over to a replacement |
 
 ### LAN & addressing
 
@@ -641,6 +642,29 @@ docs/
 `generate` (or **Regenerate** in the web UI) rebuilds every `.md` from the
 `.yaml` files, so you can edit or version the YAML and regenerate the docs
 offline.
+
+### Replacing a switch
+
+Omada can transfer settings to a replacement device. When the new switch has
+**fewer ports** (or a different port layout), use `switch_port_sheets.md` to
+reconfigure it by hand:
+
+1. Run a fresh `fetch` just before the swap, so the sheets reflect the
+   current configuration. Keep that output.
+2. In the summary table, check **Must Carry Over** (and its SFP / PoE counts)
+   against the new switch's ports.
+3. In the old switch's section, each port shows its profile, native /
+   untagged / tagged VLANs, PoE, speed, LAG, what's connected to it, and the
+   settings that **differ from the profile** (which a profile alone won't
+   restore). **Carry Over** says why a port matters (connected, uplink,
+   downlink, LAG member, custom settings, named); `No (unused, default)`
+   ports can be dropped.
+4. Assign the same profiles on the new switch, apply the listed manual
+   settings, rebuild LAGs (see `lags.md`), and re-patch the uplink and
+   downlinks (see the remapping checklist in `uplinks.md`).
+
+Site-wide settings (networks, profiles, ACLs, DHCP, …) stay in the controller
+and aren't affected by the swap.
 
 ### Example – DHCP Reservations Markdown
 

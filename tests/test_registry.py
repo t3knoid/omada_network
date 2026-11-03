@@ -12,7 +12,7 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_thirty_nine_resources_defined(self) -> None:
+    def test_all_forty_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
@@ -54,6 +54,7 @@ class TestRegistry:
             "switch_settings",
             "port_schedules",
             "uplinks",
+            "switch_port_sheets",
         }
 
     def test_registry_lookup_matches_resources(self) -> None:
@@ -1430,6 +1431,82 @@ class TestRowFormatters:
             ("Stack Unit", "7, 8", "Stack port group Group 1"),
             ("Core-1", "Group 1: 7, 8", "Stack Core unit 1 stacking"),
         ]
+
+    _SHEET_CONTEXT = {
+        "networks": [{"id": "n-def", "name": "Default"}, {"id": "n-iot", "name": "IoT"},
+                     {"id": "n-voice", "name": "Voice"}],
+        "switch_port_profiles": [{
+            "id": "p-all", "name": "All", "poe": 2, "dot1x": 2, "portIsolationEnable": False,
+            "nativeNetworkId": "n-def", "networkTagsSetting": 2,
+            "tagNetworkIds": ["n-iot", "n-voice"], "untagNetworkIds": ["n-def"],
+        }],
+        "device_ports": [
+            # Uplink, copper, custom 802.1X
+            {"deviceMac": "54-AF", "deviceType": "switch", "port": 1, "name": "Port1", "type": 1,
+             "profileId": "p-all", "profileName": "All", "connectedStatus": 0, "poe": 1,
+             "supportPoe": True, "dot1x": 0},
+            # Unused default port
+            {"deviceMac": "54-AF", "deviceType": "switch", "port": 2, "name": "Port2", "type": 1,
+             "profileId": "p-all", "profileName": "All", "connectedStatus": 1, "poe": 0, "supportPoe": True},
+            # Named SFP port in a LAG, fixed speed, no PoE, tags allow-all
+            {"deviceMac": "54-AF", "deviceType": "switch", "port": 25, "name": "NAS bond A", "type": 3,
+             "tagName": "NAS", "profileId": "p-all", "profileName": "All", "connectedStatus": 0,
+             "supportPoe": False, "linkSpeed": 3, "duplex": 2, "networkTagsSetting": 0,
+             "lagSetting": {"lagId": 1, "ports": [25, 26]},
+             "portStatus": {"linkStatus": 1, "linkSpeed": 3, "duplex": 2}},
+            # Another switch's port: not on this sheet
+            {"deviceMac": "OTHER", "deviceType": "switch", "port": 1, "profileId": "p-all"},
+        ],
+        "uplinks": {"switches": [{
+            "deviceMac": "54-af",
+            "uplink": {"port": 1, "name": "Gateway", "type": "gateway", "linkPeerPortInfo": {"port": 2}},
+            "downlinks": [{"lagId": 1, "name": "NAS", "type": "switch"}],
+        }]},
+    }
+    _SHEET_DATA = [{"deviceName": "Main Switch", "deviceMac": "54-AF", "deviceModel": "TL-SG2428P"}]
+
+    def test_switch_port_sheet_rows_summarize_carry_over(self) -> None:
+        from omada.registry import _switch_port_sheet_rows
+        assert _switch_port_sheet_rows(self._SHEET_DATA, self._SHEET_CONTEXT) == [{
+            "Switch": "Main Switch", "Model": "TL-SG2428P", "Ports": "3", "Connected": "2",
+            "Custom Settings": "2", "Must Carry Over": "2",
+            "…of which SFP / Combo": "1", "…of which powering PoE": "1",
+        }]
+        assert _switch_port_sheet_rows([]) == []
+
+    def test_switch_port_sheet_details_per_port(self) -> None:
+        from omada.registry import _switch_port_sheet_details
+        [(title, rows)] = _switch_port_sheet_details(self._SHEET_DATA, self._SHEET_CONTEXT)
+        assert title == "Main Switch (TL-SG2428P)"
+        uplink, unused, sfp = rows
+        assert uplink == {
+            "Port": "1", "Name": "Port1", "Label": "", "Type": "Copper", "Connection": "Connected",
+            "Connected To": "Uplink → Gateway (gateway) port 2", "Profile": "All",
+            "Native VLAN": "Default", "Untagged": "Default", "Tagged": "IoT, Voice", "PoE": "On",
+            "Speed / Duplex": "Auto", "LAG": "",
+            "Set Manually (differs from profile)": "802.1X: Force Unauthorized",
+            "Carry Over": "connected, uplink, custom settings",
+        }
+        assert unused["Carry Over"] == "No (unused, default)"
+        assert unused["PoE"] == "Off"
+        assert sfp["Type"] == "SFP"
+        assert sfp["Label"] == "NAS"
+        assert sfp["Connection"] == "Connected (1000M Full Duplex)"
+        assert sfp["Connected To"] == "NAS (switch)"  # via the LAG downlink
+        assert sfp["Tagged"] == "All"
+        assert sfp["PoE"] == "n/a"
+        assert sfp["Speed / Duplex"] == "1000M / Full"
+        assert sfp["LAG"] == "LAG 1"
+        assert sfp["Set Manually (differs from profile)"] == (
+            "Network Tags Setting: Allow All; Speed: 1000M; Duplex: Full")
+        assert sfp["Carry Over"] == "connected, downlink, LAG 1, custom settings, named"
+
+    def test_port_connection_ignores_placeholder_port_status(self) -> None:
+        """connectedStatus says connected but portStatus reports link down / 10M: don't show a speed."""
+        from omada.registry import _port_connection
+        port = {"deviceType": "switch", "connectedStatus": 0,
+                "portStatus": {"linkStatus": 0, "linkSpeed": 1, "duplex": 2}}
+        assert _port_connection(port) == "Connected"
 
     def test_switch_port_profile_rows(self) -> None:
         from omada.registry import _switch_port_profile_rows
