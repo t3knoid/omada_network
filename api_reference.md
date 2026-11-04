@@ -845,7 +845,11 @@ configured on the controller.
 
 Per-AP settings that don't follow an AP to a new model. For every AP
 (`type: ap`), each part is a `GET sites/{siteId}/aps/{apMac}/<path>`, kept
-when available. A model that doesn't support a feature just has no entry.
+when available. A part that can't be read (the model lacks the feature, or the
+call failed) is not dropped silently: it is listed in the record's
+`unavailableParts` as `{part, path, reason}`, where `reason` is
+`API error <code>` or `Request failed (<exception type>)`, and one warning
+per AP is logged naming the missing endpoints.
 Radios come from [`ap_radios`](#ap-radio-settings) and SSID overrides from
 [`ssids`](#ssids) at Markdown time.
 
@@ -868,7 +872,8 @@ Radios come from [`ap_radios`](#ap-radio-settings) and SSID overrides from
 | `bridge` | `bridge` | P2P bridge SSID (password redacted), DIP switch |
 
 **Summary** (one row per AP): bands, IP setting, management VLAN, uplink, LAN
-ports (and how many carry over), SSID overrides, settings to carry over.
+ports (and how many carry over), SSID overrides, settings to carry over, and
+**Not Exported** (the number of parts that couldn't be read; blank when none).
 
 **Per AP:** a Category / Setting / Value table. **Carry Over** is `Yes` for
 values set on this AP by hand: fixed channel or Tx power, static IP or

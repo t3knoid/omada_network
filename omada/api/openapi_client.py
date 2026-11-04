@@ -1792,17 +1792,36 @@ class OmadaOpenApiClient:
                 "deviceMac": mac,
                 "deviceModel": device.get("model", ""),
             }
+            unavailable: list[dict[str, str]] = []
             for key, path, paged in _AP_SHEET_PARTS:
                 try:
                     value = self._get_paged(f"{base}/{path}") if paged else self._get(f"{base}/{path}")
                 except (OmadaAPIError, requests.RequestException) as exc:
                     logger.debug("AP %s (%s): %s unavailable: %s", device.get("name", ""), mac, path, exc)
+                    unavailable.append({"part": key, "path": path, "reason": _ap_part_failure(exc)})
                     continue
                 value = _strip_ap_counters(key, value)
                 if value not in (None, {}, []):
                     record[key] = value
+            if unavailable:
+                # Recorded in the export so a sheet never looks complete when
+                # it isn't; the model may lack the feature, or the call failed.
+                record["unavailableParts"] = unavailable
+                logger.warning(
+                    "AP %s (%s): %d of %d setting parts could not be read (%s); "
+                    "see 'Settings not exported' in ap_sheets.md",
+                    device.get("name", ""), mac, len(unavailable), len(_AP_SHEET_PARTS),
+                    ", ".join(u["path"] for u in unavailable),
+                )
             records.append(self._redact(record))
         return records
+
+
+def _ap_part_failure(exc: Exception) -> str:
+    """Short, value-free reason an AP part could not be read."""
+    if isinstance(exc, OmadaAPIError):
+        return f"API error {exc.error_code}"
+    return f"Request failed ({type(exc).__name__})"
 
 
 # (key, path under /aps/{apMac}, paginated) for :meth:`get_ap_sheets`.

@@ -1250,7 +1250,9 @@ class TestOpenApiResourceMethods:
             result = openapi_client.get_gateway_port_sheets("site-001")
         assert result == [{"deviceName": "GW", "deviceMac": "6C-5A", "deviceModel": "ER605 v1.0"}]
 
-    def test_get_ap_sheets_collects_parts_and_drops_counters(self, openapi_client: OmadaOpenApiClient) -> None:
+    def test_get_ap_sheets_collects_parts_and_drops_counters(
+        self, openapi_client: OmadaOpenApiClient, caplog: pytest.LogCaptureFixture,
+    ) -> None:
         devices = [
             {"name": "Office AP", "type": "ap", "mac": "34-60", "model": "EAP615-Wall"},
             {"name": "GW", "type": "gateway", "mac": "6C-5A"},
@@ -1272,6 +1274,8 @@ class TestOpenApiResourceMethods:
         def fake_get(path: str) -> object:
             if path in gets:
                 return gets[path]
+            if path == f"{base}/lldp":
+                raise requests.ConnectionError("connection reset")
             raise OmadaAPIError(-1600, "Unsupported")
 
         def fake_paged(path: str) -> list:
@@ -1282,13 +1286,24 @@ class TestOpenApiResourceMethods:
         with (
             patch.object(openapi_client, "_get", side_effect=fake_get),
             patch.object(openapi_client, "_get_paged", side_effect=fake_paged),
+            caplog.at_level(logging.WARNING, logger="omada.api.openapi_client"),
         ):
             result = openapi_client.get_ap_sheets("site-001")
         assert len(result) == 1
         ap = result[0]
         assert ap["deviceName"] == "Office AP" and ap["deviceModel"] == "EAP615-Wall"
         assert set(ap) == {"deviceName", "deviceMac", "deviceModel", "ipSetting", "managementVlan",
-                           "managementWlan", "wiredUplink", "wiredDownlinks", "lanPorts", "bridge"}
+                           "managementWlan", "wiredUplink", "wiredDownlinks", "lanPorts", "bridge",
+                           "unavailableParts"}
+        # Parts that couldn't be read are recorded, not silently dropped.
+        missing = {u["part"]: u for u in ap["unavailableParts"]}
+        assert set(missing) == {"general", "uplinkConfig", "portVlans", "trunk", "loadBalance",
+                                "lldp", "powerSaving", "qos"}
+        assert missing["trunk"] == {"part": "trunk", "path": "trunk-setting", "reason": "API error -1600"}
+        assert missing["lldp"]["reason"] == "Request failed (ConnectionError)"
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1  # one summary per AP, not one per part
+        assert "Office AP" in warnings[0].getMessage() and "8 of 15" in warnings[0].getMessage()
         assert ap["wiredUplink"] == {"name": "Main Switch", "uplinkPort": "23"}
         assert ap["wiredDownlinks"] == [{"port": "ETH2", "deviceName": "Printer"}]
         assert ap["lanPorts"] == [{"port": 2, "lanPort": "ETH2"}]

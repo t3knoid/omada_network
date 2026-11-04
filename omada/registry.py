@@ -2958,9 +2958,43 @@ _MGMT_SSID_SECURITY_MAP: dict[int, str] = {0: "None", 2: "WPA-Enterprise", 3: "W
 _AP_BAND_KEYS: tuple[tuple[str, str], ...] = (("2g", "2.4 GHz"), ("5g", "5 GHz"), ("5g2", "5 GHz-2"), ("6g", "6 GHz"))
 
 
+_AP_PART_LABELS: dict[str, str] = {
+    "general": "General (LED, name)",
+    "ipSetting": "IP setting",
+    "managementVlan": "Management VLAN",
+    "managementWlan": "Management SSID",
+    "uplinkConfig": "Uplink port selection",
+    "wiredUplink": "Wired uplink",
+    "wiredDownlinks": "Wired downlinks",
+    "lanPorts": "LAN ports",
+    "portVlans": "Port VLANs",
+    "trunk": "Link aggregation (trunk)",
+    "loadBalance": "Load balancing",
+    "lldp": "LLDP",
+    "powerSaving": "Power saving",
+    "qos": "QoS (U-APSD)",
+    "bridge": "Point-to-point bridge",
+}
+
+
 def _ap_part(ap: dict[str, Any], key: str) -> dict[str, Any]:
     value = ap.get(key)
     return value if isinstance(value, dict) else {}
+
+
+def _ap_unavailable_rows(ap: dict[str, Any]) -> list[dict[str, Any]]:
+    """Setting parts the controller didn't return for this AP."""
+    rows = []
+    for u in ap.get("unavailableParts") or []:
+        if isinstance(u, dict):
+            part = str(u.get("part", ""))
+            rows.append({
+                "Setting Part": _AP_PART_LABELS.get(part, part),
+                "Endpoint": f"`{_flatten(u.get('path', ''))}`",
+                "Reason": _flatten(u.get("reason", "")),
+                "What To Do": "Check this on the old AP in the controller UI before the swap",
+            })
+    return rows
 
 
 def _ap_radios(ap: dict[str, Any], context: dict[str, Any] | None) -> dict[str, Any]:
@@ -3275,6 +3309,7 @@ def _ap_sheet_rows(data: Any, context: dict[str, Any] | None = None) -> list[dic
                           " to carry over)") if lan_ports else "",
             "SSID Overrides": str(sum(1 for c, *_ in settings if c == "SSID override")),
             "Settings to Carry Over": str(sum(1 for *_, carry in settings if carry)),
+            "Not Exported": str(len(_ap_unavailable_rows(ap))) if ap.get("unavailableParts") else "",
         })
     return rows
 
@@ -3299,6 +3334,11 @@ def _ap_sheet_details(
         vlans = _ap_vlan_rows(ap)
         if vlans:
             sections.append((f"{title} port VLANs (effective)", vlans))
+        missing = _ap_unavailable_rows(ap)
+        if missing:
+            # The model may not have the feature, or the call failed: either
+            # way this sheet is incomplete for these parts.
+            sections.append((f"{title} settings not exported (sheet incomplete)", missing))
     return sections
 
 

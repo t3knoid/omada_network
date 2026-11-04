@@ -1882,6 +1882,7 @@ class TestRowFormatters:
             "IP": "Static 192.168.2.15/255.255.255.0, gateway 192.168.2.1",
             "Management VLAN": "Mgmt", "Uplink": "Main Switch port 23, 1000 Mbps",
             "LAN Ports": "2 (1 to carry over)", "SSID Overrides": "1", "Settings to Carry Over": "7",
+            "Not Exported": "",
         }]
         assert _ap_sheet_rows([]) == []
 
@@ -1920,6 +1921,23 @@ class TestRowFormatters:
         rows = {r["Setting"]: (r["Value"], r["Carry Over"]) for r in dict(_ap_sheet_details([ap]))["AP (EAP620)"]}
         assert rows["IP address"] == ("DHCP, reserved 192.168.2.20", "Yes")
         assert rows["Management SSID"] == ("Enabled: mgmt, WPA-Personal, key configured", "Yes")
+
+
+    def test_ap_sheet_flags_settings_not_exported(self) -> None:
+        from omada.registry import _ap_sheet_details, _ap_sheet_rows
+        ap = {"deviceName": "AP", "deviceModel": "EAP620",
+              "ipSetting": {"mode": "DHCP"},
+              "unavailableParts": [
+                  {"part": "lanPorts", "path": "ports", "reason": "API error -1600"},
+                  {"part": "bridge", "path": "bridge", "reason": "Request failed (ReadTimeout)"},
+              ]}
+        assert _ap_sheet_rows([ap])[0]["Not Exported"] == "2"
+        missing = dict(_ap_sheet_details([ap]))["AP (EAP620) settings not exported (sheet incomplete)"]
+        assert [(r["Setting Part"], r["Endpoint"], r["Reason"]) for r in missing] == [
+            ("LAN ports", "`ports`", "API error -1600"),
+            ("Point-to-point bridge", "`bridge`", "Request failed (ReadTimeout)"),
+        ]
+        assert "settings not exported" not in " ".join(t for t, _ in _ap_sheet_details([{"deviceName": "x"}]))
 
 
 class TestGenerateFromYaml:

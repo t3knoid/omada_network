@@ -855,6 +855,12 @@ for a different model. Rows marked **Carry Over** were set by hand:
 - **General:** LED, LLDP, power saving, load balancing, U-APSD, where not
   left on the site defaults.
 
+If the controller doesn't return one of these parts for an AP (the model
+doesn't have the feature, or the call failed), the summary shows a
+**Not Exported** count, the AP gets a **settings not exported (sheet
+incomplete)** table naming each part, and `fetch` logs a warning. Check
+those settings on the old AP in the controller UI before the swap.
+
 Each AP needs about 15 API calls, so on a large site this resource takes a
 while to fetch.
 

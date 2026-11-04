@@ -200,7 +200,7 @@ Omada Open API client tests.
 | | `test_get_ssids_no_wlans` | Returns empty list when WLAN endpoint fails |
 | | `test_get_switch_port_sheets_lists_switches` | Lists the switches that get a port sheet |
 | | `test_get_gateway_port_sheets_lists_gateways` | Lists the gateways that get a port sheet |
-| | `test_get_ap_sheets_collects_parts_and_drops_counters` | Per-AP parts are best-effort, live counters are dropped, credentials are redacted |
+| | `test_get_ap_sheets_collects_parts_and_drops_counters` | Per-AP parts that can't be read are recorded in `unavailableParts` with one warning per AP; live counters are dropped, credentials are redacted |
 | | `test_get_switch_security_collects_parts` | Collects 802.1X, MAC auth, DHCP snooping, ARP detection, IP-MAC binding (best-effort) |
 | | `test_get_oui_vlans_qos_and_port_labels` | Fetches OUI VLAN rules / profiles, switch QoS, and port labels |
 | | `test_get_uplinks_switch_detail_fallback_and_stacks` | Uplinks/downlinks from switch-detail, port-select fallback, stack members |
@@ -333,6 +333,7 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_ap_sheet_rows` | Per-AP summary: bands, IP, management VLAN, uplink, LAN ports, SSID overrides |
 | | `test_ap_sheet_details` | Radios, SSID overrides, general settings with carry-over flags; LAN ports and port VLANs |
 | | `test_ap_sheet_dhcp_reservation_and_mgmt_ssid` | DHCP reservation and management SSID count as carry-over |
+| | `test_ap_sheet_flags_settings_not_exported` | Unreadable AP parts show as a Not Exported count and a "settings not exported" table |
 | | `test_port_connection_ignores_placeholder_port_status` | No negotiated speed shown when `portStatus` reports link down |
 | | `test_port_rule_refs_and_sheet_rules_column` | Port-bound DHCP snooping / ARP detection / OUI / QoS rules (LAGs expanded) appear on the port sheet and force carry-over |
 | | `test_switch_security_rows_and_details` | 802.1X, MAC auth, DHCP snooping, ARP detection, IP-MAC binding settings and per-switch tables |
