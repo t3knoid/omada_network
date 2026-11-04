@@ -111,6 +111,7 @@ The official API documentation is available at:
 | `port_groups` | Port Groups | [Port Groups (IP-Port Groups)](#port-groups-ip-port-groups) |
 | `acl_rules` | ACL Rules | [ACL Rules](#acl-rules) |
 | `gateway_settings` | Gateway Settings | [Gateway Settings](#gateway-settings) |
+| `gateway_port_sheets` | Gateway Port Sheets | [Gateway Port Sheets](#gateway-port-sheets) |
 | `wan_failover` | WAN Failover & Load Balancing | [WAN Failover & Load Balancing](#wan-failover--load-balancing) |
 | `port_forwarding` | Port Forwarding | [NAT](#nat) |
 | `one_to_one_nat` | One-to-One NAT | [NAT](#nat) |
@@ -127,6 +128,7 @@ The official API documentation is available at:
 | `rate_limit_profiles` | Rate Limit Profiles | [Schedules and Rate Limit Profiles](#schedules-and-rate-limit-profiles) |
 | `wireless_settings` | Wireless Site Settings | [Wireless Site Settings](#wireless-site-settings) |
 | `ap_radios` | AP Radio Settings | [AP Radio Settings](#ap-radio-settings) |
+| `ap_sheets` | Access Point Sheets | [Access Point Sheets](#access-point-sheets) |
 | `site_to_site_vpns` | Site-to-Site VPNs | [Site-to-Site, Remote-Access & WireGuard VPN](#site-to-site-remote-access--wireguard-vpn) |
 | `remote_access_vpns` | Remote-Access VPNs | [Site-to-Site, Remote-Access & WireGuard VPN](#site-to-site-remote-access--wireguard-vpn) |
 | `wireguard` | WireGuard VPN | [Site-to-Site, Remote-Access & WireGuard VPN](#site-to-site-remote-access--wireguard-vpn) |
@@ -584,6 +586,58 @@ Attempts multiple endpoints with fallback.
 - **Weights** are listed "sorted by port ID". They are matched to the WAN-mode ports from `basic-info` in port-number order, and shown unlabelled if the counts differ.
 - **Health checks:** the Open API exposes only the detection *interval*. The ping / DNS-lookup targets are not available. `wanHealth` is the status at export time, not configuration, so it changes between runs.
 
+### Gateway Port Sheets
+
+**Resource:** `gateway_port_sheets`
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GET` | `sites/{siteId}/devices` | Gateway list only; the sheet is built from other resources |
+
+Meant for replacing a gateway with another model. Gateway port IDs have the
+form `<port number>_<uuid>`, so the sheet maps every ID back to a physical
+port by its prefix. Built at Markdown time from `device_ports`,
+`gateway_settings`, `wan_failover`, `networks`, `uplinks` and the resources
+listed below, so it also regenerates from YAML.
+
+**Summary** (one row per gateway): ports, WAN-mode ports, connected ports,
+port-bound rules, ports that must carry over.
+
+**Per gateway** (one row per port):
+
+| Column | Source |
+| --- | --- |
+| Capability, Mode | Port `type` (0 WAN only, 1 WAN or LAN, 2 LAN only) and `mode` (0 WAN, 1 LAN); `Mirroring` when mirroring is on |
+| Connection | Link state from `wan-status`; the controller reports it only for WAN ports |
+| Connected To | A switch whose uplink peer is this gateway port (`uplinks`) |
+| WAN Connection | `gateway_settings.wanPortsConfig`: type (`protoType` 0 Static, 1 DHCP, 2 PPPoE, 3 L2TP, 4 PPTP, 5 DS-Lite, 6 MAP-E), address, user, DNS, MTU, extra IPs, VLAN tag / priority, cloned MAC, IPv6 type |
+| LAN Networks | Networks whose `interfaceIds` include this port; `All N LAN networks` when it carries all of them |
+| PVID (Native VLAN), Speed / Duplex, Mirroring | Port configuration (`linkSpeed` 0 Auto, 1 10M, 2 100M, 3 1000M, 4 2500M, 5 10G, 6 5G) |
+| Rules Bound, Carry Over | Count of checklist rows for this port; why the port matters (WAN, connected, downlink, rules, fixed speed, mirroring, PVID, disabled) |
+
+**Connected switches:** switches uplinked to the gateway, with the gateway
+port when the controller reports the link peer.
+
+**Port reference checklist:** every setting that names a gateway port.
+
+| Resource | Field |
+| --- | --- |
+| `networks` | `interfaceIds` (LAN ports) |
+| `port_forwarding` | `interfaceWanPortId`, `wanIps[].wanId` |
+| `one_to_one_nat` | `interfaceIds` |
+| `static_routes` | `interfaceId` (gateway routes with WAN interface) |
+| `policy_routes` | `interfaceId` (WAN), `wanPortIds` |
+| `site_to_site_vpns`, `remote_access_vpns` | `wan` / `wans` |
+| `ssl_vpn` | `setting.wanPort` |
+| `ipsec_failover` | `backupWan` |
+| `wan_failover` | `primaryWans`, `backupWan` (when link backup is on), per-WAN weights, virtual WAN `physicalWanId` |
+| `dns_settings` | Dynamic DNS `interfacePortId` |
+| `multicast_services` | IGMP / MLD proxy `wanPortId`, IPTV `wanPortId` and port roles, UPnP `wanPortIds` (enabled features only) |
+| `switch_security` | IP-MAC binding `wanIds`, WAN bindings' `interfaceId` |
+
+Not covered, because they aren't exported: gateway QoS bandwidth control
+(`wan`) and virtual WAN definitions.
+
 ### NAT
 
 **Resources:** `port_forwarding`, `one_to_one_nat`, `alg`
@@ -784,6 +838,45 @@ One row per AP radio (2.4 GHz, 5 GHz, 5 GHz-1/-2, 6 GHz): radio on/off,
 channel (`0` = Auto), channel width, Tx power level (custom power shown in
 dBm), wireless mode, and channel limit. These are the per-AP radio overrides
 configured on the controller.
+
+### Access Point Sheets
+
+**Resource:** `ap_sheets`
+
+Per-AP settings that don't follow an AP to a new model. For every AP
+(`type: ap`), each part is a `GET sites/{siteId}/aps/{apMac}/<path>`, kept
+when available. A model that doesn't support a feature just has no entry.
+Radios come from [`ap_radios`](#ap-radio-settings) and SSID overrides from
+[`ssids`](#ssids) at Markdown time.
+
+| Part | Path | Notes |
+| --- | --- | --- |
+| `general` | `general-config` | LED (0 off, 1 on, 2 site setting), name, tags |
+| `ipSetting` | `ip-setting` | DHCP (reservation, fallback IP) or static IP, mask, gateway, DNS |
+| `managementVlan` | `vlan` | 0 default, 1 custom (`lanNetworkId`) |
+| `managementWlan` | `management-wlan` | Management SSID: status, name, security, VLAN. The key is redacted |
+| `uplinkConfig` | `uplink-config` | Uplink port selection: auto or fixed |
+| `wiredUplink` | `wired-uplink` | Upstream device, its port, AP port, rate. Counters are dropped |
+| `wiredDownlinks` | `wired-downlink` | Devices on the AP's LAN ports. Counters are dropped |
+| `lanPorts` | `ports` | LAN ports: link, VLAN (`localVlanEnable` / `localVlanId`, or custom tagged / untagged), PoE out, rate limits, uplink. `portStatus` counters are dropped |
+| `portVlans` | `port-vlans` | Paginated. Effective VLAN membership per LAN port |
+| `trunk` | `trunk-setting` | Link aggregation (mode 0 SRC+DST MAC, 1 DST MAC, 2 SRC MAC) |
+| `loadBalance` | `load-balance` | Per band: max clients, RSSI threshold |
+| `lldp` | `lldp` | 0 off, 1 on, 2 site setting |
+| `powerSaving` | `power-saving` | Mode (0 off, 1 standard, 2 smart, 3 deep), time window, bands |
+| `qos` | `qos` | U-APSD per band |
+| `bridge` | `bridge` | P2P bridge SSID (password redacted), DIP switch |
+
+**Summary** (one row per AP): bands, IP setting, management VLAN, uplink, LAN
+ports (and how many carry over), SSID overrides, settings to carry over.
+
+**Per AP:** a Category / Setting / Value table. **Carry Over** is `Yes` for
+values set on this AP by hand: fixed channel or Tx power, static IP or
+reservation / fallback, custom management VLAN, management SSID, SSID
+overrides, fixed uplink port, LAG, bridge, and LED / LLDP / power saving /
+load balancing / U-APSD changed from the defaults. Then a **LAN ports** table
+(role, connection, connected device, VLAN, PoE out, rate limit, carry over)
+and the effective **port VLANs**.
 
 ---
 

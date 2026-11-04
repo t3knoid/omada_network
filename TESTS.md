@@ -199,6 +199,8 @@ Omada Open API client tests.
 | | `test_get_ssids` | Fetches SSIDs with WLAN group names |
 | | `test_get_ssids_no_wlans` | Returns empty list when WLAN endpoint fails |
 | | `test_get_switch_port_sheets_lists_switches` | Lists the switches that get a port sheet |
+| | `test_get_gateway_port_sheets_lists_gateways` | Lists the gateways that get a port sheet |
+| | `test_get_ap_sheets_collects_parts_and_drops_counters` | Per-AP parts are best-effort, live counters are dropped, credentials are redacted |
 | | `test_get_switch_security_collects_parts` | Collects 802.1X, MAC auth, DHCP snooping, ARP detection, IP-MAC binding (best-effort) |
 | | `test_get_oui_vlans_qos_and_port_labels` | Fetches OUI VLAN rules / profiles, switch QoS, and port labels |
 | | `test_get_uplinks_switch_detail_fallback_and_stacks` | Uplinks/downlinks from switch-detail, port-select fallback, stack members |
@@ -262,7 +264,7 @@ Resource registry and `generate_from_yaml` tests.
 
 | Class | Test | Description |
 | --- | --- | --- |
-| `TestRegistry` | `test_all_forty_four_resources_defined` | All 44 resource types are registered |
+| `TestRegistry` | `test_all_forty_six_resources_defined` | All 46 resource types are registered |
 | | `test_registry_lookup_matches_resources` | Registry lookup matches `RESOURCES` list |
 | | `test_all_definitions_are_resource_definition` | All entries are `ResourceDefinition` instances |
 | | `test_all_row_formatters_callable` | All row formatters are callable |
@@ -325,6 +327,12 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_uplink_details_and_remapping_checklist` | Downlink tables, stack members, and the model-specific port remapping checklist |
 | | `test_switch_port_sheet_rows_summarize_carry_over` | Per-switch summary: ports, connected, custom settings, ports to carry over (SFP / PoE) |
 | | `test_switch_port_sheet_details_per_port` | Per-port sheet: VLANs, PoE, speed, LAG, connected device, manual settings, carry-over reason |
+| | `test_wan_connection_type_codes_follow_spec` | WAN `protoType` codes: 0 Static, 2 PPPoE |
+| | `test_gateway_port_sheet_rows` | Per-gateway summary: ports, WAN ports, connected, port-bound rules, carry over |
+| | `test_gateway_port_sheet_details` | Port capability / mode, WAN connection, LAN networks, connected switch, and the port reference checklist |
+| | `test_ap_sheet_rows` | Per-AP summary: bands, IP, management VLAN, uplink, LAN ports, SSID overrides |
+| | `test_ap_sheet_details` | Radios, SSID overrides, general settings with carry-over flags; LAN ports and port VLANs |
+| | `test_ap_sheet_dhcp_reservation_and_mgmt_ssid` | DHCP reservation and management SSID count as carry-over |
 | | `test_port_connection_ignores_placeholder_port_status` | No negotiated speed shown when `portStatus` reports link down |
 | | `test_port_rule_refs_and_sheet_rules_column` | Port-bound DHCP snooping / ARP detection / OUI / QoS rules (LAGs expanded) appear on the port sheet and force carry-over |
 | | `test_switch_security_rows_and_details` | 802.1X, MAC auth, DHCP snooping, ARP detection, IP-MAC binding settings and per-switch tables |

@@ -1748,6 +1748,108 @@ class OmadaOpenApiClient:
         result = self._get(f"sites/{site_id}/switches/port-tag")
         return result if isinstance(result, list) else []
 
+    # ------------------------------------------------------------------
+    # Gateway and access point sheets (replacement with another model)
+    # ------------------------------------------------------------------
+
+    def get_gateway_port_sheets(self, site_id: str) -> list[dict[str, Any]]:
+        """Return the gateways that get a port sheet.
+
+        Like the switch sheets, the gateway sheets are built at Markdown time
+        from other resources (``device_ports``, ``gateway_settings``,
+        ``wan_failover``, ``networks`` and every resource that references a
+        WAN port), so they can be regenerated from YAML.
+        Endpoint: ``GET /sites/{siteId}/devices`` (gateways only).
+        """
+        return [
+            {"deviceName": d.get("name", ""), "deviceMac": d.get("mac", ""), "deviceModel": d.get("model", "")}
+            for d in self.get_devices(site_id)
+            if str(d.get("type", d.get("deviceType", ""))).lower() == "gateway" and d.get("mac")
+        ]
+
+    def get_ap_sheets(self, site_id: str) -> list[dict[str, Any]]:
+        """Return the per-AP settings that don't follow the AP to a new model.
+
+        For every access point (``type: ap``), each part below is fetched from
+        ``GET /sites/{siteId}/aps/{apMac}/<path>`` and kept under its key when
+        available (unsupported features are skipped; see :data:`_AP_SHEET_PARTS`).
+        Live counters (bytes, packets, optics) are dropped so the YAML only
+        changes when configuration changes.  Radios and SSID overrides come
+        from ``ap_radios`` and ``ssids`` at Markdown time.  Credentials
+        (management SSID key, bridge password) are redacted unless secrets are
+        included.
+        """
+        records: list[dict[str, Any]] = []
+        for device in self.get_devices(site_id):
+            if str(device.get("type", device.get("deviceType", ""))).lower() != "ap":
+                continue
+            mac = device.get("mac", device.get("deviceMac", ""))
+            if not mac:
+                continue
+            base = f"sites/{site_id}/aps/{quote(str(mac), safe='')}"
+            record: dict[str, Any] = {
+                "deviceName": device.get("name", ""),
+                "deviceMac": mac,
+                "deviceModel": device.get("model", ""),
+            }
+            for key, path, paged in _AP_SHEET_PARTS:
+                try:
+                    value = self._get_paged(f"{base}/{path}") if paged else self._get(f"{base}/{path}")
+                except (OmadaAPIError, requests.RequestException) as exc:
+                    logger.debug("AP %s (%s): %s unavailable: %s", device.get("name", ""), mac, path, exc)
+                    continue
+                value = _strip_ap_counters(key, value)
+                if value not in (None, {}, []):
+                    record[key] = value
+            records.append(self._redact(record))
+        return records
+
+
+# (key, path under /aps/{apMac}, paginated) for :meth:`get_ap_sheets`.
+_AP_SHEET_PARTS: tuple[tuple[str, str, bool], ...] = (
+    ("general", "general-config", False),
+    ("ipSetting", "ip-setting", False),
+    ("managementVlan", "vlan", False),
+    ("managementWlan", "management-wlan", False),
+    ("uplinkConfig", "uplink-config", False),
+    ("wiredUplink", "wired-uplink", False),
+    ("wiredDownlinks", "wired-downlink", False),
+    ("lanPorts", "ports", False),
+    ("portVlans", "port-vlans", True),
+    ("trunk", "trunk-setting", False),
+    ("loadBalance", "load-balance", False),
+    ("lldp", "lldp", False),
+    ("powerSaving", "power-saving", False),
+    ("qos", "qos", False),
+    ("bridge", "bridge", False),
+)
+
+_AP_UPLINK_KEYS = (
+    "name", "uplinkMac", "type", "model", "uplinkPort", "port", "portType", "rate", "duplex", "linkStatus",
+    "poeState",
+)
+_AP_DOWNLINK_KEYS = ("port", "portType", "link", "speed", "duplex", "mac", "ip", "type", "deviceName", "model",
+                     "downLinkPort", "poeState")
+
+
+def _strip_ap_counters(key: str, value: Any) -> Any:
+    """Keep the configuration / topology fields of an AP sheet part."""
+    if key == "wiredUplink":
+        up = value.get("wiredUplink") if isinstance(value, dict) else None
+        return {k: up[k] for k in _AP_UPLINK_KEYS if k in up} if isinstance(up, dict) else None
+    if key == "wiredDownlinks":
+        downs = value.get("wiredDownlinkList") if isinstance(value, dict) else value
+        return [
+            {k: d[k] for k in _AP_DOWNLINK_KEYS if k in d}
+            for d in downs or [] if isinstance(d, dict)
+        ]
+    if key == "lanPorts":
+        return [
+            {k: v for k, v in port.items() if k != "portStatus"}
+            for port in value or [] if isinstance(port, dict)
+        ] if isinstance(value, list) else None
+    return value
+
 
 def _lags_from_overview(device: dict[str, Any], ports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Rebuild LAG groups for one switch from its port-overview records."""

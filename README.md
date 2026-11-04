@@ -19,7 +19,7 @@ supports both official Open API authentication modes:
 
 ## Features
 
-The tool exports **44 resource types**. Each one is written to `docs/<site>/<resource>.yaml`, which holds the raw API data and is the source of truth, and `docs/<site>/<resource>.md`, which holds formatted tables (a summary table, and for many resources one detail section per item). IDs are resolved to names and numeric codes to labels. Credentials are redacted unless you ask for them (see [Secrets](#secrets)). For the API endpoints behind each resource, see the [API reference](api_reference.md#resource-index).
+The tool exports **46 resource types**. Each one is written to `docs/<site>/<resource>.yaml`, which holds the raw API data and is the source of truth, and `docs/<site>/<resource>.md`, which holds formatted tables (a summary table, and for many resources one detail section per item). IDs are resolved to names and numeric codes to labels. Credentials are redacted unless you ask for them (see [Secrets](#secrets)). For the API endpoints behind each resource, see the [API reference](api_reference.md#resource-index).
 
 ### Devices & switching
 
@@ -62,6 +62,7 @@ The tool exports **44 resource types**. Each one is written to `docs/<site>/<res
 | --- | --- | --- |
 | Gateway Settings | `gateway_settings` | WAN port configuration |
 | WAN Failover & Load Balancing | `wan_failover` | Load balancing weights, link backup / failover rules, health-check interval, WAN health snapshot |
+| Gateway Port Sheets | `gateway_port_sheets` | One sheet per gateway: each port's WAN / LAN capability and mode, WAN connection, LAN networks, PVID, speed, mirroring, connected switches, and a checklist of every site setting that references a gateway port |
 | Port Forwarding | `port_forwarding` | Port forwarding rules |
 | One-to-One NAT | `one_to_one_nat` | One-to-one NAT rules |
 | ALG | `alg` | Application Layer Gateway settings |
@@ -87,6 +88,7 @@ The tool exports **44 resource types**. Each one is written to `docs/<site>/<res
 | Rate Limit Profiles | `rate_limit_profiles` | Client rate limit profiles |
 | Wireless Site Settings | `wireless_settings` | Site band steering, roaming, mesh, multicast rate limit |
 | AP Radio Settings | `ap_radios` | Per-AP radio settings: channel, width, Tx power, wireless mode |
+| Access Point Sheets | `ap_sheets` | One sheet per AP: bands, IP setting, management VLAN / SSID, uplink, radios, SSID overrides, LED / LLDP / power saving / load balancing, and wall-plate LAN ports with their VLANs and PoE |
 
 ### VPN
 
@@ -673,6 +675,51 @@ reconfigure it by hand:
 
 Site-wide settings (networks, profiles, ACLs, DHCP, …) stay in the controller
 and aren't affected by the swap.
+
+### Replacing a gateway
+
+On a gateway, many site settings point at a **WAN port by ID** (for example
+`1_<uuid>`, where the prefix is the port number): port forwarding, one-to-one
+NAT, routes, VPNs, failover, Dynamic DNS, UPnP / IGMP / IPTV, IP-MAC binding.
+LAN networks are tied to gateway LAN ports the same way. A model with a
+different set of WAN-capable ports changes those IDs, and settings pointing at
+a missing port stop working. Use `gateway_port_sheets.md`:
+
+1. Run a fresh `fetch` just before the swap.
+2. The gateway's section lists each port's **Capability** (WAN only, WAN or
+   LAN, LAN only) and current **Mode**. Check that the new model has a port
+   for every WAN and every connected LAN port.
+3. **WAN Connection** has what you need to re-create the internet
+   connection: type, static address, PPPoE user, MTU, VLAN tag, cloned MAC,
+   IPv6. Passwords show as `configured`; see [Secrets](#secrets) to export
+   them.
+4. **Connected switches** shows which switch port uplinks to the gateway, and
+   **Connected To** which gateway port it uses (when the controller reports
+   it).
+5. Work through the **Port reference checklist**. Every row names a setting,
+   in the file where it lives, that references a gateway port. Re-select the
+   right port in each one on the new gateway.
+
+### Replacing an access point
+
+SSIDs and most wireless settings are site-wide and follow automatically. The
+settings in `ap_sheets.md` belong to one AP and are lost when you swap it
+for a different model. Rows marked **Carry Over** were set by hand:
+
+- **Radios:** fixed channels, widths and Tx power, per band. A model with
+  different bands (for example tri-band or 6 GHz) needs new choices.
+- **IP address and management VLAN:** static IP, DHCP reservation or
+  fallback IP, custom management VLAN, management SSID.
+- **SSID overrides** on this AP (SSID off, name, VLAN, password).
+- **Uplink:** the switch port the AP is plugged into, uplink port selection,
+  LAG, P2P bridge.
+- **LAN ports** on wall-plate and multi-port APs: VLAN, PoE out, rate limits,
+  and what's connected.
+- **General:** LED, LLDP, power saving, load balancing, U-APSD, where not
+  left on the site defaults.
+
+Each AP needs about 15 API calls, so on a large site this resource takes a
+while to fetch.
 
 ### Example – DHCP Reservations Markdown
 

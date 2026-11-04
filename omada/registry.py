@@ -103,7 +103,10 @@ _PROFILE_HANDLED_KEYS: frozenset[str] = frozenset({
     "esEnableTagBridgeVlanMap", "createByNewUI", "resource",
 })
 
-_PROTO_TYPE_MAP: dict[int, str] = {1: "DHCP", 2: "Static", 3: "PPPoE"}
+# WAN IPv4 connection type, per WanPortIpv4SettingOpenApiVO.protoType.
+_PROTO_TYPE_MAP: dict[int, str] = {
+    0: "Static", 1: "DHCP", 2: "PPPoE", 3: "L2TP", 4: "PPTP", 5: "DS-Lite", 6: "MAP-E",
+}
 
 
 def _flatten(value: Any) -> str:
@@ -2573,6 +2576,732 @@ def _switch_port_sheet_details(
     return sections
 
 
+# --- Gateway port sheets (replacing the router with another model) -------------------
+
+_GW_CAPABILITY_MAP: dict[int, str] = {0: "WAN only", 1: "WAN or LAN", 2: "LAN only"}
+_GW_SPEED_MAP: dict[int, str] = {0: "Auto", 1: "10M", 2: "100M", 3: "1000M", 4: "2500M", 5: "10G", 6: "5G"}
+_GW_MIRROR_MODE_MAP: dict[int, str] = {0: "ingress", 1: "egress", 2: "ingress and egress"}
+_IPV6_PROTO_MAP: dict[int, str] = {0: "Static", 1: "Dynamic", 2: "PPPoE", 3: "6to4 Tunnel", 4: "Bridge"}
+_PPP_CONNECT_MAP: dict[int, str] = {0: "connect automatically", 1: "connect manually", 2: "time-based"}
+
+
+def _gw_port_of(port_id: Any) -> Any:
+    """Gateway port IDs are ``<port number>_<uuid>``; return the port number."""
+    number, _ = _port_number(port_id)
+    return number if number < 10**6 else None
+
+
+def _gw_port_names(context: dict[str, Any] | None) -> dict[Any, str]:
+    """Gateway port number -> port name (``WAN``, ``WAN/LAN1`` ...)."""
+    names: dict[Any, str] = {}
+    ctx = context or {}
+    for p in ctx.get("device_ports") or []:
+        if isinstance(p, dict) and p.get("deviceType") == "gateway" and p.get("name") and p.get("port") is not None:
+            names.setdefault(p["port"], _flatten(p["name"]))
+    for pid, name in _wan_port_names(context).items():
+        if _gw_port_of(pid) is not None:
+            names.setdefault(_gw_port_of(pid), name)
+    failover = ctx.get("wan_failover") if isinstance(ctx.get("wan_failover"), dict) else {}
+    for pid, name in _wan_failover_names(failover, None).items():
+        if _gw_port_of(pid) is not None:
+            names.setdefault(_gw_port_of(pid), name)
+    return names
+
+
+def _gw_wan_configs(context: dict[str, Any] | None) -> dict[Any, dict[str, Any]]:
+    """Gateway port number -> its WAN connection config from ``gateway_settings``."""
+    configs: dict[Any, dict[str, Any]] = {}
+    settings = (context or {}).get("gateway_settings")
+    for item in settings if isinstance(settings, list) else [settings]:
+        if isinstance(item, dict):
+            for wan in item.get("wanPortsConfig") or []:
+                if isinstance(wan, dict) and _gw_port_of(wan.get("portId")) is not None:
+                    configs[_gw_port_of(wan["portId"])] = wan
+    return configs
+
+
+def _wan_connection(wan: dict[str, Any]) -> str:
+    """Summarize one WAN port's connection: type, addressing, VLAN, MAC, IPv6."""
+    ipv4 = wan.get("wanPortIpv4Setting") if isinstance(wan.get("wanPortIpv4Setting"), dict) else {}
+    proto = ipv4.get("protoType")
+    if proto is None:
+        return ""
+    parts = [_profile_code(proto, _PROTO_TYPE_MAP)]
+    detail = {0: "ipv4Static", 1: "ipv4Dhcp", 2: "ipv4Pppoe", 3: "ipv4L2tp", 4: "ipv4Pptp"}.get(proto, "")
+    cfg = ipv4.get(detail) if isinstance(ipv4.get(detail), dict) else {}
+    if proto == 0:
+        addr = _flatten(cfg.get("ipAddress", ""))
+        if cfg.get("subnetMask"):
+            addr += f"/{cfg['subnetMask']}"
+        if addr:
+            parts.append(addr)
+        if cfg.get("defaultGateway"):
+            parts.append(f"gateway {cfg['defaultGateway']}")
+    if proto in (2, 3, 4):
+        if cfg.get("userName"):
+            parts.append(f"user {cfg['userName']}")
+        if "password" in cfg:
+            parts.append(f"password {_secret_state(cfg.get('password')).lower()}")
+        if cfg.get("serviceName"):
+            parts.append(f"service {cfg['serviceName']}")
+        if cfg.get("connectionMode") is not None:
+            parts.append(_profile_code(cfg["connectionMode"], _PPP_CONNECT_MAP))
+    if proto == 1 and cfg.get("hostname"):
+        parts.append(f"hostname {cfg['hostname']}")
+    dns = [str(cfg[k]) for k in ("primaryDns", "secondaryDns") if cfg.get(k)]
+    if dns:
+        parts.append("DNS " + ", ".join(dns))
+    if cfg.get("mtu"):
+        parts.append(f"MTU {cfg['mtu']}")
+    if cfg.get("wanMultipleIps"):
+        parts.append(f"{len(cfg['wanMultipleIps'])} extra IPs")
+    if ipv4.get("vlanId"):
+        priority = f" priority {ipv4.get('vlanPriority', 0)}" if ipv4.get("qosTagEnable") else ""
+        parts.append(f"VLAN {ipv4['vlanId']}{priority}")
+    mac = wan.get("wanPortMacSetting") if isinstance(wan.get("wanPortMacSetting"), dict) else {}
+    if mac.get("method") == 1 and mac.get("mac"):
+        parts.append(f"cloned MAC {mac['mac']}")
+    ipv6 = wan.get("wanPortIpv6Setting") if isinstance(wan.get("wanPortIpv6Setting"), dict) else {}
+    if ipv6.get("enable"):
+        parts.append("IPv6 " + (_profile_code(ipv6["protoType"], _IPV6_PROTO_MAP)
+                                if ipv6.get("protoType") is not None else "enabled"))
+    return ", ".join(p for p in parts if p)
+
+
+def _rule_status(value: Any) -> str:
+    return "" if value is None else _enabled(value)
+
+
+def _gw_port_refs(context: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Every site setting that names a gateway port by ID (WAN or LAN).
+
+    Returns rows with ``port`` (number, or ``None`` when the ID has no port
+    prefix), ``resource``, ``rule``, ``setting`` and ``status``.  These IDs are
+    tied to the physical ports of this gateway model.
+    """
+    ctx = context or {}
+    refs: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+
+    def ids(value: Any) -> list[Any]:
+        if value in (None, "", []):
+            return []
+        return list(value) if isinstance(value, (list, tuple)) else [value]
+
+    def add(port_ids: Any, resource: str, rule: Any, setting: str, status: Any = None) -> None:
+        for pid in ids(port_ids):
+            row = {"port": _gw_port_of(pid), "portId": str(pid), "resource": resource,
+                   "rule": _flatten(rule), "setting": setting, "status": _rule_status(status)}
+            key = tuple(row.values())
+            if key not in seen:
+                seen.add(key)
+                refs.append(row)
+
+    def items(name: str) -> list[dict[str, Any]]:
+        value = ctx.get(name)
+        return [r for r in value if isinstance(r, dict)] if isinstance(value, list) else []
+
+    def part(name: str) -> dict[str, Any]:
+        value = ctx.get(name)
+        return value if isinstance(value, dict) else {}
+
+    nets_by_port_id: dict[str, list[str]] = {}
+    for net in items("networks"):
+        for pid in ids(net.get("interfaceIds")):
+            nets_by_port_id.setdefault(str(pid), []).append(_flatten(net.get("name", "")))
+    lan_count = sum(1 for net in items("networks") if ids(net.get("interfaceIds")))
+    for pid, net_names in nets_by_port_id.items():
+        text = f"All {lan_count} LAN networks" if len(net_names) == lan_count > 1 else ", ".join(net_names)
+        add(pid, "networks", text, "LAN networks on this port")
+    for r in items("port_forwarding"):
+        add(r.get("interfaceWanPortId"), "port_forwarding", r.get("name", ""), "Interface", r.get("status"))
+        for w in r.get("wanIps") or []:
+            if isinstance(w, dict):
+                add(w.get("wanId"), "port_forwarding", r.get("name", ""), f"WAN IP {w.get('ip', '')}",
+                    r.get("status"))
+    for r in items("one_to_one_nat"):
+        add(r.get("interfaceIds"), "one_to_one_nat", r.get("name", ""), "Interface", r.get("status"))
+    for r in items("static_routes"):
+        if r.get("routeSource") != "switch" and r.get("interfaceType") == 0:
+            add(r.get("interfaceId"), "static_routes", r.get("name", ""), "Interface", r.get("status"))
+    for r in items("policy_routes"):
+        if r.get("interfaceType") == 0:
+            add(r.get("interfaceId"), "policy_routes", r.get("name", ""), "WAN binding", r.get("status"))
+        add(r.get("wanPortIds"), "policy_routes", r.get("name", ""), "WAN binding", r.get("status"))
+    for name in ("site_to_site_vpns", "remote_access_vpns"):
+        for v in items(name):
+            add(v.get("wan"), name, v.get("name", ""), "WAN", v.get("status"))
+            add(v.get("wans"), name, v.get("name", ""), "WAN", v.get("status"))
+    ssl = part("ssl_vpn").get("setting")
+    if isinstance(ssl, dict):
+        add(ssl.get("wanPort"), "ssl_vpn", "SSL VPN server", "WAN port", ssl.get("status"))
+    for f in items("ipsec_failover"):
+        add(f.get("backupWan"), "ipsec_failover", f.get("name", ""), "Backup WAN")
+
+    failover = part("wan_failover")
+    lb = failover.get("loadBalance") if isinstance(failover.get("loadBalance"), dict) else {}
+    if lb.get("linkBackup"):
+        add(lb.get("primaryWans"), "wan_failover", "Link backup", "Primary WAN")
+        add(lb.get("backupWan"), "wan_failover", "Link backup", "Backup WAN")
+    internet = failover.get("internet") if isinstance(failover.get("internet"), dict) else {}
+    weights = lb.get("weights")
+    wan_ports = sorted(
+        (str(x["portId"]) for x in internet.get("portList") or []
+         if isinstance(x, dict) and x.get("portId") and x.get("portMode", 0) == 0),
+        key=_port_number,
+    )
+    if isinstance(weights, list) and len(weights) == len(wan_ports) > 1:
+        for pid, weight in zip(wan_ports, weights):
+            add(pid, "wan_failover", "Load balancing", f"Weight {weight}")
+    for v in lb.get("virtualWanWeights") or []:
+        if isinstance(v, dict):
+            add(v.get("physicalWanId"), "wan_failover", f"Virtual WAN {v.get('name') or v.get('virtualWanId', '')}",
+                f"Weight {v.get('weight', '')}")
+
+    for r in part("dns_settings").get("ddns") or []:
+        if isinstance(r, dict):
+            add(r.get("interfacePortId"), "dns_settings",
+                f"Dynamic DNS {r.get('domainName', '')}".strip(), "Interface", r.get("status"))
+    mcast = part("multicast_services")
+    for key, label in (("igmp", "IGMP proxy"), ("mld", "MLD proxy")):
+        cfg = mcast.get(key) if isinstance(mcast.get(key), dict) else {}
+        if cfg.get("enable"):
+            add(cfg.get("wanPortId"), "multicast_services", label, "Upstream WAN")
+    iptv = mcast.get("iptv") if isinstance(mcast.get("iptv"), dict) else {}
+    if iptv.get("enable"):
+        add(iptv.get("wanPortId"), "multicast_services", "IPTV", "WAN")
+        for x in iptv.get("portConfig") or []:
+            if isinstance(x, dict):
+                add(x.get("portId"), "multicast_services", "IPTV",
+                    f"Port role {_profile_code(x.get('type', ''), _IPTV_PORT_TYPE_MAP)}")
+    upnp = mcast.get("upnp") if isinstance(mcast.get("upnp"), dict) else {}
+    if upnp.get("enable"):
+        add(upnp.get("wanPortIds"), "multicast_services", "UPnP", "WAN")
+
+    security = part("switch_security")
+    imb = security.get("ipMacBind") if isinstance(security.get("ipMacBind"), dict) else {}
+    if imb.get("enable"):
+        add(imb.get("wanIds"), "switch_security", "IP-MAC binding", "WAN")
+    for b in security.get("ipMacBinds") or []:
+        if isinstance(b, dict) and b.get("interfaceType") == 0:
+            add(b.get("interfaceId"), "switch_security", f"IP-MAC binding {b.get('ip', '')} / {b.get('mac', '')}",
+                "WAN", b.get("status"))
+    return refs
+
+
+def _gw_links(mac: Any, context: dict[str, Any] | None) -> tuple[dict[Any, str], list[dict[str, Any]]]:
+    """Switches uplinked to this gateway, from the ``uplinks`` resource.
+
+    Returns (gateway port -> "<switch> port <n>", one row per such switch).
+    The gateway-side port is known only when the controller reports the link
+    peer (``linkPeerPortInfo``).
+    """
+    uplinks = (context or {}).get("uplinks")
+    links: dict[Any, str] = {}
+    rows: list[dict[str, Any]] = []
+    target = str(mac).upper().replace(":", "-")
+    for sw in (uplinks.get("switches") or []) if isinstance(uplinks, dict) else []:
+        up = sw.get("uplink") if isinstance(sw, dict) and isinstance(sw.get("uplink"), dict) else {}
+        if not up or str(up.get("mac", "")).upper().replace(":", "-") != target:
+            continue
+        gw_port = _peer_port(up)
+        local = _link_port(up)
+        text = f"{_flatten(sw.get('deviceName', ''))} port {local}" if local else _flatten(sw.get("deviceName", ""))
+        if gw_port:
+            links[_port_num(gw_port)] = text
+        rows.append({
+            "Device": _flatten(sw.get("deviceName", "")),
+            "Model": _flatten(sw.get("deviceModel", "")),
+            "Its Port": local,
+            "Gateway Port": gw_port or "Not reported (check the cabling)",
+            "Link Speed": _link_speed(up),
+        })
+    return links, rows
+
+
+def _gateway_ports(gw: dict[str, Any], context: dict[str, Any] | None) -> list[dict[str, Any]]:
+    mac = str(gw.get("deviceMac", "")).upper()
+    ports = [
+        p for p in (context or {}).get("device_ports") or []
+        if isinstance(p, dict) and str(p.get("deviceMac", "")).upper() == mac and p.get("deviceType") == "gateway"
+    ]
+    return sorted(ports, key=lambda p: (0, p["port"]) if isinstance(p.get("port"), int) else (1, str(p.get("port"))))
+
+
+def _gateway_sheet_row(p: dict[str, Any], context: dict[str, Any] | None, names: dict[Any, str],
+                       wans: dict[Any, dict[str, Any]], refs: list[dict[str, Any]],
+                       links: dict[Any, str]) -> dict[str, Any]:
+    _, by_vlan = _network_lookups(context)
+    port = p.get("port")
+    mode = p.get("mode")
+    is_wan = mode == 0
+    port_refs = [r for r in refs if r["port"] == port]
+    rule_refs = [r for r in port_refs if r["resource"] not in ("networks",)]
+    networks = ", ".join(r["rule"] for r in port_refs if r["resource"] == "networks")
+    connected_to = links.get(port, "")
+
+    speed, duplex = p.get("linkSpeed"), p.get("duplex")
+    speed_text = "Auto" if speed in (None, 0) else _profile_code(speed, _GW_SPEED_MAP)
+    if duplex not in (None, 0):
+        speed_text += f" / {_profile_code(duplex, _PORT_CFG_DUPLEX_MAP)}"
+    mirror = ""
+    if p.get("mirrorEnable"):
+        mirrored = ", ".join(str(m) for m in p.get("mirroredPorts") or [])
+        mode_text = _profile_code(p["mirrorMode"], _GW_MIRROR_MODE_MAP) if p.get("mirrorMode") is not None else ""
+        mirror = f"Mirrors port {mirrored}" + (f" ({mode_text})" if mode_text else "")
+    pvid = p.get("pvid")
+    native = by_vlan.get(str(pvid), f"VLAN {pvid}") if pvid is not None and not is_wan else ""
+
+    connection = _port_connection({**p, "deviceType": "gateway"})
+    reasons = []
+    if is_wan:
+        reasons.append("WAN")
+    if connection.startswith("Connected"):
+        reasons.append("connected")
+    if connected_to:
+        reasons.append("downlink")
+    if rule_refs:
+        reasons.append(f"{len(rule_refs)} rule{'s' if len(rule_refs) != 1 else ''}")
+    if speed_text != "Auto":
+        reasons.append("fixed speed")
+    if mirror:
+        reasons.append("mirroring")
+    if pvid not in (None, 1) and not is_wan:
+        reasons.append(f"PVID {pvid}")
+    if p.get("status") == 0:
+        reasons.append("disabled")
+    return {
+        "Port": _flatten(port),
+        "Name": _flatten(p.get("name") or names.get(port, "")),
+        "Capability": _map_code(p["type"], _GW_CAPABILITY_MAP) if p.get("type") is not None else "",
+        "Mode": "Mirroring" if p.get("mirrorEnable") else (
+            _map_code(mode, _GATEWAY_PORT_MODE_MAP) if mode is not None else ""),
+        "Connection": connection,
+        "Connected To": connected_to,
+        "WAN Connection": _wan_connection(wans[port]) if is_wan and port in wans else "",
+        "LAN Networks": networks,
+        "PVID (Native VLAN)": native,
+        "Speed / Duplex": speed_text,
+        "Mirroring": mirror,
+        "Rules Bound": str(len(rule_refs)) if rule_refs else "",
+        "Carry Over": ", ".join(reasons) if reasons else "No (unused, default)",
+    }
+
+
+def _gateway_sheet(gw: dict[str, Any], context: dict[str, Any] | None,
+                   refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    names = _gw_port_names(context)
+    wans = _gw_wan_configs(context)
+    links, _ = _gw_links(gw.get("deviceMac", ""), context)
+    return [_gateway_sheet_row(p, context, names, wans, refs, links) for p in _gateway_ports(gw, context)]
+
+
+def _gateway_port_sheet_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """One summary row per gateway: WAN ports, connected ports, rules tied to ports."""
+    refs = _gw_port_refs(context)
+    rows = []
+    for gw in data if isinstance(data, list) else []:
+        if not isinstance(gw, dict):
+            continue
+        sheet = _gateway_sheet(gw, context, refs)
+        rows.append({
+            "Gateway": _flatten(gw.get("deviceName", "")),
+            "Model": _flatten(gw.get("deviceModel", "")),
+            "Ports": str(len(sheet)),
+            "WAN Ports": ", ".join(r["Name"] or r["Port"] for r in sheet if r["Mode"] == "WAN"),
+            "Connected": str(sum(1 for r in sheet if r["Connection"].startswith("Connected"))),
+            "Port-Bound Rules": str(sum(1 for r in refs if r["resource"] != "networks")),
+            "Must Carry Over": str(sum(1 for r in sheet if not r["Carry Over"].startswith("No"))),
+        })
+    return rows
+
+
+def _gateway_port_sheet_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    refs = _gw_port_refs(context)
+    names = _gw_port_names(context)
+    titles = {d.name: d.title for d in RESOURCES}
+    sections = []
+    for gw in data if isinstance(data, list) else []:
+        if not isinstance(gw, dict):
+            continue
+        title = f"{_flatten(gw.get('deviceName', ''))} ({_flatten(gw.get('deviceModel', ''))})"
+        sections.append((title, _gateway_sheet(gw, context, refs)))
+        _, switches = _gw_links(gw.get("deviceMac", ""), context)
+        if switches:
+            sections.append((f"{title} connected switches", switches))
+    checklist = [
+        {
+            "Port": _flatten(r["port"]) if r["port"] is not None else "?",
+            "Port Name": names.get(r["port"], ""),
+            "Used By": f"{titles.get(r['resource'], r['resource'])} ({r['resource']}.md)",
+            "Rule / Setting": r["rule"],
+            "Reference": r["setting"],
+            "Status": r["status"],
+        }
+        for r in sorted(refs, key=lambda r: ((0, r["port"]) if isinstance(r["port"], int) else (1, 0),
+                                             r["resource"] == "networks", r["resource"], r["rule"].lower()))
+    ]
+    if checklist:
+        sections.append(("Port reference checklist (re-point these on the new gateway)", checklist))
+    return sections
+
+
+# --- Access point sheets (replacing an AP with another model) -----------------------
+
+_AP_SITE_SETTING_MAP: dict[int, str] = {0: "Off", 1: "On", 2: "Use site settings"}
+_AP_POWER_SAVING_MAP: dict[int, str] = {0: "Off", 1: "Standard", 2: "Smart", 3: "Deep power saving"}
+_AP_TRUNK_MODE_MAP: dict[int, str] = {0: "SRC MAC + DST MAC", 1: "DST MAC", 2: "SRC MAC"}
+_AP_POE_IN_MAP: dict[int, str] = {0: "Off", 1: "802.3bt", 2: "802.3at", 3: "802.3af"}
+_MGMT_SSID_SECURITY_MAP: dict[int, str] = {0: "None", 2: "WPA-Enterprise", 3: "WPA-Personal"}
+_AP_BAND_KEYS: tuple[tuple[str, str], ...] = (("2g", "2.4 GHz"), ("5g", "5 GHz"), ("5g2", "5 GHz-2"), ("6g", "6 GHz"))
+
+
+def _ap_part(ap: dict[str, Any], key: str) -> dict[str, Any]:
+    value = ap.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _ap_radios(ap: dict[str, Any], context: dict[str, Any] | None) -> dict[str, Any]:
+    mac = str(ap.get("deviceMac", "")).upper()
+    for r in (context or {}).get("ap_radios") or []:
+        if isinstance(r, dict) and str(r.get("deviceMac", "")).upper() == mac:
+            return r.get("radios") if isinstance(r.get("radios"), dict) else {}
+    return {}
+
+
+def _ap_ssid_overrides(ap: dict[str, Any], context: dict[str, Any] | None) -> list[tuple[str, str]]:
+    mac = str(ap.get("deviceMac", "")).upper().replace(":", "-")
+    out = []
+    for s in (context or {}).get("ssids") or []:
+        if not isinstance(s, dict):
+            continue
+        for o in s.get("apOverrides") or []:
+            if not isinstance(o, dict) or str(o.get("mac", "")).upper().replace(":", "-") != mac:
+                continue
+            parts = []
+            if o.get("ssidEnable") is False:
+                parts.append("SSID off on this AP")
+            if o.get("overrideName"):
+                parts.append(f"name {o['overrideName']}")
+            if o.get("overrideVlan") not in (None, ""):
+                parts.append(f"VLAN {o['overrideVlan']}")
+            if o.get("overridePassword"):
+                parts.append(f"password {_secret_state(o['overridePassword']).lower()}")
+            out.append((_flatten(s.get("name", "")), ", ".join(parts) or "Override set"))
+    return out
+
+
+def _ap_ip_text(ip: dict[str, Any]) -> tuple[str, bool]:
+    """(text, set by hand) for the AP's IP setting."""
+    mode = str(ip.get("mode", ""))
+    if mode.lower() == "static":
+        st = ip.get("staticIpSetting") if isinstance(ip.get("staticIpSetting"), dict) else {}
+        text = f"Static {st.get('configIp', '')}" + (f"/{st['configMask']}" if st.get("configMask") else "")
+        if st.get("configGate"):
+            text += f", gateway {st['configGate']}"
+        dns = [str(st[k]) for k in ("preferredDNS", "alternateDNS") if st.get(k)]
+        if dns:
+            text += ", DNS " + ", ".join(dns)
+        return text, True
+    if not mode:
+        return "", False
+    dh = ip.get("dhcpIpSetting") if isinstance(ip.get("dhcpIpSetting"), dict) else {}
+    text, manual = "DHCP", False
+    if dh.get("useFixedAddr") and dh.get("dhcpIp"):
+        text += f", reserved {dh['dhcpIp']}"
+        manual = True
+    if dh.get("fallback"):
+        text += f", fallback {dh.get('fallbackIp', '')}" + (f"/{dh['fallbackMask']}" if dh.get("fallbackMask") else "")
+        manual = True
+    return text, manual
+
+
+def _ap_mgmt_vlan(vlan: dict[str, Any], context: dict[str, Any] | None) -> tuple[str, bool]:
+    if not vlan:
+        return "", False
+    if vlan.get("mode") != 1:
+        return "Default", False
+    by_id, _ = _network_lookups(context)
+    if vlan.get("lanNetworkId"):
+        return by_id.get(str(vlan["lanNetworkId"]), str(vlan["lanNetworkId"])), True
+    return (f"VLAN {vlan['bridgeVlan']}" if vlan.get("bridgeVlan") is not None else "Custom"), True
+
+
+def _ap_uplink(ap: dict[str, Any]) -> str:
+    up = _ap_part(ap, "wiredUplink")
+    if not up:
+        return ""
+    text = _flatten(up.get("name") or up.get("uplinkMac", ""))
+    if up.get("uplinkPort") not in (None, ""):
+        text += f" port {up['uplinkPort']}"
+    if up.get("port") not in (None, ""):
+        text += f" (AP port {up['port']})"
+    if up.get("rate") not in (None, "", "0", 0):
+        text += f", {up['rate']} Mbps"
+    return text
+
+
+def _ap_settings(ap: dict[str, Any], context: dict[str, Any] | None) -> list[tuple[str, str, str, bool]]:
+    """(category, setting, value, carry over) rows for one AP."""
+    rows: list[tuple[str, str, str, bool]] = []
+    radios = _ap_radios(ap, context)
+    if radios:
+        bands = [_RADIO_BAND_LABELS.get(b, b) for b in sorted(
+            radios, key=lambda b: list(_RADIO_BAND_LABELS).index(b) if b in _RADIO_BAND_LABELS else 99)]
+        rows.append(("Hardware", "Radio bands", ", ".join(bands), False))
+    uplink = _ap_uplink(ap)
+    if uplink:
+        rows.append(("Uplink", "Wired uplink", uplink, True))
+    uplink_cfg = ap.get("uplinkConfig")
+    if isinstance(uplink_cfg, list) and uplink_cfg:
+        manual = [str(u.get("port", "")) for u in uplink_cfg if isinstance(u, dict) and u.get("auto") is False]
+        rows.append(("Uplink", "Uplink port selection", f"Fixed: {', '.join(manual)}" if manual else "Auto",
+                     bool(manual)))
+    trunk = _ap_part(ap, "trunk")
+    if trunk.get("supportTrunkSetting"):
+        text = _enabled(trunk.get("enable"))
+        if trunk.get("enable") and trunk.get("mode") is not None:
+            text += f" ({_profile_code(trunk['mode'], _AP_TRUNK_MODE_MAP)})"
+        rows.append(("Uplink", "Link aggregation (trunk)", text, bool(trunk.get("enable"))))
+    bridge = _ap_part(ap, "bridge")
+    if bridge.get("bridgeSsidName") or bridge.get("hwSwitch"):
+        text = f"SSID {bridge.get('bridgeSsidName', '')}"
+        if "bridgeSsidPassword" in bridge:
+            text += f", password {_secret_state(bridge.get('bridgeSsidPassword')).lower()}"
+        if bridge.get("hwSwitch") is not None:
+            text += f", DIP switch {'on' if bridge['hwSwitch'] else 'off'}"
+        rows.append(("Uplink", "P2P bridge", text, True))
+
+    ip_text, ip_manual = _ap_ip_text(_ap_part(ap, "ipSetting"))
+    if ip_text:
+        rows.append(("Management", "IP address", ip_text, ip_manual))
+    vlan_text, vlan_manual = _ap_mgmt_vlan(_ap_part(ap, "managementVlan"), context)
+    if vlan_text:
+        rows.append(("Management", "Management VLAN", vlan_text, vlan_manual))
+    mw = _ap_part(ap, "managementWlan")
+    if mw:
+        text = _enabled(mw.get("status"))
+        if mw.get("status"):
+            text += f": {mw.get('name', '')}"
+            if mw.get("security") is not None:
+                text += f", {_profile_code(mw['security'], _MGMT_SSID_SECURITY_MAP)}"
+            psk = mw.get("pskSetting") if isinstance(mw.get("pskSetting"), dict) else {}
+            if "securityKey" in psk:
+                text += f", key {_secret_state(psk.get('securityKey')).lower()}"
+            vs = mw.get("vlanSetting") if isinstance(mw.get("vlanSetting"), dict) else {}
+            custom = vs.get("customConfig") if isinstance(vs.get("customConfig"), dict) else {}
+            if vs.get("mode") == 1:
+                by_id, _ = _network_lookups(context)
+                net = custom.get("lanNetworkId")
+                text += ", VLAN " + (by_id.get(str(net), str(net)) if net else _flatten(custom.get("vlanId", "")))
+        rows.append(("Management", "Management SSID", text, bool(mw.get("status"))))
+
+    for band, r in sorted(radios.items(), key=lambda kv: list(_RADIO_BAND_LABELS).index(kv[0])
+                          if kv[0] in _RADIO_BAND_LABELS else 99):
+        if not isinstance(r, dict):
+            continue
+        name = _RADIO_BAND_LABELS.get(band, band)
+        if r.get("radioEnable") is False:
+            rows.append(("Radio", name, "Disabled", True))
+            continue
+        row = _ap_radio_rows([{"radios": {band: r}}])
+        if not row:
+            continue
+        rr = row[0]
+        text = ", ".join(t for t in (
+            f"channel {rr['Channel']}" if rr["Channel"] else "", rr["Channel Width"],
+            f"power {rr['Tx Power']}" if rr["Tx Power"] else "",
+            f"mode {rr['Wireless Mode']}" if rr["Wireless Mode"] else "",
+            "channel limit" if rr["Channel Limit"] == "Enabled" else "") if t)
+        # Channel and power are per AP; anything but Auto must be set again by hand.
+        fixed = (rr["Channel"] not in ("", "Auto") or r.get("txPowerLevel") not in (None, 4)
+                 or rr["Channel Limit"] == "Enabled")
+        rows.append(("Radio", name, text, fixed))
+
+    for ssid, text in _ap_ssid_overrides(ap, context):
+        rows.append(("SSID override", ssid, text, True))
+
+    general = _ap_part(ap, "general")
+    if general.get("ledSetting") is not None:
+        rows.append(("General", "LED", _profile_code(general["ledSetting"], _AP_SITE_SETTING_MAP),
+                     general["ledSetting"] != 2))
+    lldp = _ap_part(ap, "lldp")
+    if lldp.get("supportLldp") is not False and lldp.get("lldpEnable") is not None:
+        rows.append(("General", "LLDP", _profile_code(lldp["lldpEnable"], _AP_SITE_SETTING_MAP),
+                     lldp["lldpEnable"] != 2))
+    ps = _ap_part(ap, "powerSaving")
+    if ps.get("supportPowerSaving") is not False and ps.get("mode") is not None:
+        text = _profile_code(ps["mode"], _AP_POWER_SAVING_MAP)
+        if ps.get("timeEnable"):
+            text += (f", {ps.get('startTimeH', 0):02}:{ps.get('startTimeM', 0):02}–"
+                     f"{ps.get('endTimeH', 0):02}:{ps.get('endTimeM', 0):02}")
+        if ps.get("bandEnable"):
+            band_names = {0: "2.4 GHz", 1: "5 GHz", 2: "5 GHz-2", 3: "6 GHz"}
+            text += ", bands " + ", ".join(band_names.get(b, str(b)) for b in ps.get("bands") or [])
+        rows.append(("General", "Power saving", text, ps["mode"] != 0))
+    lb = _ap_part(ap, "loadBalance")
+    for suffix, label in (("2g", "2.4 GHz"), ("5g", "5 GHz"), ("5g2", "5 GHz-2"), ("6g", "6 GHz")):
+        parts = []
+        if lb.get(f"maxClientsEnable{suffix}"):
+            parts.append(f"max {lb.get(f'maxClients{suffix}', '')} clients")
+        if lb.get(f"rssiEnable{suffix}"):
+            parts.append(f"RSSI threshold {lb.get(f'threshold{suffix}', '')} dBm")
+        if parts:
+            rows.append(("Load balancing", label, ", ".join(parts), True))
+    qos = _ap_part(ap, "qos")
+    off = [label for suffix, label in _AP_BAND_KEYS
+           if qos.get(f"support{suffix}") and qos.get(f"deliveryEnable{suffix}") is False]
+    if off:
+        rows.append(("QoS", "U-APSD disabled on", ", ".join(off), True))
+    return rows
+
+
+def _ap_lan_port_rows(ap: dict[str, Any], context: dict[str, Any] | None) -> list[dict[str, Any]]:
+    ports = [p for p in ap.get("lanPorts") or [] if isinstance(p, dict)]
+    if not ports:
+        return []
+    by_id, by_vlan = _network_lookups(context)
+    lookup = _build_id_lookup(context)
+    downs = {}
+    for d in ap.get("wiredDownlinks") or []:
+        if isinstance(d, dict) and d.get("port") not in (None, ""):
+            downs[str(d["port"])] = d
+    rows = []
+    for p in sorted(ports, key=lambda p: (0, p["port"]) if isinstance(p.get("port"), int) else (1, str(p.get("port")))):
+        lan_port = _flatten(p.get("lanPort", ""))
+        link = p.get("linkStatus")
+        connection = "" if link is None else ("Connected" if link == 1 else "Disconnected")
+        if link == 1:
+            detail = _link_detail(p)
+            connection += f" ({detail})" if detail else ""
+        if p.get("status") is False:
+            connection = "Disabled"
+        down = downs.get(lan_port) or downs.get(str(p.get("port")))
+        device = ""
+        if down:
+            device = _flatten(down.get("deviceName") or down.get("mac", ""))
+            if down.get("downLinkPort"):
+                device += f" port {down['downLinkPort']}"
+        if p.get("custom"):
+            untagged = _resolve_ids(p.get("untaggedNetworkId") or [], lookup) or _flatten(p.get("untagged", ""))
+            tagged = _resolve_ids(p.get("taggedNetworkId") or [], lookup) or _flatten(p.get("tagged", ""))
+            vlan = f"Custom: untagged {untagged or 'none'}; tagged {tagged or 'none'}"
+        elif p.get("localVlanEnable"):
+            net = p.get("localVlanNetworkId")
+            vid = p.get("localVlanId")
+            vlan = by_id.get(str(net)) if net else None
+            vlan = vlan or by_vlan.get(str(vid)) or (f"VLAN {vid}" if vid is not None else "Enabled")
+        elif p.get("supportVlan") is False:
+            vlan = "n/a"
+        else:
+            vlan = "Default (management network)"
+        if p.get("supportPoe"):
+            poe = _enabled(p.get("poeOutEnable"))
+        else:
+            poe = "n/a"
+        rate = ""
+        if p.get("supportBandwidthControl") and p.get("bandwidthControlEnable"):
+            limits = []
+            for key, label in (("ingressRateLimit", "in"), ("egressRateLimit", "out")):
+                lim = p.get(key) if isinstance(p.get(key), dict) else {}
+                if lim.get("status"):
+                    limits.append(f"{label} {lim.get('rate', '')}")
+            rate = ", ".join(limits) or "Enabled"
+        uplink = p.get("uplinkPort") or p.get("logicUplinkPort")
+        reasons = []
+        if uplink:
+            reasons.append("uplink")
+        if link == 1:
+            reasons.append("connected")
+        if p.get("custom") or p.get("localVlanEnable"):
+            reasons.append("VLAN")
+        if p.get("supportPoe") and p.get("poeOutEnable"):
+            reasons.append("PoE out")
+        if rate:
+            reasons.append("rate limit")
+        if p.get("status") is False:
+            reasons.append("disabled")
+        if not _is_default_port_name(p.get("name"), p.get("port")) and p.get("name") not in (None, "", lan_port):
+            reasons.append("named")
+        rows.append({
+            "Port": lan_port or _flatten(p.get("port", "")),
+            "Name": _flatten(p.get("name") or ""),
+            "Role": "Uplink" if uplink else "LAN",
+            "Connection": connection,
+            "Connected Device": device,
+            "VLAN": vlan,
+            "PoE Out": poe,
+            "Rate Limit (Kbps)": rate,
+            "Carry Over": ", ".join(reasons) if reasons else "No (unused, default)",
+        })
+    return rows
+
+
+def _ap_vlan_rows(ap: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for v in ap.get("portVlans") or []:
+        if not isinstance(v, dict):
+            continue
+        rows.append({
+            "VLAN": _flatten(v.get("localVlanId", "")),
+            "Network": _flatten(v.get("name", "")),
+            "Native Ports": ", ".join(str(x) for x in v.get("nativePort") or []),
+            "Untagged Ports": ", ".join(str(x) for x in v.get("untagPort") or []),
+            "Tagged Ports": ", ".join(str(x) for x in v.get("tagPort") or []),
+        })
+    return rows
+
+
+def _ap_sheet_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """One summary row per AP: what is set on this AP specifically."""
+    rows = []
+    for ap in data if isinstance(data, list) else []:
+        if not isinstance(ap, dict):
+            continue
+        settings = _ap_settings(ap, context)
+        values = {(c, k): v for c, k, v, _ in settings}
+        lan = _ap_lan_port_rows(ap, context)
+        lan_ports = [r for r in lan if r["Role"] != "Uplink"]
+        rows.append({
+            "AP": _flatten(ap.get("deviceName", "")),
+            "Model": _flatten(ap.get("deviceModel", "")),
+            "Bands": values.get(("Hardware", "Radio bands"), ""),
+            "IP": values.get(("Management", "IP address"), ""),
+            "Management VLAN": values.get(("Management", "Management VLAN"), ""),
+            "Uplink": values.get(("Uplink", "Wired uplink"), ""),
+            "LAN Ports": (f"{len(lan_ports)} ({sum(1 for r in lan_ports if not r['Carry Over'].startswith('No'))}"
+                          " to carry over)") if lan_ports else "",
+            "SSID Overrides": str(sum(1 for c, *_ in settings if c == "SSID override")),
+            "Settings to Carry Over": str(sum(1 for *_, carry in settings if carry)),
+        })
+    return rows
+
+
+def _ap_sheet_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    sections = []
+    for ap in data if isinstance(data, list) else []:
+        if not isinstance(ap, dict):
+            continue
+        title = f"{_flatten(ap.get('deviceName', ''))} ({_flatten(ap.get('deviceModel', ''))})"
+        settings = [
+            {"Category": c, "Setting": k, "Value": v, "Carry Over": "Yes" if carry else ""}
+            for c, k, v, carry in _ap_settings(ap, context)
+        ]
+        if settings:
+            sections.append((title, settings))
+        lan = _ap_lan_port_rows(ap, context)
+        if lan:
+            sections.append((f"{title} LAN ports", lan))
+        vlans = _ap_vlan_rows(ap)
+        if vlans:
+            sections.append((f"{title} port VLANs (effective)", vlans))
+    return sections
+
+
 # --- Switch security, OUI VLANs, QoS, port labels ----------------------------------------
 
 _DOT1X_AUTH_MODE_MAP: dict[int, str] = {0: "PAP", 1: "EAP"}
@@ -4006,6 +4735,24 @@ RESOURCES: list[ResourceDefinition] = [
         sort_key="Switch",
         needs_context=True,
         detail_formatter=_switch_port_sheet_details,
+    ),
+    ResourceDefinition(
+        name="gateway_port_sheets",
+        title="Gateway Port Sheets",
+        fetch_method="get_gateway_port_sheets",
+        row_formatter=_gateway_port_sheet_rows,
+        sort_key="Gateway",
+        needs_context=True,
+        detail_formatter=_gateway_port_sheet_details,
+    ),
+    ResourceDefinition(
+        name="ap_sheets",
+        title="Access Point Sheets",
+        fetch_method="get_ap_sheets",
+        row_formatter=_ap_sheet_rows,
+        sort_key="AP",
+        needs_context=True,
+        detail_formatter=_ap_sheet_details,
     ),
     ResourceDefinition(
         name="switch_security",

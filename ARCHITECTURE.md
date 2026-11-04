@@ -196,9 +196,12 @@ computed here as well, such as per-port overrides
 (`_port_overrides()` compares each port with its profile), switch
 loop-prevention coverage, the uplink remapping checklist, the port-bound
 rule references (`_port_rule_refs()`: DHCP snooping / ARP detection / OUI-VLAN /
-QoS rules that name specific switch ports), and the per-switch port sheets
-(`switch_port_sheets`). The sheets are built entirely from other
-resources, so they also regenerate from YAML.
+QoS rules that name specific switch ports), the gateway port references
+(`_gw_port_refs()`: every setting that names a gateway port ID), and the
+replacement sheets (`switch_port_sheets`, `gateway_port_sheets`,
+`ap_sheets`). The switch and gateway sheets are built entirely from other
+resources, so they also regenerate from YAML. The AP sheet fetches its own
+per-AP settings and takes radios and SSID overrides from other resources.
 
 ---
 

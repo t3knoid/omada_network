@@ -18,6 +18,7 @@ from omada.api.openapi_client import (
     openapi_discover_site_id,
     openapi_login,
 )
+from omada.redaction import REDACTED
 
 
 # ---------------------------------------------------------------------------
@@ -1240,6 +1241,61 @@ class TestOpenApiResourceMethods:
         mock.assert_called_once_with("sites/site-001/devices")
         assert result == [{"deviceName": "Main Switch", "deviceMac": "54-AF", "deviceModel": "TL-SG2428P"}]
 
+    def test_get_gateway_port_sheets_lists_gateways(self, openapi_client: OmadaOpenApiClient) -> None:
+        devices = [
+            {"name": "Main Switch", "type": "switch", "mac": "54-AF"},
+            {"name": "GW", "type": "gateway", "mac": "6C-5A", "model": "ER605 v1.0"},
+        ]
+        with patch.object(openapi_client, "_get_paged", return_value=devices):
+            result = openapi_client.get_gateway_port_sheets("site-001")
+        assert result == [{"deviceName": "GW", "deviceMac": "6C-5A", "deviceModel": "ER605 v1.0"}]
+
+    def test_get_ap_sheets_collects_parts_and_drops_counters(self, openapi_client: OmadaOpenApiClient) -> None:
+        devices = [
+            {"name": "Office AP", "type": "ap", "mac": "34-60", "model": "EAP615-Wall"},
+            {"name": "GW", "type": "gateway", "mac": "6C-5A"},
+        ]
+        base = "sites/site-001/aps/34-60"
+        gets = {
+            f"{base}/ip-setting": {"mode": "Static", "staticIpSetting": {"configIp": "192.168.2.15"}},
+            f"{base}/vlan": {"mode": 0},
+            f"{base}/management-wlan": {"status": True, "name": "mgmt",
+                                        "pskSetting": {"securityKey": "hunter22"}},
+            f"{base}/wired-uplink": {"wiredUplink": {"name": "Main Switch", "uplinkPort": "23",
+                                                     "upBytes": 1, "downPackets": 2}},
+            f"{base}/wired-downlink": {"wiredDownlinkList": [{"port": "ETH2", "deviceName": "Printer",
+                                                              "rx": 5, "tx": 6}]},
+            f"{base}/ports": [{"port": 2, "lanPort": "ETH2", "portStatus": {"tx": 1, "rx": 2}}],
+            f"{base}/bridge": {"bridgeSsidName": "p2p", "bridgeSsidPassword": "secret123"},
+        }
+
+        def fake_get(path: str) -> object:
+            if path in gets:
+                return gets[path]
+            raise OmadaAPIError(-1600, "Unsupported")
+
+        def fake_paged(path: str) -> list:
+            if path == "sites/site-001/devices":
+                return devices
+            raise OmadaAPIError(-1600, "Unsupported")
+
+        with (
+            patch.object(openapi_client, "_get", side_effect=fake_get),
+            patch.object(openapi_client, "_get_paged", side_effect=fake_paged),
+        ):
+            result = openapi_client.get_ap_sheets("site-001")
+        assert len(result) == 1
+        ap = result[0]
+        assert ap["deviceName"] == "Office AP" and ap["deviceModel"] == "EAP615-Wall"
+        assert set(ap) == {"deviceName", "deviceMac", "deviceModel", "ipSetting", "managementVlan",
+                           "managementWlan", "wiredUplink", "wiredDownlinks", "lanPorts", "bridge"}
+        assert ap["wiredUplink"] == {"name": "Main Switch", "uplinkPort": "23"}
+        assert ap["wiredDownlinks"] == [{"port": "ETH2", "deviceName": "Printer"}]
+        assert ap["lanPorts"] == [{"port": 2, "lanPort": "ETH2"}]
+        # Credentials are redacted by default.
+        assert ap["managementWlan"]["pskSetting"]["securityKey"] == REDACTED
+        assert ap["bridge"]["bridgeSsidPassword"] == REDACTED
+
     def test_get_switch_security_collects_parts(self, openapi_client: OmadaOpenApiClient) -> None:
         gets = {
             "sites/site-001/dot1x": {"enable": True, "radiusProfileId": "r1"},
@@ -1623,6 +1679,8 @@ class TestServiceWithOpenApiClient:
         mock_client.get_oui_vlans.return_value = {}
         mock_client.get_switch_qos.return_value = {}
         mock_client.get_port_labels.return_value = []
+        mock_client.get_gateway_port_sheets.return_value = []
+        mock_client.get_ap_sheets.return_value = []
 
         service = OmadaService(
             client=mock_client,

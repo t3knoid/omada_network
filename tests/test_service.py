@@ -57,6 +57,8 @@ def mock_client() -> MagicMock:
     client.get_oui_vlans.return_value = {}
     client.get_switch_qos.return_value = {}
     client.get_port_labels.return_value = []
+    client.get_gateway_port_sheets.return_value = []
+    client.get_ap_sheets.return_value = []
     return client
 
 
@@ -116,6 +118,8 @@ def _empty_data() -> dict:
         "oui_vlans": {},
         "switch_qos": {},
         "port_labels": [],
+        "gateway_port_sheets": [],
+        "ap_sheets": [],
     }
 
 

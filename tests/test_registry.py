@@ -7,12 +7,13 @@ from pathlib import Path
 import pytest
 import yaml
 
+from omada.redaction import REDACTED
 from omada.registry import REGISTRY, RESOURCES, ResourceDefinition
 from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_forty_four_resources_defined(self) -> None:
+    def test_all_forty_six_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
@@ -55,6 +56,8 @@ class TestRegistry:
             "port_schedules",
             "uplinks",
             "switch_port_sheets",
+            "gateway_port_sheets",
+            "ap_sheets",
             "switch_security",
             "oui_vlans",
             "switch_qos",
@@ -1747,6 +1750,176 @@ class TestRowFormatters:
         from omada.registry import _switch_port_profile_details
         assert _switch_port_profile_details([]) == []
         assert _switch_port_profile_details({}) == []
+
+    # --- Gateway port sheets ---------------------------------------------------------
+
+    _GW = [{"deviceName": "GW", "deviceMac": "6C-5A", "deviceModel": "ER605 v1.0"}]
+    _WAN1 = "1_aaa"
+    _GW_CONTEXT = {
+        "device_ports": [
+            {"deviceMac": "6C-5A", "deviceType": "gateway", "port": 1, "name": "WAN", "type": 0, "mode": 0,
+             "status": 1, "linkSpeed": 0, "duplex": 0, "portStatus": {"linkStatus": 1, "linkSpeed": 3, "duplex": 2}},
+            {"deviceMac": "6C-5A", "deviceType": "gateway", "port": 2, "name": "WAN/LAN1", "type": 1, "mode": 1,
+             "status": 1, "pvid": 1, "linkSpeed": 3, "duplex": 2},
+            {"deviceMac": "6C-5A", "deviceType": "gateway", "port": 3, "name": "WAN/LAN2", "type": 1, "mode": 1,
+             "status": 1, "pvid": 1},
+            {"deviceMac": "54-AF", "deviceType": "switch", "port": 1},
+        ],
+        "gateway_settings": {"wanPortsConfig": [{
+            "portId": "1_aaa", "portName": "WAN",
+            "wanPortIpv4Setting": {"protoType": 2, "vlanId": 201, "qosTagEnable": True, "vlanPriority": 1,
+                                   "ipv4Pppoe": {"userName": "isp-user", "password": REDACTED, "mtu": 1492}},
+            "wanPortMacSetting": {"method": 1, "mac": "AA-BB-CC-00-00-01"},
+            "wanPortIpv6Setting": {"enable": True, "protoType": 1},
+        }]},
+        "networks": [
+            {"id": "n1", "name": "LAN", "vlan": 1, "interfaceIds": ["2_bbb", "3_ccc"]},
+            {"id": "n2", "name": "IoT", "vlan": 30, "interfaceIds": ["2_bbb"]},
+        ],
+        "port_forwarding": [{"name": "NAS", "status": True, "interfaceWanPortId": ["1_aaa"]}],
+        "policy_routes": [{"name": "Via WAN", "status": False, "interfaceType": 4, "wanPortIds": ["1_aaa"]}],
+        "site_to_site_vpns": [{"name": "HQ", "status": True, "wan": ["1_aaa"]}],
+        "ssl_vpn": {"setting": {"status": True, "wanPort": "1_aaa"}},
+        "wan_failover": {"loadBalance": {"linkBackup": True, "primaryWans": ["1_aaa"], "backupWan": "2_bbb"}},
+        "dns_settings": {"ddns": [{"interfacePortId": "1_aaa", "domainName": "home.example", "status": True}]},
+        "multicast_services": {"upnp": {"enable": True, "wanPortIds": ["1_aaa"]},
+                               "igmp": {"enable": False, "wanPortId": "1_aaa"}},
+        "uplinks": {"switches": [{"deviceName": "Core", "deviceModel": "TL-SG2428P", "uplink": {
+            "mac": "6C-5A", "name": "GW", "port": 24, "linkSpeed": 3, "linkPeerPortInfo": {"port": 2}}}]},
+    }
+
+    def test_wan_connection_type_codes_follow_spec(self) -> None:
+        from omada.registry import _gateway_rows
+        rows = _gateway_rows({"wanPortsConfig": [
+            {"portName": "WAN", "wanPortIpv4Setting": {"protoType": 0}},
+            {"portName": "WAN2", "wanPortIpv4Setting": {"protoType": 2}},
+        ]})
+        assert [r["Type"] for r in rows] == ["Static", "PPPoE"]
+
+    def test_gateway_port_sheet_rows(self) -> None:
+        from omada.registry import _gateway_port_sheet_rows
+        assert _gateway_port_sheet_rows(self._GW, self._GW_CONTEXT) == [{
+            "Gateway": "GW", "Model": "ER605 v1.0", "Ports": "3", "WAN Ports": "WAN", "Connected": "1",
+            "Port-Bound Rules": "8", "Must Carry Over": "2",
+        }]
+        assert _gateway_port_sheet_rows([]) == []
+
+    def test_gateway_port_sheet_details(self) -> None:
+        from omada.registry import _gateway_port_sheet_details
+        sections = dict(_gateway_port_sheet_details(self._GW, self._GW_CONTEXT))
+        ports = {r["Port"]: r for r in sections["GW (ER605 v1.0)"]}
+        assert ports["1"]["Capability"] == "WAN only"
+        assert ports["1"]["WAN Connection"] == (
+            "PPPoE, user isp-user, password configured, MTU 1492, VLAN 201 priority 1, "
+            "cloned MAC AA-BB-CC-00-00-01, IPv6 Dynamic")
+        assert ports["1"]["Rules Bound"] == "7"
+        assert ports["1"]["Carry Over"] == "WAN, connected, 7 rules"
+        assert ports["2"]["Mode"] == "LAN" and ports["2"]["LAN Networks"] == "All 2 LAN networks"
+        assert ports["3"]["LAN Networks"] == "LAN"
+        assert ports["2"]["Connected To"] == "Core port 24"
+        assert ports["2"]["Speed / Duplex"] == "1000M / Full"
+        assert ports["2"]["Carry Over"] == "downlink, 1 rule, fixed speed"
+        assert ports["3"]["Carry Over"] == "No (unused, default)"
+        assert sections["GW (ER605 v1.0) connected switches"] == [{
+            "Device": "Core", "Model": "TL-SG2428P", "Its Port": "24", "Gateway Port": "2", "Link Speed": "1000M"}]
+        checklist = sections["Port reference checklist (re-point these on the new gateway)"]
+        used = [(r["Port"], r["Used By"].split(" (")[0], r["Rule / Setting"], r["Reference"]) for r in checklist]
+        assert ("1", "Port Forwarding", "NAS", "Interface") in used
+        assert ("1", "Policy Routes", "Via WAN", "WAN binding") in used
+        assert ("1", "SSL VPN Server", "SSL VPN server", "WAN port") in used
+        assert ("1", "WAN Failover & Load Balancing", "Link backup", "Primary WAN") in used
+        assert ("2", "WAN Failover & Load Balancing", "Link backup", "Backup WAN") in used
+        assert ("1", "Multicast, Bonjour & UPnP", "UPnP", "WAN") in used
+        assert not any(r[2] == "IGMP proxy" for r in used)  # disabled feature: not a reference
+        assert ("2", "Networks", "All 2 LAN networks", "LAN networks on this port") in used
+        assert ("3", "Networks", "LAN", "LAN networks on this port") in used
+        assert used.index(("2", "Networks", "All 2 LAN networks", "LAN networks on this port")) > used.index(
+            ("2", "WAN Failover & Load Balancing", "Link backup", "Backup WAN"))
+        assert {r["Status"] for r in checklist if r["Rule / Setting"] == "Via WAN"} == {"Disabled"}
+
+    # --- Access point sheets ---------------------------------------------------------
+
+    _AP = [{
+        "deviceName": "Office AP", "deviceMac": "34-60", "deviceModel": "EAP615-Wall",
+        "ipSetting": {"mode": "Static", "staticIpSetting": {"configIp": "192.168.2.15",
+                                                            "configMask": "255.255.255.0",
+                                                            "configGate": "192.168.2.1"}},
+        "managementVlan": {"mode": 1, "lanNetworkId": "n9"},
+        "managementWlan": {"status": False},
+        "wiredUplink": {"name": "Main Switch", "uplinkPort": "23", "rate": "1000"},
+        "uplinkConfig": [{"auto": True, "port": "ETH0"}],
+        "lanPorts": [
+            {"port": 0, "lanPort": "ETH0", "uplinkPort": True, "linkStatus": 1, "linkSpeed": 3, "duplex": 2},
+            {"port": 1, "lanPort": "ETH1", "linkStatus": 1, "linkSpeed": 2, "duplex": 2, "supportVlan": True,
+             "localVlanEnable": True, "localVlanId": 30, "localVlanNetworkId": "n2",
+             "supportPoe": True, "poeOutEnable": True},
+            {"port": 2, "lanPort": "ETH2", "linkStatus": 0, "supportVlan": True, "supportPoe": False},
+        ],
+        "wiredDownlinks": [{"port": "ETH1", "deviceName": "Desk Phone"}],
+        "portVlans": [{"localVlanId": 30, "name": "IoT", "untagPort": ["ETH1"], "tagPort": []}],
+        "general": {"ledSetting": 0},
+        "lldp": {"lldpEnable": 2, "supportLldp": True},
+        "powerSaving": {"supportPowerSaving": True, "mode": 0},
+        "loadBalance": {"maxClientsEnable5g": True, "maxClients5g": 40},
+        "trunk": {"supportTrunkSetting": False},
+    }]
+    _AP_CONTEXT = {
+        "networks": [{"id": "n2", "name": "IoT", "vlan": 30}, {"id": "n9", "name": "Mgmt", "vlan": 99}],
+        "ap_radios": [{"deviceMac": "34-60", "radios": {
+            "5g": {"radioEnable": True, "channel": "0", "channelWidth": "5", "txPowerLevel": 4},
+            "2g": {"radioEnable": True, "channel": "6", "channelWidth": "2", "txPowerLevel": 3, "txPower": 18},
+        }}],
+        "ssids": [{"name": "Guest", "apOverrides": [
+            {"mac": "34-60", "name": "Office AP", "ssidEnable": False},
+            {"mac": "99-99", "name": "Other AP", "ssidEnable": False},
+        ]}],
+    }
+
+    def test_ap_sheet_rows(self) -> None:
+        from omada.registry import _ap_sheet_rows
+        assert _ap_sheet_rows(self._AP, self._AP_CONTEXT) == [{
+            "AP": "Office AP", "Model": "EAP615-Wall", "Bands": "2.4 GHz, 5 GHz",
+            "IP": "Static 192.168.2.15/255.255.255.0, gateway 192.168.2.1",
+            "Management VLAN": "Mgmt", "Uplink": "Main Switch port 23, 1000 Mbps",
+            "LAN Ports": "2 (1 to carry over)", "SSID Overrides": "1", "Settings to Carry Over": "7",
+        }]
+        assert _ap_sheet_rows([]) == []
+
+    def test_ap_sheet_details(self) -> None:
+        from omada.registry import _ap_sheet_details
+        sections = dict(_ap_sheet_details(self._AP, self._AP_CONTEXT))
+        settings = {(r["Category"], r["Setting"]): (r["Value"], r["Carry Over"])
+                    for r in sections["Office AP (EAP615-Wall)"]}
+        assert settings[("Radio", "2.4 GHz")] == ("channel 6, 20 MHz, power Custom (18 dBm)", "Yes")
+        assert settings[("Radio", "5 GHz")] == ("channel Auto, 80 MHz, power Auto", "")
+        assert settings[("SSID override", "Guest")] == ("SSID off on this AP", "Yes")
+        assert settings[("Uplink", "Uplink port selection")] == ("Auto", "")
+        assert settings[("General", "LED")] == ("Off", "Yes")
+        assert settings[("General", "LLDP")] == ("Use site settings", "")
+        assert settings[("General", "Power saving")] == ("Off", "")
+        assert settings[("Load balancing", "5 GHz")] == ("max 40 clients", "Yes")
+        assert settings[("Management", "Management SSID")] == ("Disabled", "")
+        assert ("Uplink", "Link aggregation (trunk)") not in settings  # unsupported on this model
+        lan = {r["Port"]: r for r in sections["Office AP (EAP615-Wall) LAN ports"]}
+        assert lan["ETH0"]["Role"] == "Uplink"
+        assert lan["ETH1"]["VLAN"] == "IoT" and lan["ETH1"]["Connected Device"] == "Desk Phone"
+        assert lan["ETH1"]["PoE Out"] == "Enabled"
+        assert lan["ETH1"]["Carry Over"] == "connected, VLAN, PoE out"
+        assert lan["ETH2"]["PoE Out"] == "n/a"
+        assert lan["ETH2"]["VLAN"] == "Default (management network)"
+        assert lan["ETH2"]["Carry Over"] == "No (unused, default)"
+        assert sections["Office AP (EAP615-Wall) port VLANs (effective)"] == [{
+            "VLAN": "30", "Network": "IoT", "Native Ports": "", "Untagged Ports": "ETH1", "Tagged Ports": ""}]
+
+    def test_ap_sheet_dhcp_reservation_and_mgmt_ssid(self) -> None:
+        from omada.registry import _ap_sheet_details
+        ap = {"deviceName": "AP", "deviceModel": "EAP620",
+              "ipSetting": {"mode": "DHCP", "dhcpIpSetting": {"useFixedAddr": True, "dhcpIp": "192.168.2.20"}},
+              "managementWlan": {"status": True, "name": "mgmt", "security": 3,
+                                 "pskSetting": {"securityKey": REDACTED}}}
+        rows = {r["Setting"]: (r["Value"], r["Carry Over"]) for r in dict(_ap_sheet_details([ap]))["AP (EAP620)"]}
+        assert rows["IP address"] == ("DHCP, reserved 192.168.2.20", "Yes")
+        assert rows["Management SSID"] == ("Enabled: mgmt, WPA-Personal, key configured", "Yes")
 
 
 class TestGenerateFromYaml:
