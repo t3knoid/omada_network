@@ -8,8 +8,9 @@ extract network configuration data into YAML files (source of truth) and
 generate Markdown documentation tables.
 
 Use it to document a site, review changes over time (the YAML diffs cleanly),
-or keep a reference copy of the configuration before migrating or replacing
-hardware. It is **read-only**: nothing on the controller is changed.
+check a configuration before and after an upgrade, or keep a reference copy
+of the settings before migrating or replacing hardware. It is **read-only**:
+nothing on the controller is changed. See [Practical use](#practical-use).
 
 It can be run from a **CLI** (suited to scripts and CI) or a **web UI**. It
 supports both official Open API authentication modes:
@@ -649,7 +650,143 @@ docs/
 `.yaml` files, so you can edit or version the YAML and regenerate the docs
 offline.
 
-### Replacing a switch
+### Example – DHCP Reservations Markdown
+
+```markdown
+# DHCP Reservations
+
+| Network | IP Address | MAC Address | Name | Description | Options | Status | Server |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| LAN | 192.168.1.50 | AA-BB-CC-DD-EE-FF | printer | Office printer |  | Enabled | Gateway |
+| LAN | 192.168.1.120 | 11-22-33-44-55-66 | nas |  | Option 66: 192.168.1.10 | Enabled | Gateway |
+```
+
+Resources with more settings than fit in one table, such as port profiles,
+SSIDs, DHCP scopes, VPN tunnels and switch settings, add a detail section per
+item below the summary table (Category / Setting / Value).
+
+---
+
+## Practical use
+
+The tool takes a written "picture" of a site. Run `fetch`, read or share the
+Markdown, keep the YAML. These are the common ways to use it.
+
+### Document a site
+
+Run `fetch` once and open the output in the web UI (or any Markdown viewer).
+Good places to start:
+
+| Question | File |
+| --- | --- |
+| What hardware is there, on which firmware? | `devices.md` |
+| Which networks / VLANs exist and how is DHCP set up? | `networks.md`, `dhcp_scopes.md`, `dhcp_reservations.md` |
+| What is plugged into which switch port? | `device_ports.md`, `switch_port_sheets.md` |
+| How do the switches, gateway and APs connect? | `uplinks.md` |
+| What Wi-Fi is broadcast, with which security and VLAN? | `ssids.md` |
+| What is open to the internet? | `port_forwarding.md`, `one_to_one_nat.md`, `acl_rules.md` |
+| How does remote access work? | `remote_access_vpns.md`, `wireguard.md`, `ssl_vpn.md` |
+
+Secrets are redacted by default, so the output can be handed to a colleague,
+a consultant or a support ticket. It still contains IP addresses, MAC
+addresses, device names and network layout, so share it on a need-to-know
+basis. In the web UI, tick the files you need and use **Download Selected**
+to get a ZIP.
+
+### Track changes over time
+
+The YAML is the raw API data written with sorted keys, so a diff shows what
+was changed rather than what moved. Write the output to a folder
+under version control and commit after each run:
+
+```bash
+# One-time setup: a separate repository for the exports
+# (this repository's docs/ is gitignored on purpose)
+git init ~/omada-config
+
+# Each run
+python cli.py fetch --output-dir ~/omada-config
+cd ~/omada-config && git add -A && git commit -m "Omada export $(date +%F)"
+git log --stat          # which resources changed, and when
+git diff HEAD~1         # exactly what changed since the last run
+```
+
+Some resources are runtime snapshots and change on most runs: DHCP leases,
+device status and the WAN health table. Ignore those when looking for
+configuration changes, or review the diff file by file.
+
+To run it on a schedule, put the credentials in the environment rather than on
+the command line, then call the same two steps from cron (Linux / macOS) or
+Task Scheduler (Windows):
+
+```bash
+# /etc/cron.d/omada-export — every night at 02:00
+0 2 * * * omada . /etc/omada-export.env && cd /opt/omada_network && python cli.py fetch --output-dir /srv/omada-config && cd /srv/omada-config && git add -A && git commit -qm "Omada export $(date +\%F)"
+```
+
+where `/etc/omada-export.env` (readable only by that user) exports
+`OMADA_CONTROLLER`, `OMADA_CLIENT_ID`, `OMADA_CLIENT_SECRET` and, for a
+multi-site controller, `OMADA_SITE_NAME`. Use one run per site.
+
+### Before and after a change
+
+Before a firmware upgrade, a controller migration, or a reconfiguration, run
+`fetch` and keep the result. Run it again afterwards and compare. With the
+git setup above, that is `git diff`. Without it, copy the folder first and
+compare the two copies:
+
+```bash
+python cli.py fetch --output-dir before
+# … make the change …
+python cli.py fetch --output-dir after
+diff -r "before/My Office" "after/My Office"
+```
+
+A setting that disappeared or reset to its default after an upgrade shows up
+as a removed or changed line in the YAML.
+
+### Review the configuration
+
+The Markdown resolves IDs to names and codes to labels, which makes it
+practical to read the configuration end to end instead of clicking through the
+controller. Things worth checking:
+
+- **Exposure:** every port forward and one-to-one NAT rule, and whether it is
+  still needed (`port_forwarding.md`, `one_to_one_nat.md`).
+- **Wi-Fi security:** SSIDs still on WPA2 / open, guest networks without
+  isolation, SSIDs on the wrong VLAN (`ssids.md`, `portals.md`).
+- **Segmentation:** which networks the ACLs actually separate
+  (`acl_rules.md`, `networks.md`).
+- **Leftovers:** unused port profiles, IP groups, VPN users and DHCP
+  reservations for devices that are gone.
+- **Consistency:** switches with different management VLAN, STP or LLDP
+  settings (`switch_settings.md`), ports with settings that differ from their
+  profile (`device_ports.md`).
+
+### Keep a complete written record
+
+`--include-secrets` (or **Include secrets** in the web UI) also writes Wi-Fi
+passphrases, VPN keys, RADIUS secrets and other credentials in plaintext. Use
+it when you need a record you could rebuild the site from by hand, for
+example before resetting a controller. Store that output encrypted or offline
+and do not commit it to a shared repository.
+
+This tool only reads. It cannot push a configuration back. To restore a
+controller, use the controller's own backup (**Settings → Maintenance →
+Backup & Restore** in the Omada UI; labels vary slightly between versions). The export is the readable companion to
+that backup: it tells you what the backup contains and what to check after
+restoring it.
+
+### Replace hardware
+
+Omada can move settings from an old device to a new one of the same kind. It
+cannot decide where things go when the new model has a different number or
+layout of ports. For that, the export has one printable sheet per device:
+what each port does, what is plugged in, which settings were set by hand, and
+which site rules point at that specific port. Run a fresh `fetch` just before
+the swap and keep the output.
+
+#### Replacing a switch
 
 Omada can transfer settings to a replacement device. When the new switch has
 **fewer ports** (or a different port layout), use `switch_port_sheets.md` to
@@ -676,7 +813,7 @@ reconfigure it by hand:
 Site-wide settings (networks, profiles, ACLs, DHCP, …) stay in the controller
 and aren't affected by the swap.
 
-### Replacing a gateway
+#### Replacing a gateway
 
 On a gateway, many site settings point at a **WAN port by ID** (for example
 `1_<uuid>`, where the prefix is the port number): port forwarding, one-to-one
@@ -700,7 +837,7 @@ a missing port stop working. Use `gateway_port_sheets.md`:
    in the file where it lives, that references a gateway port. Re-select the
    right port in each one on the new gateway.
 
-### Replacing an access point
+#### Replacing an access point
 
 SSIDs and most wireless settings are site-wide and follow automatically. The
 settings in `ap_sheets.md` belong to one AP and are lost when you swap it
@@ -721,20 +858,14 @@ for a different model. Rows marked **Carry Over** were set by hand:
 Each AP needs about 15 API calls, so on a large site this resource takes a
 while to fetch.
 
-### Example – DHCP Reservations Markdown
+### When an export looks wrong
 
-```markdown
-# DHCP Reservations
-
-| Network | IP Address | MAC Address | Name | Description | Options | Status | Server |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| LAN | 192.168.1.50 | AA-BB-CC-DD-EE-FF | printer | Office printer |  | Enabled | Gateway |
-| LAN | 192.168.1.120 | 11-22-33-44-55-66 | nas |  | Option 66: 192.168.1.10 | Enabled | Gateway |
-```
-
-Resources with more settings than fit in one table, such as port profiles,
-SSIDs, DHCP scopes, VPN tunnels and switch settings, add a detail section per
-item below the summary table (Category / Setting / Value).
+If a file is empty or a setting you expect is missing, run `diagnose`. It
+shows, per resource, how many records the controller returned and which
+fields they have, without printing any values. A resource that errors
+usually means the controller version or the Open API application's
+permissions don't cover that endpoint. Re-run with `-v` for the full API
+log.
 
 ---
 
