@@ -20,6 +20,7 @@ OMADA_INCLUDE_SECRETS → --include-secrets (export credentials in plaintext)
 OMADA_LOG_LEVEL       → --log-level  (DEBUG, INFO, WARNING, ERROR)
 OMADA_LOG_FILE        → --log-file   (path to log file; enables file logging)
 OMADA_LOG_FORMAT      → log format string (default: "%(levelname)s %(message)s")
+OMADA_REQUEST_INTERVAL → minimum seconds between API calls (default: 0.2)
 
 Authentication modes (both use the official Omada Open API)
 -----------------------------------------------------------

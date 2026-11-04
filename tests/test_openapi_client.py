@@ -433,6 +433,122 @@ class TestOpenApiClientGet:
         assert len(items) == 3
 
 
+class TestRateLimiting:
+    """Omada answers too many requests with errorCode -7132 (or HTTP 429)."""
+
+    _LIMITED = {"errorCode": -7132, "msg": "Our server is receiving too many requests now. Please try again later."}
+
+    @staticmethod
+    def _record_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+        """Record waits on a fake clock that sleeping moves forward."""
+        sleeps: list[float] = []
+        now = [1000.0]
+
+        def sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            now[0] += seconds
+
+        monkeypatch.setattr("omada.api.openapi_client._sleep", sleep)
+        monkeypatch.setattr("omada.api.openapi_client._monotonic", lambda: now[0])
+        return sleeps
+
+    def test_retries_rate_limited_call_with_backoff_and_slows_down(
+        self, openapi_client: OmadaOpenApiClient, monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        openapi_client.request_interval = 0.0
+        sleeps = self._record_sleeps(monkeypatch)
+        ok = _mock_response({"errorCode": 0, "result": [{"id": "1"}]})
+        with (
+            patch.object(openapi_client._session, "get",
+                         side_effect=[_mock_response(self._LIMITED), _mock_response(self._LIMITED), ok]) as get,
+            caplog.at_level(logging.WARNING, logger="omada.api.openapi_client"),
+        ):
+            assert openapi_client._get("sites/s1/devices") == [{"id": "1"}]
+        assert get.call_count == 3
+        assert sleeps == [2.0, 4.0]  # exponential backoff
+        assert openapi_client.request_interval >= 0.5  # later calls are spaced further apart
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1  # warned once, not on every retry
+
+    def test_http_429_honours_retry_after(
+        self, openapi_client: OmadaOpenApiClient, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        openapi_client.request_interval = 0.0
+        sleeps = self._record_sleeps(monkeypatch)
+        limited = _mock_response({}, status_code=429)
+        limited.headers = {"Retry-After": "7"}
+        ok = _mock_response({"errorCode": 0, "result": {"ok": True}})
+        with patch.object(openapi_client._session, "get", side_effect=[limited, ok]):
+            assert openapi_client._get("sites/s1/x") == {"ok": True}
+        assert sleeps == [7.0]
+        limited.raise_for_status.assert_not_called()
+
+    def test_gives_up_after_retries(self, openapi_client: OmadaOpenApiClient) -> None:
+        from omada.api.openapi_client import RATE_LIMIT_RETRIES
+        with patch.object(openapi_client._session, "get", return_value=_mock_response(self._LIMITED)) as get:
+            with pytest.raises(OmadaAPIError) as exc_info:
+                openapi_client._get("sites/s1/x")
+        assert exc_info.value.error_code == -7132
+        assert get.call_count == RATE_LIMIT_RETRIES + 1
+        assert "OMADA_REQUEST_INTERVAL" in str(exc_info.value)
+
+    def test_post_queries_are_retried(self, openapi_client: OmadaOpenApiClient) -> None:
+        ok = _mock_response({"errorCode": 0, "result": {"data": []}})
+        with patch.object(openapi_client._session, "post", side_effect=[_mock_response(self._LIMITED), ok]) as post:
+            assert openapi_client._post("sites/s1/switches/ports/select", {}) == {"data": []}
+        assert post.call_count == 2
+
+    def test_other_errors_are_not_retried(self, openapi_client: OmadaOpenApiClient) -> None:
+        with patch.object(openapi_client._session, "get",
+                          return_value=_mock_response({"errorCode": -1600, "msg": "Unsupported"})) as get:
+            with pytest.raises(OmadaAPIError):
+                openapi_client._get("sites/s1/x")
+        assert get.call_count == 1
+
+    def test_calls_are_spaced_by_request_interval(
+        self, openapi_client: OmadaOpenApiClient, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sleeps = self._record_sleeps(monkeypatch)
+        clock = iter([100.0, 100.05, 100.2])
+        monkeypatch.setattr("omada.api.openapi_client._monotonic", lambda: next(clock))
+        openapi_client.request_interval = 0.2
+        ok = _mock_response({"errorCode": 0, "result": []})
+        with patch.object(openapi_client._session, "get", return_value=ok):
+            openapi_client._get("a")  # first call: no wait
+            openapi_client._get("b")  # 0.05s later: waits the remaining 0.15s
+        assert sleeps == [pytest.approx(0.15)]
+
+    def test_request_interval_from_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def make() -> OmadaOpenApiClient:
+            return OmadaOpenApiClient("https://c", "id", "tok", verify_ssl=True)
+
+        monkeypatch.delenv("OMADA_REQUEST_INTERVAL", raising=False)
+        assert make().request_interval == 0.2
+        monkeypatch.setenv("OMADA_REQUEST_INTERVAL", "0.5")
+        assert make().request_interval == 0.5
+        monkeypatch.setenv("OMADA_REQUEST_INTERVAL", "fast")
+        assert make().request_interval == 0.2
+        assert OmadaOpenApiClient("https://c", "id", "tok", request_interval=0).request_interval == 0
+
+    def test_login_is_retried_when_rate_limited(self) -> None:
+        ok = _mock_response({"errorCode": 0, "result": {"accessToken": "abc"}})
+        with patch("omada.api.openapi_client._make_session") as factory:
+            sess = MagicMock(spec=requests.Session)
+            sess.post.side_effect = [_mock_response(self._LIMITED), ok]
+            sess.headers = {}
+            factory.return_value = sess
+            result = openapi_login("https://c", "id", "cid", "secret")
+        assert result.access_token == "abc" and sess.post.call_count == 2
+
+    def test_site_discovery_is_retried_when_rate_limited(self) -> None:
+        sites = _mock_response({"errorCode": 0, "result": {"data": [{"siteId": "s1", "name": "Office"}]}})
+        sess = MagicMock(spec=requests.Session)
+        sess.get.side_effect = [_mock_response(self._LIMITED), sites]
+        assert openapi_discover_site("https://c", "id", sess)[0] == "s1"
+        assert sess.get.call_count == 2
+
+
 # ---------------------------------------------------------------------------
 # Resource method tests
 # ---------------------------------------------------------------------------

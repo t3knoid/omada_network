@@ -18,3 +18,9 @@ def _block_real_network(monkeypatch: pytest.MonkeyPatch) -> None:
         raise requests.ConnectionError("Network access is disabled in tests")
 
     monkeypatch.setattr(requests.Session, "send", _no_network)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Request pacing and rate-limit backoff don't actually sleep in tests."""
+    monkeypatch.setattr("omada.api.openapi_client._sleep", lambda seconds: None)

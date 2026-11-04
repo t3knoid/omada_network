@@ -57,7 +57,9 @@ python -m pytest tests/ -v
 
 An autouse fixture, `_block_real_network`, makes any unstubbed HTTP request
 raise `requests.ConnectionError` immediately, so a test that forgets to mock
-an endpoint fails fast instead of waiting for a network timeout.
+an endpoint fails fast instead of waiting for a network timeout. A second
+one, `_no_real_waiting`, replaces the client's sleep so request pacing and
+rate-limit backoff never slow the suite down.
 
 ---
 
@@ -182,6 +184,15 @@ Omada Open API client tests.
 | | `test_get_paged_multiple_pages` | Paged GET retrieves multiple pages |
 | | `test_get_paged_result_is_list` | Handles result returned as a plain list |
 | | `test_get_paged_stops_at_max_pages` | Stops pagination at `max_pages` limit |
+| `TestRateLimiting` | `test_retries_rate_limited_call_with_backoff_and_slows_down` | `-7132` is retried with exponential backoff, widens the request interval, and warns once |
+| | `test_http_429_honours_retry_after` | HTTP 429 waits for `Retry-After` and retries |
+| | `test_gives_up_after_retries` | Still rate limited after every retry raises `OmadaAPIError -7132` with a hint |
+| | `test_post_queries_are_retried` | Read-only POST queries are retried too |
+| | `test_other_errors_are_not_retried` | Other error codes fail on the first response |
+| | `test_calls_are_spaced_by_request_interval` | Consecutive calls wait for the remainder of the interval |
+| | `test_request_interval_from_environment` | `OMADA_REQUEST_INTERVAL` sets the interval; invalid values fall back to 0.2s |
+| | `test_login_is_retried_when_rate_limited` | The token request is retried when rate limited |
+| | `test_site_discovery_is_retried_when_rate_limited` | Site discovery is retried when rate limited |
 | `TestOpenApiResourceMethods` | `test_get_acl_rules` | Fetches and tags gateway/switch ACL rules |
 | | `test_get_acl_rules_gateway_fails` | Falls back when gateway ACL endpoint is unsupported |
 | | `test_get_ip_groups` | Fetches IP groups |

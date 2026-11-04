@@ -22,6 +22,8 @@ This module also provides:
 from __future__ import annotations
 
 import logging
+import os
+import time
 import warnings
 from dataclasses import dataclass
 from typing import Any
@@ -45,6 +47,88 @@ class OmadaAPIError(Exception):
     def __init__(self, error_code: int, message: str) -> None:
         self.error_code = error_code
         super().__init__(f"Omada API error {error_code}: {message}")
+
+
+#: Omada's "too many requests" error code (its API rate limit).
+RATE_LIMIT_ERROR_CODE = -7132
+#: Default minimum gap between API calls, in seconds (``OMADA_REQUEST_INTERVAL``).
+DEFAULT_REQUEST_INTERVAL = 0.2
+#: The gap never grows beyond this, however often the controller pushes back.
+MAX_REQUEST_INTERVAL = 2.0
+#: Retries of one call after a rate-limit response before giving up.
+RATE_LIMIT_RETRIES = 6
+#: First backoff delay in seconds; doubled on each retry, capped below.
+RATE_LIMIT_BACKOFF = 2.0
+RATE_LIMIT_MAX_BACKOFF = 60.0
+
+# Indirection so tests can skip real waiting.
+_sleep = time.sleep
+_monotonic = time.monotonic
+
+
+def _request_interval_from_env() -> float:
+    raw = os.environ.get("OMADA_REQUEST_INTERVAL", "").strip()
+    if not raw:
+        return DEFAULT_REQUEST_INTERVAL
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        logger.warning("Ignoring OMADA_REQUEST_INTERVAL=%r (not a number); using %.1fs",
+                       raw, DEFAULT_REQUEST_INTERVAL)
+        return DEFAULT_REQUEST_INTERVAL
+
+
+def _retry_after(resp: requests.Response) -> float | None:
+    """Seconds from a numeric ``Retry-After`` header, if the server sent one."""
+    try:
+        value = float(resp.headers.get("Retry-After", ""))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return value if value >= 0 else None
+
+
+def _send_with_rate_limit(
+    label: str,
+    send: Any,
+    on_limited: Any = None,
+) -> requests.Response:
+    """Call *send()* until the controller stops answering "too many requests".
+
+    Omada rate-limits its API and answers with ``errorCode -7132`` (or HTTP
+    429).  Those responses are retried up to :data:`RATE_LIMIT_RETRIES` times
+    with exponential backoff, honouring a ``Retry-After`` header.  Any other
+    response, success or error, is returned to the caller unchanged.
+    *on_limited(attempt, wait)* is called before each wait; by default a
+    warning is logged.
+    """
+    delay = RATE_LIMIT_BACKOFF
+    for attempt in range(1, RATE_LIMIT_RETRIES + 2):
+        resp = send()
+        message = "too many requests"
+        if resp.status_code != 429:
+            try:
+                body = resp.json()
+            except ValueError:
+                return resp
+            if not (isinstance(body, dict) and body.get("errorCode") == RATE_LIMIT_ERROR_CODE):
+                return resp
+            message = body.get("msg", message)
+        if attempt > RATE_LIMIT_RETRIES:
+            raise OmadaAPIError(
+                RATE_LIMIT_ERROR_CODE,
+                f"{message} (still rate limited after {RATE_LIMIT_RETRIES} retries; "
+                "wait a few minutes, or raise OMADA_REQUEST_INTERVAL)",
+            )
+        hint = _retry_after(resp)
+        wait = min(RATE_LIMIT_MAX_BACKOFF, delay if hint is None else max(hint, delay))
+        if on_limited is not None:
+            on_limited(attempt, wait)
+        else:
+            logger.warning("Controller rate limit hit on %s; retrying in %.0fs (attempt %d of %d)",
+                           label, wait, attempt, RATE_LIMIT_RETRIES)
+        _sleep(wait)
+        delay = min(RATE_LIMIT_MAX_BACKOFF, delay * 2)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _make_session(verify_ssl: bool, base_url: str) -> requests.Session:
@@ -74,7 +158,7 @@ def discover_controller_id(
     """
     url = base_url.rstrip("/") + "/api/info"
     sess = _make_session(verify_ssl, base_url)
-    resp = sess.get(url, timeout=timeout)
+    resp = _send_with_rate_limit("/api/info", lambda: sess.get(url, timeout=timeout))
     resp.raise_for_status()
     body = resp.json()
     error_code = body.get("errorCode", -1)
@@ -130,7 +214,7 @@ def openapi_login(
     base = base_url.rstrip("/")
     token_url = f"{base}/openapi/authorize/token"
 
-    resp = sess.post(
+    resp = _send_with_rate_limit("token", lambda: sess.post(
         token_url,
         params={"grant_type": "client_credentials"},
         json={
@@ -139,7 +223,7 @@ def openapi_login(
             "client_secret": client_secret,
         },
         timeout=timeout,
-    )
+    ))
     resp.raise_for_status()
     body = resp.json()
 
@@ -196,12 +280,12 @@ def openapi_auth_code_login(
 
     # Step 1 — Login
     login_url = f"{base}/openapi/authorize/login"
-    login_resp = sess.post(
+    login_resp = _send_with_rate_limit("login", lambda: sess.post(
         login_url,
         params={"client_id": client_id, "omadacId": omadac_id},
         json={"username": username, "password": password},
         timeout=timeout,
-    )
+    ))
     login_resp.raise_for_status()
     login_body = login_resp.json()
 
@@ -219,7 +303,7 @@ def openapi_auth_code_login(
 
     # Step 2 — Obtain authorization code
     code_url = f"{base}/openapi/authorize/code"
-    code_resp = sess.post(
+    code_resp = _send_with_rate_limit("authorize code", lambda: sess.post(
         code_url,
         params={
             "client_id": client_id,
@@ -231,7 +315,7 @@ def openapi_auth_code_login(
             "Cookie": f"TPOMADA_SESSIONID={session_id}",
         },
         timeout=timeout,
-    )
+    ))
     code_resp.raise_for_status()
     code_body = code_resp.json()
 
@@ -247,7 +331,7 @@ def openapi_auth_code_login(
 
     # Step 3 — Exchange authorization code for access token
     token_url = f"{base}/openapi/authorize/token"
-    token_resp = sess.post(
+    token_resp = _send_with_rate_limit("token", lambda: sess.post(
         token_url,
         params={
             "grant_type": "authorization_code",
@@ -259,7 +343,7 @@ def openapi_auth_code_login(
             "client_secret": client_secret,
         },
         timeout=timeout,
-    )
+    ))
     token_resp.raise_for_status()
     token_body = token_resp.json()
 
@@ -311,7 +395,7 @@ def openapi_discover_site(
         f"{base_url.rstrip('/')}/openapi/v1/{omadac_id}/sites"
         "?page=1&pageSize=1000"
     )
-    resp = session.get(url, timeout=timeout)
+    resp = _send_with_rate_limit("sites", lambda: session.get(url, timeout=timeout))
     resp.raise_for_status()
     body = resp.json()
 
@@ -442,8 +526,17 @@ class OmadaOpenApiClient:
         verify_ssl: bool = True,
         timeout: int = 30,
         session: requests.Session | None = None,
+        request_interval: float | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
+        #: Minimum seconds between API calls.  Starts at *request_interval*
+        #: (default ``$OMADA_REQUEST_INTERVAL`` or 0.2s) and widens when the
+        #: controller answers "too many requests".
+        self.request_interval = (
+            _request_interval_from_env() if request_interval is None else max(0.0, request_interval)
+        )
+        self._last_request: float | None = None
+        self._rate_limit_warned = False
         self.omadac_id = omadac_id
         #: When True, credentials are returned as-is instead of redacted.
         #: Set via ``OmadaService(include_secrets=True)``.
@@ -482,6 +575,65 @@ class OmadaOpenApiClient:
         relative = path.lstrip("/")
         return urljoin(self.base_url + prefix, relative)
 
+    def _throttle(self) -> None:
+        """Wait until at least :attr:`request_interval` has passed since the last call."""
+        if self._last_request is not None and self.request_interval > 0:
+            wait = self._last_request + self.request_interval - _monotonic()
+            if wait > 0:
+                _sleep(wait)
+        self._last_request = _monotonic()
+
+    def _on_rate_limited(self, path: str, attempt: int, delay: float) -> None:
+        """Slow down for the rest of the run and log the first occurrence."""
+        self.request_interval = min(MAX_REQUEST_INTERVAL, max(self.request_interval * 2, 0.5))
+        log = logger.debug if self._rate_limit_warned else logger.warning
+        self._rate_limit_warned = True
+        log(
+            "Controller rate limit hit on %s; waiting %.0fs and retrying (attempt %d of %d). "
+            "Calls are now spaced %.1fs apart.",
+            path, delay, attempt, RATE_LIMIT_RETRIES, self.request_interval,
+        )
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
+        api_version: str = "v1",
+    ) -> dict[str, Any]:
+        """Send one paced API call, retried while rate limited; return the body.
+
+        Every call waits for :attr:`request_interval` since the previous one.
+        A "too many requests" answer is retried with backoff (see
+        :func:`_send_with_rate_limit`) and widens the interval for the rest of
+        the run, so a long export finishes instead of losing resources.
+        """
+        url = self._api_url(path, api_version=api_version)
+
+        def send() -> requests.Response:
+            self._throttle()
+            if method == "POST":
+                logger.debug("OPENAPI POST %s", url)
+                return self._session.post(url, json=payload, timeout=self.timeout)
+            logger.debug("OPENAPI GET %s params=%s", url, params)
+            return self._session.get(url, params=params or {}, timeout=self.timeout)
+
+        resp = _send_with_rate_limit(
+            path, send, lambda attempt, wait: self._on_rate_limited(path, attempt, wait),
+        )
+        resp.raise_for_status()
+        body: dict[str, Any] = resp.json()
+        logger.debug(
+            "OpenAPI response for %s: status=%d, body keys=%s",
+            path, resp.status_code,
+            list(body.keys()) if isinstance(body, dict) else type(body).__name__,
+        )
+        if isinstance(body, dict) and "errorCode" in body and body["errorCode"] != 0:
+            raise OmadaAPIError(body["errorCode"], body.get("msg", "unknown error"))
+        return body
+
     def _get(
         self,
         path: str,
@@ -490,25 +642,7 @@ class OmadaOpenApiClient:
         api_version: str = "v1",
     ) -> Any:
         """Perform a GET request and return the ``result`` payload."""
-        url = self._api_url(path, api_version=api_version)
-        logger.debug("OPENAPI GET %s params=%s", url, params)
-        resp = self._session.get(
-            url, params=params or {}, timeout=self.timeout,
-        )
-        resp.raise_for_status()
-        body: dict[str, Any] = resp.json()
-
-        logger.debug(
-            "OpenAPI response for %s: status=%d, body keys=%s",
-            path, resp.status_code,
-            list(body.keys()) if isinstance(body, dict) else type(body).__name__,
-        )
-
-        if "errorCode" in body:
-            error_code: int = body["errorCode"]
-            if error_code != 0:
-                raise OmadaAPIError(error_code, body.get("msg", "unknown error"))
-
+        body = self._request("GET", path, params=params, api_version=api_version)
         result = body.get("result", body)
         if isinstance(result, dict):
             logger.debug("OpenAPI result for %s: keys=%s", path, list(result.keys()))
@@ -522,13 +656,7 @@ class OmadaOpenApiClient:
         Only used for Open API endpoints that take their query in the body
         (e.g. ``switches/ports/select``); nothing is modified.
         """
-        url = self._api_url(path, api_version=api_version)
-        logger.debug("OPENAPI POST %s", url)
-        resp = self._session.post(url, json=payload, timeout=self.timeout)
-        resp.raise_for_status()
-        body: dict[str, Any] = resp.json()
-        if "errorCode" in body and body["errorCode"] != 0:
-            raise OmadaAPIError(body["errorCode"], body.get("msg", "unknown error"))
+        body = self._request("POST", path, payload=payload, api_version=api_version)
         return body.get("result", body)
 
     def _get_paged(

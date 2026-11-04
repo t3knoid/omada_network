@@ -450,6 +450,16 @@ or `max_pages` (default 200) is reached.
 
 ## Error Handling & Resilience
 
+**Rate limiting** — the controller rate-limits the Open API and answers
+`errorCode -7132` ("too many requests") or HTTP 429. `OmadaOpenApiClient`
+spaces every call at least `request_interval` apart (0.2s, or
+`OMADA_REQUEST_INTERVAL`). `_send_with_rate_limit()` retries a rate-limited
+response up to 6 times with exponential backoff (2s, 4s, … up to 60s,
+honouring `Retry-After`) and, in the client, doubles the interval for the
+rest of the run (capped at 2s). Login, controller-ID and site discovery
+calls use the same helper. Only after every retry fails is the error
+raised, so the resource is recorded as failed rather than silently empty.
+
 **Per-resource isolation** — `OmadaService.fetch_all()` catches exceptions
 per resource and records the failure. Remaining resources continue. A summary
 of failures is logged at the end.

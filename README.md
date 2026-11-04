@@ -408,6 +408,32 @@ python cli.py fetch ...
 > `logs/` subdirectory).  These scripts are intended for local development
 > only.
 
+### API rate limiting
+
+The controller limits how fast the Open API can be called. Past that limit it
+answers *"Omada API error -7132: Our server is receiving too many requests
+now"*. The tool stays under it on its own:
+
+- Calls are spaced at least **0.2 s** apart (about 5 per second).
+- A rate-limited call is retried up to 6 times, waiting 2 s, 4 s, 8 s … (up
+  to 60 s, or what the controller asks for), and all later calls in that run
+  are spaced further apart (up to 2 s). The first occurrence is logged as a
+  warning.
+- Login and site discovery are retried the same way.
+
+A full export of a large site therefore takes longer than it would without
+pacing, but it doesn't lose resources part way through. If you still see
+`-7132` (for example when several tools share the same controller), raise the
+interval:
+
+| Parameter | CLI Option | Environment Variable | Default |
+| --- | --- | --- | --- |
+| Minimum seconds between API calls | — | `OMADA_REQUEST_INTERVAL` | `0.2` |
+
+```bash
+OMADA_REQUEST_INTERVAL=0.5 python cli.py fetch ...
+```
+
 ### Auto-discovery
 
 Both modes automatically discover:
@@ -862,7 +888,7 @@ incomplete)** table naming each part, and `fetch` logs a warning. Check
 those settings on the old AP in the controller UI before the swap.
 
 Each AP needs about 15 API calls, so on a large site this resource takes a
-while to fetch.
+while to fetch (see [API rate limiting](#api-rate-limiting)).
 
 ### When an export looks wrong
 
