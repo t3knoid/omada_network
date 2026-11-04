@@ -199,6 +199,8 @@ Omada Open API client tests.
 | | `test_get_ssids` | Fetches SSIDs with WLAN group names |
 | | `test_get_ssids_no_wlans` | Returns empty list when WLAN endpoint fails |
 | | `test_get_switch_port_sheets_lists_switches` | Lists the switches that get a port sheet |
+| | `test_get_switch_security_collects_parts` | Collects 802.1X, MAC auth, DHCP snooping, ARP detection, IP-MAC binding (best-effort) |
+| | `test_get_oui_vlans_qos_and_port_labels` | Fetches OUI VLAN rules / profiles, switch QoS, and port labels |
 | | `test_get_uplinks_switch_detail_fallback_and_stacks` | Uplinks/downlinks from switch-detail, port-select fallback, stack members |
 | | `test_get_uplinks_no_switches` | No switch lookups when the site has no switches |
 | | `test_post_returns_result_and_raises_on_error` | Read-only POST helper returns `result` and raises on API errors |
@@ -260,7 +262,7 @@ Resource registry and `generate_from_yaml` tests.
 
 | Class | Test | Description |
 | --- | --- | --- |
-| `TestRegistry` | `test_all_forty_resources_defined` | All 40 resource types are registered |
+| `TestRegistry` | `test_all_forty_four_resources_defined` | All 44 resource types are registered |
 | | `test_registry_lookup_matches_resources` | Registry lookup matches `RESOURCES` list |
 | | `test_all_definitions_are_resource_definition` | All entries are `ResourceDefinition` instances |
 | | `test_all_row_formatters_callable` | All row formatters are callable |
@@ -324,6 +326,11 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_switch_port_sheet_rows_summarize_carry_over` | Per-switch summary: ports, connected, custom settings, ports to carry over (SFP / PoE) |
 | | `test_switch_port_sheet_details_per_port` | Per-port sheet: VLANs, PoE, speed, LAG, connected device, manual settings, carry-over reason |
 | | `test_port_connection_ignores_placeholder_port_status` | No negotiated speed shown when `portStatus` reports link down |
+| | `test_port_rule_refs_and_sheet_rules_column` | Port-bound DHCP snooping / ARP detection / OUI / QoS rules (LAGs expanded) appear on the port sheet and force carry-over |
+| | `test_switch_security_rows_and_details` | 802.1X, MAC auth, DHCP snooping, ARP detection, IP-MAC binding settings and per-switch tables |
+| | `test_oui_vlan_rows_and_profiles` | OUI-based VLAN rules with target ports, VLAN / priority, and OUI profiles |
+| | `test_switch_qos_rows_and_details` | QoS rules in index order with match, queue, remark, target ports; mode, DSCP and scheduler mappings |
+| | `test_port_label_rows` | Port label definitions |
 | | `test_switch_port_profile_rows` | Formats switch port profile rows |
 | | `test_switch_port_profile_rows_vlan_columns` | Resolves native, untagged, and tagged networks in the profile summary |
 | | `test_switch_port_profile_details_lists_all_properties` | Per-profile detail rows cover every property group, plus unmapped keys |

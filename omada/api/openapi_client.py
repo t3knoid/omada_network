@@ -1688,6 +1688,66 @@ class OmadaOpenApiClient:
             if str(d.get("type", d.get("deviceType", ""))).lower() == "switch" and d.get("mac")
         ]
 
+    # ------------------------------------------------------------------
+    # Switch security, OUI VLANs, QoS, port labels
+    # ------------------------------------------------------------------
+
+    def get_switch_security(self, site_id: str) -> dict[str, Any]:
+        """Return site 802.1X / MAC auth, DHCP snooping, ARP detection, IP-MAC binding.
+
+        Parts (each best-effort; raises only if all fail): ``dot1x``
+        (``/dot1x``), ``macAuth`` (``/mac-auth``), ``dhcpSnoopStatus`` /
+        ``dhcpSnoops`` (``/dhcpSnoops/status``, ``/dhcpSnoops`` -- per-switch
+        selected ports), ``arpDetectStatus`` / ``arpDetects``
+        (``/arpDetects/status``, ``/arpDetects`` -- per-switch selected ports
+        and bindings), ``ipMacBind`` / ``ipMacBinds`` (``/ip-mac-bind``,
+        ``/ip-mac-binds``).
+        """
+        return self._redact(self._collect(site_id, (
+            ("dot1x", "dot1x", False),
+            ("macAuth", "mac-auth", False),
+            ("dhcpSnoopStatus", "dhcpSnoops/status", False),
+            ("dhcpSnoops", "dhcpSnoops", True),
+            ("arpDetectStatus", "arpDetects/status", False),
+            ("arpDetects", "arpDetects", True),
+            ("ipMacBind", "ip-mac-bind", False),
+            ("ipMacBinds", "ip-mac-binds", True),
+        ), "Switch security"))
+
+    def get_oui_vlans(self, site_id: str) -> dict[str, Any]:
+        """Return OUI-based VLAN rules for switches and the OUI profiles they use.
+
+        ``rules`` from ``/switch-oui-rules`` and ``profiles`` from
+        ``/oui-profiles`` (both paginated, best-effort).
+        """
+        return self._collect(site_id, (
+            ("rules", "switch-oui-rules", True),
+            ("profiles", "oui-profiles", True),
+        ), "OUI-based VLAN")
+
+    def get_switch_qos(self, site_id: str) -> dict[str, Any]:
+        """Return switch QoS mode, rules, DSCP-to-queue and queue scheduler mappings.
+
+        ``mode`` (``/switch-qos/qos-mode``), ``rules``
+        (``/switch-qos/qos-rule``, paginated), ``dscpMapping``
+        (``/switch-qos/qos-rule/dscp-mapping``) and ``schedulerMapping``
+        (``/switch-qos/qos-rule/scheduler-mapping``); each best-effort.
+        """
+        return self._collect(site_id, (
+            ("mode", "switch-qos/qos-mode", False),
+            ("rules", "switch-qos/qos-rule", True),
+            ("dscpMapping", "switch-qos/qos-rule/dscp-mapping", False),
+            ("schedulerMapping", "switch-qos/qos-rule/scheduler-mapping", False),
+        ), "Switch QoS")
+
+    def get_port_labels(self, site_id: str) -> list[dict[str, Any]]:
+        """Return switch port label definitions.
+
+        Endpoint: ``GET /sites/{siteId}/switches/port-tag``
+        """
+        result = self._get(f"sites/{site_id}/switches/port-tag")
+        return result if isinstance(result, list) else []
+
 
 def _lags_from_overview(device: dict[str, Any], ports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Rebuild LAG groups for one switch from its port-overview records."""

@@ -53,6 +53,10 @@ def mock_client() -> MagicMock:
     client.get_port_schedules.return_value = {}
     client.get_uplinks.return_value = {}
     client.get_switch_port_sheets.return_value = []
+    client.get_switch_security.return_value = {}
+    client.get_oui_vlans.return_value = {}
+    client.get_switch_qos.return_value = {}
+    client.get_port_labels.return_value = []
     return client
 
 
@@ -108,6 +112,10 @@ def _empty_data() -> dict:
         "port_schedules": {},
         "uplinks": {},
         "switch_port_sheets": [],
+        "switch_security": {},
+        "oui_vlans": {},
+        "switch_qos": {},
+        "port_labels": [],
     }
 
 

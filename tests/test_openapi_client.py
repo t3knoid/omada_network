@@ -1240,6 +1240,55 @@ class TestOpenApiResourceMethods:
         mock.assert_called_once_with("sites/site-001/devices")
         assert result == [{"deviceName": "Main Switch", "deviceMac": "54-AF", "deviceModel": "TL-SG2428P"}]
 
+    def test_get_switch_security_collects_parts(self, openapi_client: OmadaOpenApiClient) -> None:
+        gets = {
+            "sites/site-001/dot1x": {"enable": True, "radiusProfileId": "r1"},
+            "sites/site-001/mac-auth": {"enable": False},
+            "sites/site-001/dhcpSnoops/status": {"dhcpSnoopEnable": True},
+            "sites/site-001/arpDetects/status": {"arpDetectEnable": False},
+            "sites/site-001/ip-mac-bind": {"enable": False},
+        }
+        paged = {
+            "sites/site-001/dhcpSnoops": [{"mac": "54-AF", "ports": [{"port": 1}]}],
+            "sites/site-001/ip-mac-binds": [{"ip": "192.168.2.5", "mac": "AA"}],
+        }
+
+        def fake_paged(path: str) -> list:
+            if path in paged:
+                return paged[path]
+            raise OmadaAPIError(-1600, "Unsupported")
+
+        with (
+            patch.object(openapi_client, "_get", side_effect=gets.__getitem__),
+            patch.object(openapi_client, "_get_paged", side_effect=fake_paged),
+        ):
+            result = openapi_client.get_switch_security("site-001")
+        assert set(result) == {"dot1x", "macAuth", "dhcpSnoopStatus", "dhcpSnoops",
+                               "arpDetectStatus", "ipMacBind", "ipMacBinds"}  # arpDetects failed: omitted
+        assert result["dhcpSnoops"][0]["ports"] == [{"port": 1}]
+
+    def test_get_oui_vlans_qos_and_port_labels(self, openapi_client: OmadaOpenApiClient) -> None:
+        paged = {
+            "sites/site-001/switch-oui-rules": [{"name": "Phones"}],
+            "sites/site-001/oui-profiles": [{"name": "Yealink"}],
+            "sites/site-001/switch-qos/qos-rule": [{"name": "Voice"}],
+        }
+        gets = {
+            "sites/site-001/switch-qos/qos-mode": {"qosMode": 1},
+            "sites/site-001/switch-qos/qos-rule/dscp-mapping": {"mapping": {"5": [46]}},
+            "sites/site-001/switch-qos/qos-rule/scheduler-mapping": {"name": "Default", "mapping": []},
+            "sites/site-001/switches/port-tag": [{"tagId": "t1", "name": "Camera"}],
+        }
+        with (
+            patch.object(openapi_client, "_get_paged", side_effect=paged.__getitem__),
+            patch.object(openapi_client, "_get", side_effect=gets.__getitem__),
+        ):
+            assert openapi_client.get_oui_vlans("site-001") == {
+                "rules": [{"name": "Phones"}], "profiles": [{"name": "Yealink"}]}
+            qos = openapi_client.get_switch_qos("site-001")
+            assert qos["mode"] == {"qosMode": 1} and qos["rules"] == [{"name": "Voice"}]
+            assert openapi_client.get_port_labels("site-001") == [{"tagId": "t1", "name": "Camera"}]
+
     def test_get_ssids_no_wlans(self, openapi_client: OmadaOpenApiClient) -> None:
         with patch.object(openapi_client, "_get_paged") as mock:
             mock.side_effect = OmadaAPIError(-1600, "Unsupported")
@@ -1570,6 +1619,10 @@ class TestServiceWithOpenApiClient:
         mock_client.get_port_schedules.return_value = {}
         mock_client.get_uplinks.return_value = {}
         mock_client.get_switch_port_sheets.return_value = []
+        mock_client.get_switch_security.return_value = {}
+        mock_client.get_oui_vlans.return_value = {}
+        mock_client.get_switch_qos.return_value = {}
+        mock_client.get_port_labels.return_value = []
 
         service = OmadaService(
             client=mock_client,

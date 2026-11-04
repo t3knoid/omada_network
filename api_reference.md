@@ -98,6 +98,10 @@ The official API documentation is available at:
 | `switch_settings` | Switch Settings | [Switch Settings](#switch-settings) |
 | `uplinks` | Uplinks & Stacks | [Uplinks & Stacks](#uplinks--stacks) |
 | `switch_port_sheets` | Switch Port Sheets | [Switch Port Sheets](#switch-port-sheets) |
+| `switch_security` | Switch Security (802.1X, DHCP Snooping, ARP Detection, IP-MAC Binding) | [Switch Security](#switch-security) |
+| `oui_vlans` | OUI-Based VLANs | [OUI-Based VLANs](#oui-based-vlans) |
+| `switch_qos` | Switch QoS | [Switch QoS](#switch-qos) |
+| `port_labels` | Switch Port Labels | [Switch Port Labels](#switch-port-labels) |
 | `networks` | Networks | [Networks](#networks) |
 | `vlans` | VLANs | [VLANs](#vlans) |
 | `dhcp_scopes` | DHCP Scopes | [DHCP Scopes](#dhcp-scopes) |
@@ -357,10 +361,57 @@ powering PoE devices.
 | Profile, Native VLAN, Untagged, Tagged | Port values, falling back to the profile's; tags show `All` / `None (blocked)` for allow-all / block-all |
 | PoE, Speed / Duplex, LAG | Port configuration; PoE `n/a` on non-PoE ports |
 | Set Manually (differs from profile) | The per-port overrides (see [Device Ports](#device-ports)) |
-| Carry Over | Why the port matters: connected, uplink, downlink, LAG, custom settings, named / labelled. Otherwise `No (unused, default)` |
+| Port-Bound Rules | Site rules that select this port: DHCP snooping / ARP detection ports ([Switch Security](#switch-security)), OUI-VLAN rules and QoS rules bound to custom ports. LAG selections are expanded to member ports. Rules covering *all* ports of a switch are not repeated per port |
+| Carry Over | Why the port matters: connected, uplink, downlink, LAG, custom settings, port rules, named / labelled. Otherwise `No (unused, default)` |
 
 The sheet reflects the last export. For an exact record, run `fetch` just
 before replacing a switch.
+
+
+### Switch Security
+
+**Resource:** `switch_security`
+
+| Part | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| `dot1x` | `GET` | `sites/{siteId}/dot1x` | Switch 802.1X: RADIUS profile, PAP / EAP, port / MAC based, VLAN assignment, MAB, MAC format, NAS ID, guest VLAN |
+| `macAuth` | `GET` | `sites/{siteId}/mac-auth` | MAC-based authentication for SSIDs: RADIUS profile, MAB, MAC format |
+| `dhcpSnoopStatus`, `dhcpSnoops` | `GET` | `sites/{siteId}/dhcpSnoops/status`, `sites/{siteId}/dhcpSnoops` | Global switch, and per switch the **selected ports** (paginated) |
+| `arpDetectStatus`, `arpDetects` | `GET` | `sites/{siteId}/arpDetects/status`, `sites/{siteId}/arpDetects` | Global switch, "use DHCP snooping entries", and per switch the selected ports and IP-MAC bindings (paginated) |
+| `ipMacBind`, `ipMacBinds` | `GET` | `sites/{siteId}/ip-mac-bind`, `sites/{siteId}/ip-mac-binds` | IP-MAC binding general setting (LANs, WANs, gratuitous ARP) and the binding list (paginated) |
+
+Each part is best-effort. The per-port 802.1X *mode* is part of the port
+configuration (see [Device Ports](#device-ports)). The spec doesn't say
+whether DHCP snooping / ARP detection "selected ports" are the trusted or the
+monitored ports, so the export uses the controller's wording.
+
+### OUI-Based VLANs
+
+**Resource:** `oui_vlans`
+
+| Part | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| `rules` | `GET` | `sites/{siteId}/switch-oui-rules` | Paginated. Name, enabled, scope (all device ports / custom ports), target switches / ports / LAGs, OUI profile → VLAN + priority |
+| `profiles` | `GET` | `sites/{siteId}/oui-profiles` | Paginated. OUI profiles and their OUIs |
+
+### Switch QoS
+
+**Resource:** `switch_qos`
+
+| Part | Method | Endpoint | Notes |
+| --- | --- | --- | --- |
+| `mode` | `GET` | `sites/{siteId}/switch-qos/qos-mode` | QoS profiles (legacy) vs. QoS rules |
+| `rules` | `GET` | `sites/{siteId}/switch-qos/qos-rule` | Paginated. Index, type (network / port / custom), match (networks, protocol, DSCP, ports), queue, DSCP remark, target switch ports (`unit/slot/port`) |
+| `dscpMapping` | `GET` | `sites/{siteId}/switch-qos/qos-rule/dscp-mapping` | Queue → DSCP values |
+| `schedulerMapping` | `GET` | `sites/{siteId}/switch-qos/qos-rule/scheduler-mapping` | Queue scheduler type and weight, shown as returned (codes undocumented) |
+
+### Switch Port Labels
+
+**Resource:** `port_labels`
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GET` | `sites/{siteId}/switches/port-tag` | Label definitions; ports reference them by ID and show the label name |
 
 ---
 

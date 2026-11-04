@@ -157,8 +157,8 @@ patterns recur:
   usage.
 - **Composition:** some resources combine several endpoints into one dict:
   `wan_failover`, `dns_settings`, `time_settings`, `multicast_services`,
-  `wireless_settings`, `ssl_vpn`, `switch_settings`, `lags`, `uplinks`,
-  `port_schedules`.
+  `wireless_settings`, `ssl_vpn`, `switch_settings`, `switch_security`,
+  `oui_vlans`, `switch_qos`, `lags`, `uplinks`, `port_schedules`.
 
 Per-device lookups (switch, gateway and AP endpoints) iterate over
 `get_devices()`, filtered by device type. Results are tagged with
@@ -194,8 +194,10 @@ using the other resources as context. Examples: networks, IP / port groups
 limit / schedule profiles (`_ssid_lookups()`); devices. Derived views are
 computed here as well, such as per-port overrides
 (`_port_overrides()` compares each port with its profile), switch
-loop-prevention coverage, the uplink remapping checklist, and the per-switch
-port sheets (`switch_port_sheets`). The sheets are built entirely from other
+loop-prevention coverage, the uplink remapping checklist, the port-bound
+rule references (`_port_rule_refs()`: DHCP snooping / ARP detection / OUI-VLAN /
+QoS rules that name specific switch ports), and the per-switch port sheets
+(`switch_port_sheets`). The sheets are built entirely from other
 resources, so they also regenerate from YAML.
 
 ---

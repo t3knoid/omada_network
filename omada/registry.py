@@ -2444,7 +2444,8 @@ def _sheet_links(mac: Any, context: dict[str, Any] | None) -> dict[Any, str]:
 
 
 def _sheet_port_row(p: dict[str, Any], context: dict[str, Any] | None,
-                    links: dict[Any, str]) -> dict[str, Any]:
+                    links: dict[Any, str],
+                    rule_refs: dict[tuple[str, Any], list[str]] | None = None) -> dict[str, Any]:
     by_id, by_vlan = _network_lookups(context)
     lookup = _build_id_lookup(context)
     profile = _port_profile(p, context) or {}
@@ -2482,6 +2483,7 @@ def _sheet_port_row(p: dict[str, Any], context: dict[str, Any] | None,
 
     overrides = _port_overrides(p, context)
     custom = "; ".join(f"{setting}: {value}" for setting, value, _ in overrides)
+    rules = (rule_refs or {}).get((str(p.get("deviceMac", "")).upper().replace(":", "-"), p.get("port")), [])
 
     connection = _port_connection({"deviceType": "switch", **p})
     name = _flatten(p.get("name") or p.get("portName") or "")
@@ -2497,6 +2499,8 @@ def _sheet_port_row(p: dict[str, Any], context: dict[str, Any] | None,
         reasons.append(lag_text)
     if overrides:
         reasons.append("custom settings")
+    if rules:
+        reasons.append("port rules")
     if not _is_default_port_name(name, p.get("port")) or label:
         reasons.append("named")
     return {
@@ -2514,6 +2518,7 @@ def _sheet_port_row(p: dict[str, Any], context: dict[str, Any] | None,
         "Speed / Duplex": speed_text,
         "LAG": lag_text,
         "Set Manually (differs from profile)": custom,
+        "Port-Bound Rules": "; ".join(rules),
         "Carry Over": ", ".join(reasons) if reasons else "No (unused, default)",
     }
 
@@ -2530,12 +2535,13 @@ def _switch_sheet_ports(sw: dict[str, Any], context: dict[str, Any] | None) -> l
 
 def _switch_port_sheet_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """One summary row per switch: how many ports must move to the new switch."""
+    refs = _port_rule_refs(context)
     rows = []
     for sw in data if isinstance(data, list) else []:
         if not isinstance(sw, dict):
             continue
         links = _sheet_links(sw.get("deviceMac", ""), context)
-        sheet = [_sheet_port_row(p, context, links) for p in _switch_sheet_ports(sw, context)]
+        sheet = [_sheet_port_row(p, context, links, refs) for p in _switch_sheet_ports(sw, context)]
         carry = [r for r in sheet if not r["Carry Over"].startswith("No")]
         sfp = sum(1 for r in carry if r["Type"] in ("SFP", "Combo"))
         poe = sum(1 for r in carry if r["PoE"] == "On" and r["Connection"].startswith("Connected"))
@@ -2555,15 +2561,372 @@ def _switch_port_sheet_rows(data: Any, context: dict[str, Any] | None = None) ->
 def _switch_port_sheet_details(
     data: Any, context: dict[str, Any] | None = None,
 ) -> list[tuple[str, list[dict[str, Any]]]]:
+    refs = _port_rule_refs(context)
     sections = []
     for sw in data if isinstance(data, list) else []:
         if not isinstance(sw, dict):
             continue
         links = _sheet_links(sw.get("deviceMac", ""), context)
-        rows = [_sheet_port_row(p, context, links) for p in _switch_sheet_ports(sw, context)]
+        rows = [_sheet_port_row(p, context, links, refs) for p in _switch_sheet_ports(sw, context)]
         title = f"{_flatten(sw.get('deviceName', ''))} ({_flatten(sw.get('deviceModel', ''))})"
         sections.append((title, rows))
     return sections
+
+
+# --- Switch security, OUI VLANs, QoS, port labels ----------------------------------------
+
+_DOT1X_AUTH_MODE_MAP: dict[int, str] = {0: "PAP", 1: "EAP"}
+_DOT1X_AUTH_TYPE_MAP: dict[int, str] = {0: "Port based", 1: "MAC based"}
+_MAC_FORMAT_MAP: dict[int, str] = {
+    0: "aabbccddeeff", 1: "aa-bb-cc-dd-ee-ff", 2: "aa:bb:cc:dd:ee:ff",
+    3: "AABBCCDDEEFF", 4: "AA-BB-CC-DD-EE-FF", 5: "AA:BB:CC:DD:EE:FF",
+}
+_IMB_INTERFACE_MAP: dict[int, str] = {0: "WAN", 1: "LAN"}
+_OUI_MODE_MAP: dict[int, str] = {0: "All device ports", 1: "Custom ports"}
+_QOS_MODE_MAP: dict[int, str] = {0: "QoS profiles (legacy)", 1: "QoS rules"}
+_QOS_RULE_TYPE_MAP: dict[int, str] = {0: "Network", 1: "Port", 2: "Custom"}
+_QOS_BIND_MAP: dict[int, str] = {0: "All switch ports", 1: "Custom ports"}
+
+
+def _port_num(value: Any) -> Any:
+    """``5`` / ``"5"`` / ``"1/0/5"`` / ``{"port": 5}`` -> ``5`` (stack unit/slot dropped)."""
+    if isinstance(value, dict):
+        value = value.get("port", value.get("standardPort"))
+    if isinstance(value, int):
+        return value
+    text = str(value or "").split("/")[-1]
+    return int(text) if text.isdigit() else value
+
+
+def _lag_ports(mac: str, lag_id: Any, context: dict[str, Any] | None) -> list[Any]:
+    lags = (context or {}).get("lags")
+    for lag in (lags.get("lags") if isinstance(lags, dict) else None) or []:
+        if (isinstance(lag, dict) and str(lag.get("deviceMac", "")).upper() == mac
+                and str(lag.get("lagId")) == str(lag_id)):
+            return list(lag.get("memberPorts") or [])
+    return []
+
+
+def _port_rule_refs(context: dict[str, Any] | None) -> dict[tuple[str, Any], list[str]]:
+    """``(MAC, port)`` -> rules bound to that specific port.
+
+    Covers DHCP snooping / ARP detection port selections, and OUI-VLAN and
+    QoS rules bound to custom ports (LAGs expanded to their members).  Rules
+    applying to *all* ports of a switch are not repeated per port.
+    """
+    refs: dict[tuple[str, Any], list[str]] = {}
+
+    def add(mac: Any, port: Any, text: str) -> None:
+        key = (str(mac).upper().replace(":", "-"), _port_num(port))
+        if text not in refs.setdefault(key, []):
+            refs[key].append(text)
+
+    ctx = context or {}
+    security = ctx.get("switch_security") if isinstance(ctx.get("switch_security"), dict) else {}
+    for key, label in (("dhcpSnoops", "DHCP snooping"), ("arpDetects", "ARP detection")):
+        for entry in security.get(key) or []:
+            if isinstance(entry, dict) and entry.get("mac"):
+                mac = str(entry["mac"]).upper().replace(":", "-")
+                for port in entry.get("ports") or []:
+                    if isinstance(port, dict) and port.get("lagId") is not None and port.get("port") is None:
+                        for member in _lag_ports(mac, port["lagId"], context):
+                            add(mac, member, label)
+                    else:
+                        add(mac, port, label)
+
+    oui = ctx.get("oui_vlans") if isinstance(ctx.get("oui_vlans"), dict) else {}
+    for rule in oui.get("rules") or []:
+        if not isinstance(rule, dict) or rule.get("mode") != 1:
+            continue
+        label = f"OUI VLAN: {_flatten(rule.get('name', ''))}" + ("" if rule.get("enable", True) else " (disabled)")
+        for dev in rule.get("deviceList") or []:
+            if not isinstance(dev, dict) or not dev.get("deviceMac"):
+                continue
+            mac = str(dev["deviceMac"]).upper().replace(":", "-")
+            for port in dev.get("portList") or []:
+                add(mac, port, label)
+            lag_members = {str(li.get("lag")): li.get("ports") or [] for li in dev.get("lagInfo") or []
+                           if isinstance(li, dict)}
+            for lag_id in dev.get("lagList") or []:
+                for member in lag_members.get(str(lag_id)) or _lag_ports(mac, lag_id, context):
+                    add(mac, member, label)
+
+    qos = ctx.get("switch_qos") if isinstance(ctx.get("switch_qos"), dict) else {}
+    for rule in qos.get("rules") or []:
+        if not isinstance(rule, dict) or rule.get("bindType") != 1:
+            continue
+        label = f"QoS: {_flatten(rule.get('name', ''))}" + ("" if rule.get("status", True) else " (disabled)")
+        for dev in rule.get("deviceList") or []:
+            if not isinstance(dev, dict) or not dev.get("mac"):
+                continue
+            mac = str(dev["mac"]).upper().replace(":", "-")
+            for port in dev.get("portList") or []:
+                add(mac, port, label)
+            for lag_id in dev.get("lagList") or []:
+                for member in _lag_ports(mac, lag_id, context):
+                    add(mac, member, label)
+    return refs
+
+
+def _device_label(mac: Any, context: dict[str, Any] | None) -> str:
+    for d in (context or {}).get("devices") or []:
+        if isinstance(d, dict) and str(d.get("mac", "")).upper() == str(mac).upper():
+            return _flatten(d.get("name") or mac)
+    return _flatten(mac)
+
+
+def _selected_ports(ports: Any) -> str:
+    out = []
+    for p in ports or []:
+        if isinstance(p, dict) and p.get("lagId") is not None and p.get("port") is None:
+            out.append(f"LAG {p['lagId']}")
+        else:
+            out.append(_flatten(p.get("standardPort") or p.get("port")) if isinstance(p, dict) else _flatten(p))
+    return ", ".join(out)
+
+
+def _switch_security_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if not isinstance(data, dict) or not data:
+        return []
+    radius = _ssid_lookups(context)["radius"]
+    _, by_vlan = _network_lookups(context)
+    rows: list[tuple[str, str, str]] = []
+
+    d = data.get("dot1x") if isinstance(data.get("dot1x"), dict) else None
+    if d is not None:
+        rows.append(("802.1X (switches)", "Enabled", _enabled(d.get("enable"))))
+        if d.get("enable"):
+            prof = d.get("radiusProfileId")
+            rows.append(("802.1X (switches)", "RADIUS Profile", radius.get(str(prof), _flatten(prof)) if prof else ""))
+            for key, label, mapping in (("authMode", "Auth Protocol", _DOT1X_AUTH_MODE_MAP),
+                                        ("authType", "Auth Type", _DOT1X_AUTH_TYPE_MAP),
+                                        ("macFormat", "MAC Format", _MAC_FORMAT_MAP)):
+                if d.get(key) is not None:
+                    rows.append(("802.1X (switches)", label, _profile_code(d[key], mapping)))
+            for key, label in (("vlanAssign", "VLAN Assignment"), ("mab", "MAB")):
+                if key in d:
+                    rows.append(("802.1X (switches)", label, _enabled(d[key])))
+            if d.get("nasId"):
+                rows.append(("802.1X (switches)", "NAS ID", _flatten(d["nasId"])))
+            if d.get("guestVlan"):
+                name = by_vlan.get(str(d["guestVlan"]))
+                rows.append(("802.1X (switches)", "Guest VLAN",
+                             f"{d['guestVlan']} ({name})" if name else _flatten(d["guestVlan"])))
+        rows.append(("802.1X (switches)", "Per-port 802.1X mode", "See device_ports / switch_port_sheets"))
+
+    m = data.get("macAuth") if isinstance(data.get("macAuth"), dict) else None
+    if m is not None:
+        rows.append(("MAC-Based Auth (wireless)", "Enabled", _enabled(m.get("enable"))))
+        if m.get("enable"):
+            ssids = ", ".join(_flatten(x.get("ssidName") or x.get("id", "")) for x in m.get("ssids") or []
+                              if isinstance(x, dict))
+            rows.append(("MAC-Based Auth (wireless)", "SSIDs", ssids))
+            prof = m.get("radiusProfileId")
+            rows.append(("MAC-Based Auth (wireless)", "RADIUS Profile",
+                         radius.get(str(prof), _flatten(prof)) if prof else ""))
+            if m.get("macFormat") is not None:
+                rows.append(("MAC-Based Auth (wireless)", "MAC Format", _profile_code(m["macFormat"], _MAC_FORMAT_MAP)))
+            for key, label in (("mabEnable", "MAB"), ("emptyPwdEnable", "Empty Password")):
+                if key in m:
+                    rows.append(("MAC-Based Auth (wireless)", label, _enabled(m[key])))
+
+    status = data.get("dhcpSnoopStatus") if isinstance(data.get("dhcpSnoopStatus"), dict) else None
+    if status is not None:
+        rows.append(("DHCP Snooping", "Enabled", _enabled(status.get("dhcpSnoopEnable"))))
+    if isinstance(data.get("dhcpSnoops"), list):
+        rows.append(("DHCP Snooping", "Switches Configured", str(len(data["dhcpSnoops"]))))
+
+    status = data.get("arpDetectStatus") if isinstance(data.get("arpDetectStatus"), dict) else None
+    if status is not None:
+        rows.append(("ARP Detection", "Enabled", _enabled(status.get("arpDetectEnable"))))
+        if "snoopForEntryEnable" in status:
+            rows.append(("ARP Detection", "Use DHCP Snooping Entries", _enabled(status["snoopForEntryEnable"])))
+    if isinstance(data.get("arpDetects"), list):
+        rows.append(("ARP Detection", "Switches Configured", str(len(data["arpDetects"]))))
+
+    imb = data.get("ipMacBind") if isinstance(data.get("ipMacBind"), dict) else None
+    if imb is not None:
+        lookup = _build_id_lookup(context)
+        wan_names = _wan_port_names(context)
+        rows.append(("IP-MAC Binding", "Enabled", _enabled(imb.get("enable"))))
+        if imb.get("enable"):
+            rows.append(("IP-MAC Binding", "LANs", _resolve_ids(imb.get("lanIds") or [], lookup)))
+            rows.append(("IP-MAC Binding", "WANs", _nat_interfaces(imb.get("wanIds"), wan_names)))
+            if "imbPass" in imb:
+                rows.append(("IP-MAC Binding", "IMB Pass", _enabled(imb["imbPass"])))
+            if "garp" in imb:
+                text = _enabled(imb["garp"])
+                if imb["garp"] and imb.get("interval") is not None:
+                    text += f" (every {imb['interval']})"
+                rows.append(("IP-MAC Binding", "Gratuitous ARP", text))
+    if isinstance(data.get("ipMacBinds"), list):
+        rows.append(("IP-MAC Binding", "Bindings", str(len(data["ipMacBinds"]))))
+    return [{"Category": c, "Setting": k, "Value": v} for c, k, v in rows if v != ""]
+
+
+def _switch_security_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    if not isinstance(data, dict):
+        return []
+    sections = []
+    for key, title in (("dhcpSnoops", "DHCP Snooping per switch"), ("arpDetects", "ARP Detection per switch")):
+        rows = [
+            {
+                "Switch": _flatten(e.get("deviceName") or e.get("stackName") or _device_label(e.get("mac"), context)),
+                "Model": _flatten(e.get("showModel") or e.get("deviceModel", "")),
+                "Selected Ports": _selected_ports(e.get("ports")),
+                **({"IP-MAC Bindings": str(len(e.get("impbs") or []))} if key == "arpDetects" else {}),
+            }
+            for e in data.get(key) or [] if isinstance(e, dict)
+        ]
+        if rows:
+            sections.append((title, rows))
+    lookup = _build_id_lookup(context)
+    wan_names = _wan_port_names(context)
+    binds = []
+    for b in data.get("ipMacBinds") or []:
+        if not isinstance(b, dict):
+            continue
+        iface_id = str(b.get("interfaceId", ""))
+        iface = wan_names.get(iface_id) or lookup.get(iface_id) or iface_id
+        kind = _profile_code(b["interfaceType"], _IMB_INTERFACE_MAP) if b.get("interfaceType") is not None else ""
+        binds.append({
+            "IP": _flatten(b.get("ip", "")), "MAC": _flatten(b.get("mac", "")),
+            "Interface": f"{kind}: {iface}" if kind and iface else (kind or iface),
+            "Status": _enabled(b.get("status")), "Description": _flatten(b.get("description", "")),
+        })
+    if binds:
+        sections.append(("IP-MAC Bindings", sorted(binds, key=lambda r: _ip_sort_key(r["IP"]))))
+    return sections
+
+
+def _rule_targets(devices: Any, mac_key: str, context: dict[str, Any] | None) -> str:
+    parts = []
+    for dev in devices or []:
+        if not isinstance(dev, dict):
+            continue
+        name = _flatten(dev.get("deviceName") or _device_label(dev.get(mac_key, ""), context))
+        ports = [str(_port_num(x)) for x in dev.get("portList") or []]
+        ports += [f"LAG {x}" for x in dev.get("lagList") or []]
+        parts.append(f"{name}: {', '.join(ports)}" if ports else name)
+    return "; ".join(parts)
+
+
+def _oui_vlan_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    rules = data.get("rules") if isinstance(data, dict) else None
+    _, by_vlan = _network_lookups(context)
+    rows = []
+    for r in rules if isinstance(rules, list) else []:
+        if not isinstance(r, dict):
+            continue
+        combos = []
+        for c in r.get("ruleCombine") or []:
+            if isinstance(c, dict):
+                vlan = c.get("vlanId")
+                net = by_vlan.get(str(vlan))
+                combos.append(f"{_flatten(c.get('ouiProfileName') or c.get('ouiProfileId', ''))} → VLAN {vlan}"
+                              + (f" ({net})" if net else "") + f", priority {c.get('priority', '')}")
+        rows.append({
+            "Name": _flatten(r.get("name", "")),
+            "Status": _enabled(r.get("enable")),
+            "Applies To": _profile_code(r["mode"], _OUI_MODE_MAP) if r.get("mode") is not None else "",
+            "Switch Ports": _rule_targets(r.get("deviceList"), "deviceMac", context),
+            "OUI → VLAN": "; ".join(combos),
+        })
+    return rows
+
+
+def _oui_vlan_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    profiles = data.get("profiles") if isinstance(data, dict) else None
+    rows = [
+        {
+            "Profile": _flatten(p.get("name", "")),
+            "OUIs": ", ".join(
+                f"{o.get('oui', '')}" + (f" ({o['description']})" if o.get("description") else "")
+                for o in p.get("ouiCombine") or [] if isinstance(o, dict)
+            ),
+        }
+        for p in profiles if isinstance(p, dict)
+    ] if isinstance(profiles, list) else []
+    return [("OUI Profiles", rows)] if rows else []
+
+
+def _switch_qos_rows(data: Any, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    rules = data.get("rules") if isinstance(data, dict) else None
+    lookup = _build_id_lookup(context)
+    items = sorted((r for r in rules or [] if isinstance(r, dict)),
+                   key=lambda r: r["index"] if isinstance(r.get("index"), int) else 10**6) \
+        if isinstance(rules, list) else []
+    rows = []
+    for r in items:
+        match = []
+        nets = [lookup.get(str(e.get("networkId")), f"VLAN {e.get('vlanId')}")
+                for e in r.get("lanNetworkEntries") or [] if isinstance(e, dict)]
+        if nets:
+            match.append("Networks " + ", ".join(nets))
+        if r.get("protocol") is not None:
+            match.append(f"Protocol {_format_protocols(r['protocol'])}")
+        if r.get("dscp") is not None:
+            match.append(f"DSCP {r['dscp']}")
+        for key, label in (("sPort", "Src port"), ("dPort", "Dst port")):
+            if r.get(key) is not None:
+                match.append(f"{label} {r[key]}")
+        remark = ""
+        if r.get("dscpReEnable"):
+            remark = "Auto" if r.get("dscpRe") == 64 else _flatten(r.get("dscpRe"))
+        rows.append({
+            "Index": _flatten(r.get("index", "")),
+            "Name": _flatten(r.get("name", "")),
+            "Status": _enabled(r.get("status")),
+            "Type": _profile_code(r["type"], _QOS_RULE_TYPE_MAP) if r.get("type") is not None else "",
+            "Match": "; ".join(match),
+            "Queue": _flatten(r.get("queue", "")),
+            "DSCP Remark": remark,
+            "Applies To": (_profile_code(r["bindType"], _QOS_BIND_MAP) if r.get("bindType") is not None else "")
+            + (f" — {_rule_targets(r.get('deviceList'), 'mac', context)}" if r.get("bindType") == 1 else ""),
+        })
+    return rows
+
+
+def _switch_qos_details(
+    data: Any, context: dict[str, Any] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    if not isinstance(data, dict):
+        return []
+    sections = []
+    mode = data.get("mode") if isinstance(data.get("mode"), dict) else None
+    if mode is not None and mode.get("qosMode") is not None:
+        sections.append(("QoS Mode", [{"Setting": "Switch QoS Mode",
+                                       "Value": _profile_code(mode["qosMode"], _QOS_MODE_MAP)}]))
+    dscp = data.get("dscpMapping") if isinstance(data.get("dscpMapping"), dict) else {}
+    mapping = dscp.get("mapping") if isinstance(dscp.get("mapping"), dict) else {}
+    if mapping:
+        sections.append(("DSCP to Queue Mapping", [
+            {"Queue": str(q), "DSCP Values": ", ".join(str(v) for v in values or [])}
+            for q, values in sorted(mapping.items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 99)
+        ]))
+    sched = data.get("schedulerMapping")
+    entries = sched if isinstance(sched, list) else [sched] if isinstance(sched, dict) else []
+    rows = []
+    for e in entries:
+        if isinstance(e, dict):
+            for q in e.get("mapping") or []:
+                if isinstance(q, dict):
+                    rows.append({"Scheduler": _flatten(e.get("name", "")), "Queue": _flatten(q.get("queue", "")),
+                                 "Type": _flatten(q.get("type", "")), "Weight": _flatten(q.get("weight", ""))})
+    if rows:
+        sections.append(("Queue Scheduler", rows))
+    return sections
+
+
+def _port_label_rows(data: Any) -> list[dict[str, Any]]:
+    return [
+        {"Label": _flatten(t.get("name", "")), "Label ID": _flatten(t.get("tagId", ""))}
+        for t in (data if isinstance(data, list) else []) if isinstance(t, dict)
+    ]
 
 
 # Band bits: 1=2.4GHz, 2=5GHz, 4=6GHz  (7=all, 3=2.4+5, etc.)
@@ -3643,6 +4006,40 @@ RESOURCES: list[ResourceDefinition] = [
         sort_key="Switch",
         needs_context=True,
         detail_formatter=_switch_port_sheet_details,
+    ),
+    ResourceDefinition(
+        name="switch_security",
+        title="Switch Security (802.1X, DHCP Snooping, ARP Detection, IP-MAC Binding)",
+        fetch_method="get_switch_security",
+        row_formatter=_switch_security_rows,
+        sort_key="",
+        needs_context=True,
+        detail_formatter=_switch_security_details,
+    ),
+    ResourceDefinition(
+        name="oui_vlans",
+        title="OUI-Based VLANs",
+        fetch_method="get_oui_vlans",
+        row_formatter=_oui_vlan_rows,
+        sort_key="Name",
+        needs_context=True,
+        detail_formatter=_oui_vlan_details,
+    ),
+    ResourceDefinition(
+        name="switch_qos",
+        title="Switch QoS",
+        fetch_method="get_switch_qos",
+        row_formatter=_switch_qos_rows,
+        sort_key="",  # formatter keeps rule order (index)
+        needs_context=True,
+        detail_formatter=_switch_qos_details,
+    ),
+    ResourceDefinition(
+        name="port_labels",
+        title="Switch Port Labels",
+        fetch_method="get_port_labels",
+        row_formatter=_port_label_rows,
+        sort_key="Label",
     ),
     ResourceDefinition(
         name="acl_rules",

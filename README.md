@@ -19,7 +19,7 @@ supports both official Open API authentication modes:
 
 ## Features
 
-The tool exports **40 resource types**. Each one is written to `docs/<site>/<resource>.yaml`, which holds the raw API data and is the source of truth, and `docs/<site>/<resource>.md`, which holds formatted tables (a summary table, and for many resources one detail section per item). IDs are resolved to names and numeric codes to labels. Credentials are redacted unless you ask for them (see [Secrets](#secrets)). For the API endpoints behind each resource, see the [API reference](api_reference.md#resource-index).
+The tool exports **44 resource types**. Each one is written to `docs/<site>/<resource>.yaml`, which holds the raw API data and is the source of truth, and `docs/<site>/<resource>.md`, which holds formatted tables (a summary table, and for many resources one detail section per item). IDs are resolved to names and numeric codes to labels. Credentials are redacted unless you ask for them (see [Secrets](#secrets)). For the API endpoints behind each resource, see the [API reference](api_reference.md#resource-index).
 
 ### Devices & switching
 
@@ -32,7 +32,11 @@ The tool exports **40 resource types**. Each one is written to `docs/<site>/<res
 | Link Aggregation (LAGs) | `lags` | LAG groups: static vs. LACP, member ports, link state, M-LAG groups, hash algorithm |
 | Switch Settings | `switch_settings` | Management VLAN, jumbo frames, STP / loopback-detection coverage, IGMP snooping, LLDP, VLAN interfaces, RPVST |
 | Uplinks & Stacks | `uplinks` | Uplink and downlink ports, stack members and stack ports, and a **remapping checklist** for model changes |
-| Switch Port Sheets | `switch_port_sheets` | One printable sheet per switch: every port's VLANs, PoE, speed, LAG, connected device, settings to apply by hand, and whether it must carry over to a replacement |
+| Switch Port Sheets | `switch_port_sheets` | One printable sheet per switch: every port's VLANs, PoE, speed, LAG, connected device, settings to apply by hand, port-bound rules, and whether it must carry over to a replacement |
+| Switch Security | `switch_security` | Switch 802.1X and MAC-based auth, DHCP snooping and ARP detection (with selected ports per switch), IP-MAC binding |
+| OUI-Based VLANs | `oui_vlans` | Rules that place devices by vendor OUI into a VLAN / priority, with their target ports, and the OUI profiles |
+| Switch QoS | `switch_qos` | QoS mode, rules (match, queue, DSCP remark, target ports), DSCP-to-queue and queue scheduler mappings |
+| Switch Port Labels | `port_labels` | Port label definitions |
 
 ### LAN & addressing
 
@@ -662,6 +666,10 @@ reconfigure it by hand:
 4. Assign the same profiles on the new switch, apply the listed manual
    settings, rebuild LAGs (see `lags.md`), and re-patch the uplink and
    downlinks (see the remapping checklist in `uplinks.md`).
+5. **Port-Bound Rules** lists site rules that name this specific port: DHCP
+   snooping and ARP detection selections (`switch_security.md`), OUI-based
+   VLAN rules (`oui_vlans.md`) and QoS rules (`switch_qos.md`). Those rules
+   reference the old switch's ports, so re-select the new ports in each one.
 
 Site-wide settings (networks, profiles, ACLs, DHCP, …) stay in the controller
 and aren't affected by the swap.

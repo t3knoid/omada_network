@@ -12,7 +12,7 @@ from omada.service import generate_from_yaml
 
 
 class TestRegistry:
-    def test_all_forty_resources_defined(self) -> None:
+    def test_all_forty_four_resources_defined(self) -> None:
         names = {r.name for r in RESOURCES}
         assert names == {
             "acl_rules",
@@ -55,6 +55,10 @@ class TestRegistry:
             "port_schedules",
             "uplinks",
             "switch_port_sheets",
+            "switch_security",
+            "oui_vlans",
+            "switch_qos",
+            "port_labels",
         }
 
     def test_registry_lookup_matches_resources(self) -> None:
@@ -1485,6 +1489,7 @@ class TestRowFormatters:
             "Native VLAN": "Default", "Untagged": "Default", "Tagged": "IoT, Voice", "PoE": "On",
             "Speed / Duplex": "Auto", "LAG": "",
             "Set Manually (differs from profile)": "802.1X: Force Unauthorized",
+            "Port-Bound Rules": "",
             "Carry Over": "connected, uplink, custom settings",
         }
         assert unused["Carry Over"] == "No (unused, default)"
@@ -1500,6 +1505,125 @@ class TestRowFormatters:
         assert sfp["Set Manually (differs from profile)"] == (
             "Network Tags Setting: Allow All; Speed: 1000M; Duplex: Full")
         assert sfp["Carry Over"] == "connected, downlink, LAG 1, custom settings, named"
+
+    def test_port_rule_refs_and_sheet_rules_column(self) -> None:
+        from omada.registry import _port_rule_refs, _switch_port_sheet_details
+        context = {
+            **self._SHEET_CONTEXT,
+            "lags": {"lags": [{"deviceMac": "54-AF", "lagId": 1, "memberPorts": [25, 26]}]},
+            "switch_security": {
+                "dhcpSnoops": [{"mac": "54:af", "ports": [{"port": 25}]}],
+                "arpDetects": [{"mac": "54-AF", "ports": [{"lagId": 1}]}],  # LAG -> members
+            },
+            "oui_vlans": {"rules": [
+                {"name": "Phones", "enable": True, "mode": 1,
+                 "deviceList": [{"deviceMac": "54-AF", "portList": [2]}]},
+                {"name": "Everywhere", "enable": True, "mode": 0,  # all ports: not per port
+                 "deviceList": [{"deviceMac": "54-AF"}]},
+            ]},
+            "switch_qos": {"rules": [
+                {"name": "Voice", "status": False, "bindType": 1,
+                 "deviceList": [{"mac": "54-AF", "portList": ["1/0/2"]}]},
+            ]},
+        }
+        refs = _port_rule_refs(context)
+        assert refs[("54-AF", 25)] == ["DHCP snooping", "ARP detection"]
+        assert refs[("54-AF", 26)] == ["ARP detection"]
+        assert refs[("54-AF", 2)] == ["OUI VLAN: Phones", "QoS: Voice (disabled)"]
+        assert ("54-AF", 1) not in refs
+
+        [(_, rows)] = _switch_port_sheet_details(self._SHEET_DATA, context)
+        by_port = {r["Port"]: r for r in rows}
+        assert by_port["2"]["Port-Bound Rules"] == "OUI VLAN: Phones; QoS: Voice (disabled)"
+        # An otherwise unused port with a port-bound rule must carry over
+        assert by_port["2"]["Carry Over"] == "port rules"
+        assert by_port["25"]["Port-Bound Rules"] == "DHCP snooping; ARP detection"
+
+    def test_switch_security_rows_and_details(self) -> None:
+        from omada.registry import _switch_security_details, _switch_security_rows
+        context = {"radius_profiles": [{"radiusProfileId": "r1", "name": "Corp RADIUS"}],
+                   "networks": [{"id": "n-guest", "name": "Guest", "vlan": 50}, {"id": "n-lan", "name": "LAN"}],
+                   "devices": [{"name": "Main Switch", "mac": "54-AF"}]}
+        data = {
+            "dot1x": {"enable": True, "radiusProfileId": "r1", "authMode": 1, "authType": 0,
+                      "vlanAssign": True, "mab": False, "macFormat": 1, "nasId": "omada", "guestVlan": 50},
+            "macAuth": {"enable": True, "ssids": [{"ssidName": "IoT"}], "radiusProfileId": "r1",
+                        "mabEnable": True, "macFormat": 4, "emptyPwdEnable": False},
+            "dhcpSnoopStatus": {"dhcpSnoopEnable": True},
+            "dhcpSnoops": [{"mac": "54-AF", "ports": [{"port": 24}, {"lagId": 1}]}],
+            "arpDetectStatus": {"arpDetectEnable": True, "snoopForEntryEnable": True},
+            "arpDetects": [{"deviceName": "Main Switch", "ports": [{"standardPort": "1/0/3"}], "impbs": [{}, {}]}],
+            "ipMacBind": {"enable": True, "lanIds": ["n-lan"], "garp": True, "interval": 30},
+            "ipMacBinds": [{"ip": "192.168.2.20", "mac": "BB", "interfaceType": 1, "interfaceId": "n-lan",
+                            "status": True, "description": "Printer"},
+                           {"ip": "192.168.2.3", "mac": "AA", "interfaceType": 1, "interfaceId": "n-lan",
+                            "status": False}],
+        }
+        values = {(r["Category"], r["Setting"]): r["Value"] for r in _switch_security_rows(data, context)}
+        assert values[("802.1X (switches)", "RADIUS Profile")] == "Corp RADIUS"
+        assert values[("802.1X (switches)", "Auth Protocol")] == "EAP"
+        assert values[("802.1X (switches)", "Auth Type")] == "Port based"
+        assert values[("802.1X (switches)", "MAC Format")] == "aa-bb-cc-dd-ee-ff"
+        assert values[("802.1X (switches)", "Guest VLAN")] == "50 (Guest)"
+        assert values[("MAC-Based Auth (wireless)", "SSIDs")] == "IoT"
+        assert values[("DHCP Snooping", "Switches Configured")] == "1"
+        assert values[("ARP Detection", "Use DHCP Snooping Entries")] == "Enabled"
+        assert values[("IP-MAC Binding", "LANs")] == "LAN"
+        assert values[("IP-MAC Binding", "Gratuitous ARP")] == "Enabled (every 30)"
+        assert values[("IP-MAC Binding", "Bindings")] == "2"
+        sections = dict(_switch_security_details(data, context))
+        assert sections["DHCP Snooping per switch"] == [
+            {"Switch": "Main Switch", "Model": "", "Selected Ports": "24, LAG 1"}]
+        assert sections["ARP Detection per switch"][0]["Selected Ports"] == "1/0/3"
+        assert sections["ARP Detection per switch"][0]["IP-MAC Bindings"] == "2"
+        assert [b["IP"] for b in sections["IP-MAC Bindings"]] == ["192.168.2.3", "192.168.2.20"]
+        assert sections["IP-MAC Bindings"][1]["Interface"] == "LAN: LAN"
+
+    def test_oui_vlan_rows_and_profiles(self) -> None:
+        from omada.registry import _oui_vlan_details, _oui_vlan_rows
+        data = {
+            "rules": [{"name": "Phones", "enable": True, "mode": 1,
+                       "deviceList": [{"deviceMac": "54-AF", "deviceName": "Main Switch",
+                                       "portList": [3, 4], "lagList": [1]}],
+                       "ruleCombine": [{"ouiProfileName": "Yealink", "vlanId": 60, "priority": 6}]}],
+            "profiles": [{"name": "Yealink", "ouiCombine": [{"oui": "80-5E-C0", "description": "Yealink"}]}],
+        }
+        rows = _oui_vlan_rows(data, {"networks": [{"name": "Voice", "vlan": 60}]})
+        assert rows == [{"Name": "Phones", "Status": "Enabled", "Applies To": "Custom ports",
+                         "Switch Ports": "Main Switch: 3, 4, LAG 1",
+                         "OUI → VLAN": "Yealink → VLAN 60 (Voice), priority 6"}]
+        assert _oui_vlan_details(data) == [("OUI Profiles", [{"Profile": "Yealink", "OUIs": "80-5E-C0 (Yealink)"}])]
+
+    def test_switch_qos_rows_and_details(self) -> None:
+        from omada.registry import _switch_qos_details, _switch_qos_rows
+        data = {
+            "mode": {"qosMode": 1},
+            "rules": [
+                {"index": 2, "name": "Bulk", "status": True, "type": 0, "queue": 1, "bindType": 0,
+                 "lanNetworkEntries": [{"networkId": "n-iot", "vlanId": 40}]},
+                {"index": 1, "name": "Voice", "status": True, "type": 2, "protocol": 17, "dscp": 46,
+                 "dPort": 5060, "queue": 6, "dscpReEnable": True, "dscpRe": 64, "bindType": 1,
+                 "deviceList": [{"mac": "54-AF", "portList": ["1/0/5"]}]},
+            ],
+            "dscpMapping": {"mapping": {"6": [46, 48], "0": [0]}},
+            "schedulerMapping": {"name": "Default", "mapping": [{"queue": 6, "type": 0, "weight": 1}]},
+        }
+        context = {"networks": [{"id": "n-iot", "name": "IoT"}], "devices": [{"name": "Main Switch", "mac": "54-AF"}]}
+        rows = _switch_qos_rows(data, context)
+        assert [r["Name"] for r in rows] == ["Voice", "Bulk"]  # by index
+        assert rows[0] == {"Index": "1", "Name": "Voice", "Status": "Enabled", "Type": "Custom",
+                           "Match": "Protocol UDP; DSCP 46; Dst port 5060", "Queue": "6", "DSCP Remark": "Auto",
+                           "Applies To": "Custom ports — Main Switch: 5"}
+        assert rows[1]["Match"] == "Networks IoT" and rows[1]["Applies To"] == "All switch ports"
+        sections = dict(_switch_qos_details(data))
+        assert sections["QoS Mode"] == [{"Setting": "Switch QoS Mode", "Value": "QoS rules"}]
+        assert sections["DSCP to Queue Mapping"] == [{"Queue": "0", "DSCP Values": "0"},
+                                                     {"Queue": "6", "DSCP Values": "46, 48"}]
+        assert sections["Queue Scheduler"] == [{"Scheduler": "Default", "Queue": "6", "Type": "0", "Weight": "1"}]
+
+    def test_port_label_rows(self) -> None:
+        from omada.registry import _port_label_rows
+        assert _port_label_rows([{"tagId": "t1", "name": "Camera"}]) == [{"Label": "Camera", "Label ID": "t1"}]
 
     def test_port_connection_ignores_placeholder_port_status(self) -> None:
         """connectedStatus says connected but portStatus reports link down / 10M: don't show a speed."""
