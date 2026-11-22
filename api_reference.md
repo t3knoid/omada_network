@@ -76,7 +76,7 @@ The official API documentation is available at:
   (password, pwd, secret, token, security key, pre-shared key, private key)
   is replaced with `<redacted>` before anything is written, both in the client
   and again for every resource in `OmadaService.fetch_all`
-  (`omada/redaction.py`). The Markdown then shows `Configured` / `Not set`.
+  (`omada_openapi.redact_secrets`). The Markdown then shows `Configured` / `Not set`.
   `--include-secrets` (or the web UI checkbox) exports the real values. Every
   Markdown file containing one then gets a warning banner.
 - **Not readable through the Open API.** Some settings can be written but not

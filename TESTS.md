@@ -34,7 +34,7 @@ python -m pytest tests/ -v
 
 - `MagicMock` — Creates mock objects for the API client, service layer, HTTP sessions, and responses. `spec=` is used to constrain mocks to real interfaces (e.g. `requests.Response`, `requests.Session`).
 - `patch` — Context manager that temporarily replaces module-level objects (e.g. `openapi_login`, `OmadaService`, `Flask.run`) with mocks so tests run without network access or a live controller.
-- `patch.object` — Patches individual methods on an existing instance (e.g. `openapi_client._session.get`, `_get`, `_get_paged`, `_post`) for fine-grained request simulation. Multi-endpoint resources are usually tested with a `side_effect` that maps each request path to its response.
+- `patch.object` — Patches individual methods on an existing instance (e.g. `get`, `get_paged`, `post` on the client) for fine-grained request simulation. Multi-endpoint resources are usually tested with a `side_effect` that maps each request path to its response.
 - `side_effect` — Configures mocks to return different values on successive calls or raise exceptions, enabling multi-page pagination tests and fallback-path coverage.
 
 **click.testing**
@@ -58,7 +58,7 @@ python -m pytest tests/ -v
 An autouse fixture, `_block_real_network`, makes any unstubbed HTTP request
 raise `requests.ConnectionError` immediately, so a test that forgets to mock
 an endpoint fails fast instead of waiting for a network timeout. A second
-one, `_no_real_waiting`, replaces the client's sleep so request pacing and
+one, `_no_real_waiting`, replaces the `omada-openapi` client's sleep so request pacing and
 rate-limit backoff never slow the suite down.
 
 ---
@@ -154,53 +154,21 @@ Centralized logging configuration tests.
 
 ---
 
-## test_openapi_client.py
+## test_docs_client.py
 
-Omada Open API client tests.
+Resource getter tests for `OmadaDocsClient` (`omada/docs_client.py`). The
+authentication, discovery, request, pagination, rate-limit and redaction
+tests moved to the [`omada-openapi`](https://github.com/t3knoid/omada-openapi)
+library along with that code.
 
 | Class | Test | Description |
 | --- | --- | --- |
-| `TestOpenApiLogin` | `test_successful_login` | Successful Client Credentials login returns token |
-| | `test_login_error_code` | Raises `OmadaAPIError` on invalid credentials |
-| | `test_login_missing_access_token` | Raises `RuntimeError` when access token is missing |
-| `TestOpenApiAuthCodeLogin` | `test_successful_auth_code_login` | Three-step Authorization Code flow succeeds |
-| | `test_auth_code_login_step1_error` | Raises error when step 1 (login) fails |
-| `TestDiscoverControllerId` | `test_successful_discovery` | Discovers controller ID from `/api/info` |
-| | `test_discovery_error_code` | Raises `OmadaAPIError` on discovery failure |
-| | `test_discovery_missing_omadac_id` | Raises `RuntimeError` when `omadacId` is missing |
-| `TestOpenApiDiscoverSite` | `test_single_site_auto_select` | Auto-selects the only available site |
-| | `test_select_by_name` | Selects a site by display name |
-| | `test_name_not_found` | Raises error when site name doesn't match |
-| | `test_multiple_sites_no_name` | Raises error when multiple sites exist and no name given |
-| | `test_no_sites` | Raises error when no sites are found |
-| | `test_result_as_list` | Handles result returned as a list instead of `{data: [...]}` |
-| | `test_site_discovery_returns_id_and_name` | `openapi_discover_site` returns both the site ID and its display name |
-| `TestOpenApiClientUrl` | `test_api_url_v1` | Builds correct v1 API URL |
-| | `test_api_url_v2` | Builds correct v2 API URL |
-| | `test_api_url_strips_leading_slash` | Strips leading slash from path |
-| `TestOpenApiClientGet` | `test_get_success` | Successful GET returns result |
-| | `test_get_raises_on_error` | Raises `OmadaAPIError` on error response |
-| | `test_get_paged_single_page` | Paged GET retrieves a single page |
-| | `test_get_paged_multiple_pages` | Paged GET retrieves multiple pages |
-| | `test_get_paged_result_is_list` | Handles result returned as a plain list |
-| | `test_get_paged_stops_at_max_pages` | Stops pagination at `max_pages` limit |
-| `TestRateLimiting` | `test_retries_rate_limited_call_with_backoff_and_slows_down` | `-7132` is retried with exponential backoff, widens the request interval, and warns once |
-| | `test_http_429_honours_retry_after` | HTTP 429 waits for `Retry-After` and retries |
-| | `test_gives_up_after_retries` | Still rate limited after every retry raises `OmadaAPIError -7132` with a hint |
-| | `test_post_queries_are_retried` | Read-only POST queries are retried too |
-| | `test_other_errors_are_not_retried` | Other error codes fail on the first response |
-| | `test_calls_are_spaced_by_request_interval` | Consecutive calls wait for the remainder of the interval |
-| | `test_request_interval_from_environment` | `OMADA_REQUEST_INTERVAL` sets the interval; invalid values fall back to 0.2s |
-| | `test_login_is_retried_when_rate_limited` | The token request is retried when rate limited |
-| | `test_site_discovery_is_retried_when_rate_limited` | Site discovery is retried when rate limited |
-| `TestOpenApiResourceMethods` | `test_get_acl_rules` | Fetches and tags gateway/switch ACL rules |
+| `TestResourceMethods` | `test_get_acl_rules` | Fetches and tags gateway/switch ACL rules |
 | | `test_get_acl_rules_gateway_fails` | Falls back when gateway ACL endpoint is unsupported |
 | | `test_get_ip_groups` | Fetches IP groups |
 | | `test_get_ip_groups_fallback` | Falls back to filtering from all groups |
 | | `test_get_port_groups` | Fetches port groups |
 | | `test_get_port_groups_fallback` | Falls back to filtering from all groups |
-| | `test_get_networks` | Fetches networks |
-| | `test_get_networks_fallback_to_paged` | Falls back to paged endpoint |
 | | `test_get_vlans_filters_by_vlanid` | Filters networks by `vlanId` |
 | | `test_get_switch_port_profiles` | Fetches switch port profiles |
 | | `test_get_switch_port_profiles_all_fail` | Returns empty list when all endpoints fail |
@@ -216,7 +184,6 @@ Omada Open API client tests.
 | | `test_get_oui_vlans_qos_and_port_labels` | Fetches OUI VLAN rules / profiles, switch QoS, and port labels |
 | | `test_get_uplinks_switch_detail_fallback_and_stacks` | Uplinks/downlinks from switch-detail, port-select fallback, stack members |
 | | `test_get_uplinks_no_switches` | No switch lookups when the site has no switches |
-| | `test_post_returns_result_and_raises_on_error` | Read-only POST helper returns `result` and raises on API errors |
 | | `test_get_device_ports_merges_full_config_and_schedules` | Merges full per-port config from `switches/ports/select` and PoE / port schedule membership |
 | | `test_get_device_ports_without_full_config` | Falls back to overview data when the full config is unavailable |
 | | `test_get_lags_uses_full_lag_config` | LAG name, profile, mode, and members filled from the full LAG config |
@@ -254,8 +221,6 @@ Omada Open API client tests.
 | | `test_get_ipsec_failover` | Fetches IPsec failover groups |
 | | `test_get_dhcp_scopes_extracts_dhcp_fields_and_pool_status` | Extracts DHCP fields per network and adds pool usage for serving networks |
 | | `test_get_dhcp_scopes_tolerates_pool_status_failure` | Pool-usage lookup failure does not fail the export |
-| | `test_get_dhcp_leases` | Fetches DHCP leases across all servers |
-| | `test_get_devices` | Fetches the site device list |
 | | `test_get_device_ports_switch_uses_overview` | Switch ports come from the site-wide port overview, sorted, tagged with device name / MAC / type / model |
 | | `test_get_device_ports_switch_falls_back_when_overview_fails` | Falls back to the per-switch `portList` when the overview is unavailable |
 | | `test_get_device_ports_gateway_merges_sources` | Gateway ports merge `portConfigs`, `osgPortInfos`, and WAN status (`portStatus`) by port number |
@@ -366,20 +331,6 @@ Resource registry and `generate_from_yaml` tests.
 | | `test_empty_dir_returns_empty_dict` | Returns empty dict for empty directory |
 | | `test_empty_yaml_file_handled` | Handles empty YAML files gracefully |
 | | `test_creates_output_dir_if_missing` | Creates output directory if it doesn't exist |
-
----
-
-## test_redaction.py
-
-Credential redaction tests.
-
-| Test | Description |
-| --- | --- |
-| `test_credential_keys_detected` | Password / secret / token / key field names are treated as credentials |
-| `test_non_credential_keys_not_detected` | Public keys, usernames, IDs, and setting objects are not |
-| `test_redacts_nested_strings_only` | Only non-empty string values are redacted; flags and empty values are kept; input is not mutated |
-| `test_passes_through_scalars` | Non-container values pass through unchanged |
-| `test_contains_secrets` | Detects plaintext (non-redacted) credentials anywhere in the data |
 
 ---
 

@@ -195,9 +195,9 @@ class TestOmadaServiceRun:
 
 class TestVpnSecretsNeverExported:
     def test_vpn_and_wireless_secrets_redacted_in_yaml_and_markdown(self, tmp_path: Path) -> None:
-        from omada.api.openapi_client import OmadaOpenApiClient
+        from omada.docs_client import OmadaDocsClient
 
-        client = OmadaOpenApiClient("https://ctrl", "cid", "token")
+        client = OmadaDocsClient("https://ctrl", "cid", "token")
         secrets = ["S2S-PSK-123", "SRV-PSK-456", "CLI-PW-789", "WG-PRIV=", "WG-PSK=", "USER-PW",
                    "SSL-USER-PW", "WIFI-PSK", "RADIUS-PW", "PORTAL-PW"]
         responses = {
@@ -228,8 +228,8 @@ class TestVpnSecretsNeverExported:
             "sites/s1/wireless-network/ssids/s1": {"pskSetting": {"securityKey": secrets[7]}},
         }
         with (
-            patch.object(client, "_get_paged", side_effect=lambda path: responses[path]),
-            patch.object(client, "_get", side_effect=lambda path: get_responses[path]),
+            patch.object(client, "get_paged", side_effect=lambda path: responses[path]),
+            patch.object(client, "get", side_effect=lambda path: get_responses[path]),
         ):
             data = {
                 "site_to_site_vpns": client.get_site_to_site_vpns("s1"),
@@ -281,10 +281,10 @@ class TestGlobalRedaction:
 
 class TestIncludeSecrets:
     def _run(self, tmp_path: Path, include_secrets: bool) -> tuple[OmadaService, str, str]:
-        from omada.api.openapi_client import OmadaOpenApiClient
+        from omada.docs_client import OmadaDocsClient
         from omada.registry import RESOURCES
 
-        client = OmadaOpenApiClient("https://ctrl", "cid", "token")
+        client = OmadaDocsClient("https://ctrl", "cid", "token")
         paged = {
             "sites/s1/wireless-network/wlans": [{"wlanId": "w1", "name": "Default"}],
             "sites/s1/wireless-network/wlans/w1/ssids": [{"id": "s1", "name": "FROGGY", "security": 3}],
@@ -296,8 +296,8 @@ class TestIncludeSecrets:
         assert client.include_secrets is include_secrets
         # Only exercise the SSID getter for real; every other resource is empty.
         with (
-            patch.object(client, "_get_paged", side_effect=lambda path: paged[path]),
-            patch.object(client, "_get", return_value=detail),
+            patch.object(client, "get_paged", side_effect=lambda path: paged[path]),
+            patch.object(client, "get", return_value=detail),
         ):
             for defn in RESOURCES:
                 if defn.fetch_method != "get_ssids":

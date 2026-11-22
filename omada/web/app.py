@@ -199,13 +199,13 @@ def create_app(
         base_url = f"https://{controller_host}:{port}"
 
         try:
-            from omada.api.openapi_client import (
-                OmadaOpenApiClient,
+            from omada_openapi import (
                 discover_controller_id,
                 openapi_auth_code_login,
                 openapi_discover_site,
                 openapi_login,
             )
+            from omada.docs_client import OmadaDocsClient
 
             if not controller_id:
                 controller_id = discover_controller_id(
@@ -236,7 +236,7 @@ def create_app(
                 site_name=site_name,
             )
 
-            api_client = OmadaOpenApiClient(
+            api_client = OmadaDocsClient(
                 login_result.base_url, controller_id,
                 login_result.access_token,
                 verify_ssl=verify_ssl,

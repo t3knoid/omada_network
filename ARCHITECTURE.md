@@ -46,21 +46,23 @@ read-only towards the controller.
                  └───┬─────────┬───────────┬──┘
                      │         │           │
           ┌──────────▼──┐  ┌───▼──────┐  ┌─▼────────────────┐
-          │  API Client │  │ Registry │  │   Exporters      │
-          │ openapi_    │  │ registry │  │ YamlExporter     │
+          │ Docs Client │  │ Registry │  │   Exporters      │
+          │ docs_       │  │ registry │  │ YamlExporter     │
           │ client.py   │  │ .py      │  │ MarkdownGenerator│
-          │  - Auth     │  │  - Defns │  └──────────────────┘
-          │  - GET/POST │  │  - Row / │
-          │  - Paging   │  │  detail  │
-          │  - Enrich   │  │  fmts    │
-          └─────────────┘  └──────────┘
-
-          ┌─────────────────────────┐   ┌─────────────────────────┐
-          │   Credential Redaction  │   │   Logging Config        │
-          │   (redaction.py)        │   │  (logging_config.py)    │
-          │  redact_secrets()       │   │  setup_logging()        │
-          │  contains_secrets()     │   └─────────────────────────┘
-          └─────────────────────────┘
+          │  - get_*    │  │  - Defns │  └──────────────────┘
+          │  - Enrich   │  │  - Row / │
+          │  - Compose  │  │  detail  │
+          └──────┬──────┘  │  fmts    │
+                 │         └──────────┘
+          ┌──────▼─────────────────────┐   ┌─────────────────────────┐
+          │  omada-openapi (library)   │   │   Logging Config        │
+          │  OmadaOpenApiClient        │   │  (logging_config.py)    │
+          │   - Auth / discovery       │   │  setup_logging()        │
+          │   - GET/POST, paging       │   └─────────────────────────┘
+          │   - Rate limiting          │
+          │  redact_secrets()          │
+          │  contains_secrets()        │
+          └────────────────────────────┘
 ```
 
 ---
@@ -121,11 +123,16 @@ and writes Markdown. No API interaction.
 
 ---
 
-### API Client — `omada/api/openapi_client.py`
+### API Client — `omada-openapi` library and `omada/docs_client.py`
 
-HTTP client for the Omada Open API supporting both official OAuth 2 modes.
+The Open API plumbing lives in the separate
+[`omada-openapi`](https://github.com/t3knoid/omada-openapi) package (import
+name `omada_openapi`), pinned in `requirements.txt` and `pyproject.toml`. It
+supports both official OAuth 2 modes and handles pacing, rate-limit retries,
+pagination and credential redaction. This project adds the
+documentation-specific resource getters on top of it.
 
-**Authentication & discovery functions:**
+**Authentication & discovery functions** (`omada_openapi`):
 
 | Function | Purpose |
 | --- | --- |
@@ -134,19 +141,22 @@ HTTP client for the Omada Open API supporting both official OAuth 2 modes.
 | `openapi_auth_code_login()` | Three-step Authorization Code flow → access token |
 | `openapi_discover_site()` | List sites and resolve by name (case-insensitive); returns `(site_id, site_name)`. A single site is auto-selected. `openapi_discover_site_id()` is a wrapper returning only the ID |
 
-**`OmadaOpenApiClient`** — authenticated client for data retrieval.
+**`omada_openapi.OmadaOpenApiClient`** — authenticated client for data
+retrieval.
 
-| Internal method | Description |
+| Method | Description |
 | --- | --- |
-| `_api_url(path, api_version)` | Build full URL from relative path + `omadacId` |
-| `_get(path)` | Single GET request; check `errorCode`; return `result` |
-| `_get_paged(path, page_size, max_pages)` | Paginated GET; auto-detect response shape; aggregate pages |
-| `_post(path, payload)` | Read-only POST query (only `switches/ports/select`); same error handling as `_get` |
-| `_collect(site_id, parts, label)` | Fetch several endpoints into one dict, each best-effort; raise only if all fail |
-| `_redact(data)` | Apply `redact_secrets()` unless `include_secrets` is set |
+| `get(path)` | Single GET request; check `errorCode`; return `result` |
+| `get_paged(path, page_size, max_pages)` | Paginated GET; auto-detect response shape; aggregate pages |
+| `post(path, payload)` | Read-only POST query (only `switches/ports/select`); same error handling as `get` |
+| `redact(data)` | Apply `redact_secrets()` unless `include_secrets` is set |
+| `get_devices()`, `get_networks()`, `get_dhcp_leases()` | Common single-endpoint getters |
 
-Public `get_*` methods (one per resource) call these helpers. Three
-patterns recur:
+**`omada.docs_client.OmadaDocsClient`** — subclass of `OmadaOpenApiClient`
+with one `get_*` method per exported resource, plus `_collect(site_id,
+parts, label)`, which fetches several endpoints into one dict, each
+best-effort, and raises only if all fail. The CLI and web UI build this
+client. Three patterns recur in its getters:
 
 - **Fallback:** try a preferred endpoint, then an alternative if it returns
   an error (e.g. `/lan-networks/all`, then paginated `/lan-networks`).
@@ -176,7 +186,7 @@ Single source of truth for every resource type the application supports.
 | --- | --- |
 | `name` | Snake-case identifier (e.g. `acl_rules`) |
 | `title` | Human-readable Markdown heading |
-| `fetch_method` | Method name on `OmadaOpenApiClient` |
+| `fetch_method` | Method name on `OmadaDocsClient` |
 | `row_formatter` | Callable that converts raw data → list of display dicts |
 | `sort_key` | Column name to sort rows by |
 | `needs_context` | If `True`, the row formatter receives the full data set for cross-reference resolution |
@@ -253,7 +263,7 @@ Flask application created via the `create_app()` factory.
 
 ---
 
-### Credential Redaction — `omada/redaction.py`
+### Credential Redaction — `omada_openapi.redaction`
 
 `redact_secrets(data)` returns a copy of any resource with every non-empty
 string value whose key looks like a credential (`password`, `pwd`, `secret`,
@@ -434,7 +444,7 @@ selects Authorization Code mode; otherwise it uses Client Credentials.
 ## Pagination
 
 All paginated endpoints use `page` (1-indexed) and `pageSize` query
-parameters. The `_get_paged()` method handles three response shapes
+parameters. The library's `get_paged()` method handles three response shapes
 transparently:
 
 | Shape | Example `result` field | Detection |
@@ -451,7 +461,7 @@ or `max_pages` (default 200) is reached.
 ## Error Handling & Resilience
 
 **Rate limiting** — the controller rate-limits the Open API and answers
-`errorCode -7132` ("too many requests") or HTTP 429. `OmadaOpenApiClient`
+`errorCode -7132` ("too many requests") or HTTP 429. The `omada-openapi` client
 spaces every call at least `request_interval` apart (0.2s, or
 `OMADA_REQUEST_INTERVAL`). `_send_with_rate_limit()` retries a rate-limited
 response up to 6 times with exponential backoff (2s, 4s, … up to 60s,
@@ -492,10 +502,12 @@ switches without static routing are `DEBUG`).
 
 Adding a new resource type requires code changes in only two files:
 
-1. **`omada/api/openapi_client.py`** — add a `get_*()` method. Use the
-   `_collect()` / enrichment patterns for multi-endpoint data, and
-   `self._redact()` if the endpoint returns credentials (the service layer
-   redacts again regardless).
+1. **`omada/docs_client.py`** — add a `get_*()` method to `OmadaDocsClient`
+   using `self.get()` / `self.get_paged()`. Use the `_collect()` /
+   enrichment patterns for multi-endpoint data, and `self.redact()` if the
+   endpoint returns credentials (the service layer redacts again
+   regardless). Generic, reusable endpoint access belongs in `omada-openapi`
+   instead.
 2. **`omada/registry.py`** — add a row formatter, and optionally a detail
    formatter, plus a `ResourceDefinition` entry in `RESOURCES`. Set
    `needs_context=True` to resolve IDs from other resources.
@@ -505,7 +517,7 @@ No changes are needed in the CLI, web UI, service layer, exporters, or
 
 To keep the suite and docs consistent, also: add the new fetcher's mock
 return value to the client fixtures in `tests/test_service.py` and
-`tests/test_openapi_client.py`; update the resource-count test in
+`tests/test_docs_client.py`; update the resource-count test in
 `tests/test_registry.py`; add tests and rows in `TESTS.md`; and document
 the endpoints in `api_reference.md` (the resource index there is grouped by
 area).
@@ -516,7 +528,7 @@ area).
 
 The suite (see [TESTS.md](TESTS.md)) runs fully offline. `tests/conftest.py`
 blocks real network access with an autouse fixture, so any unmocked HTTP call
-fails immediately. Client tests patch `_get` / `_get_paged` / `_post` with
+fails immediately. Client tests patch `get` / `get_paged` / `post` with
 path-based `side_effect` functions; formatter tests feed representative API
 records straight to the row and detail formatters. End-to-end tests run
 `OmadaService` on the real client methods to confirm that no secret value

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from omada.redaction import REDACTED
+from omada_openapi import REDACTED
 from omada.registry import REGISTRY, RESOURCES, ResourceDefinition
 from omada.service import generate_from_yaml
 

@@ -35,10 +35,10 @@ class TestFetchCommand:
         mock_paths = {"yaml": {}, "docs": {}}
         lr = _mock_login_result()
         with (
-            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
-            patch("omada.api.openapi_client.openapi_login", return_value=lr),
-            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
-            patch("omada.api.openapi_client.OmadaOpenApiClient") as MockClient,
+            patch("omada_openapi.discover_controller_id", return_value="cid"),
+            patch("omada_openapi.openapi_login", return_value=lr),
+            patch("omada_openapi.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.docs_client.OmadaDocsClient") as MockClient,
             patch("omada.service.OmadaService") as MockService,
         ):
             MockService.return_value.run.return_value = mock_paths
@@ -67,10 +67,10 @@ class TestFetchCommand:
     ) -> None:
         lr = _mock_login_result()
         with (
-            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
-            patch("omada.api.openapi_client.openapi_login", return_value=lr),
-            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
-            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada_openapi.discover_controller_id", return_value="cid"),
+            patch("omada_openapi.openapi_login", return_value=lr),
+            patch("omada_openapi.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.docs_client.OmadaDocsClient"),
             patch("omada.service.OmadaService") as MockService,
         ):
             MockService.return_value.run.return_value = {"yaml": {}, "docs": {}}
@@ -89,10 +89,10 @@ class TestFetchCommand:
         mock_paths = {"yaml": {}, "docs": {}}
         lr = _mock_login_result()
         with (
-            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
-            patch("omada.api.openapi_client.openapi_auth_code_login", return_value=lr) as mock_ac,
-            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
-            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada_openapi.discover_controller_id", return_value="cid"),
+            patch("omada_openapi.openapi_auth_code_login", return_value=lr) as mock_ac,
+            patch("omada_openapi.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.docs_client.OmadaDocsClient"),
             patch("omada.service.OmadaService") as MockService,
         ):
             MockService.return_value.run.return_value = mock_paths
@@ -121,10 +121,10 @@ class TestFetchCommand:
             "OMADA_OUTPUT_DIR": str(tmp_path),
         }
         with (
-            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
-            patch("omada.api.openapi_client.openapi_login", return_value=lr),
-            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
-            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada_openapi.discover_controller_id", return_value="cid"),
+            patch("omada_openapi.openapi_login", return_value=lr),
+            patch("omada_openapi.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.docs_client.OmadaDocsClient"),
             patch("omada.service.OmadaService") as MockService,
         ):
             MockService.return_value.run.return_value = mock_paths
@@ -135,10 +135,10 @@ class TestFetchCommand:
         mock_paths = {"yaml": {}, "docs": {}}
         lr = _mock_login_result()
         with (
-            patch("omada.api.openapi_client.discover_controller_id") as mock_disc,
-            patch("omada.api.openapi_client.openapi_login", return_value=lr),
-            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
-            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada_openapi.discover_controller_id") as mock_disc,
+            patch("omada_openapi.openapi_login", return_value=lr),
+            patch("omada_openapi.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.docs_client.OmadaDocsClient"),
             patch("omada.service.OmadaService") as MockService,
         ):
             MockService.return_value.run.return_value = mock_paths
@@ -271,10 +271,10 @@ class TestPasswordPromptBehaviour:
         mock_paths = {"yaml": {}, "docs": {}}
         lr = _mock_login_result()
         with (
-            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
-            patch("omada.api.openapi_client.openapi_login", return_value=lr) as mock_login,
-            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
-            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada_openapi.discover_controller_id", return_value="cid"),
+            patch("omada_openapi.openapi_login", return_value=lr) as mock_login,
+            patch("omada_openapi.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.docs_client.OmadaDocsClient"),
             patch("omada.service.OmadaService") as MockService,
         ):
             MockService.return_value.run.return_value = mock_paths
@@ -296,10 +296,10 @@ class TestPasswordPromptBehaviour:
         """When --username is set but --password is missing, prompt interactively."""
         lr = _mock_login_result()
         with (
-            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
-            patch("omada.api.openapi_client.openapi_auth_code_login", return_value=lr) as mock_ac,
-            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
-            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada_openapi.discover_controller_id", return_value="cid"),
+            patch("omada_openapi.openapi_auth_code_login", return_value=lr) as mock_ac,
+            patch("omada_openapi.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.docs_client.OmadaDocsClient"),
             patch("sys.stdin") as mock_stdin,
             patch("click.prompt", return_value="secret") as mock_prompt,
         ):
@@ -321,7 +321,7 @@ class TestPasswordPromptBehaviour:
     def test_non_tty_raises_usage_error(self) -> None:
         """Non-TTY stdin must raise UsageError, not Click Abort."""
         with (
-            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
+            patch("omada_openapi.discover_controller_id", return_value="cid"),
             patch("sys.stdin") as mock_stdin,
         ):
             mock_stdin.isatty.return_value = False
@@ -351,10 +351,10 @@ class TestPasswordPromptBehaviour:
             "OMADA_OUTPUT_DIR": str(tmp_path),
         }
         with (
-            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
-            patch("omada.api.openapi_client.openapi_auth_code_login", return_value=lr) as mock_ac,
-            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
-            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada_openapi.discover_controller_id", return_value="cid"),
+            patch("omada_openapi.openapi_auth_code_login", return_value=lr) as mock_ac,
+            patch("omada_openapi.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.docs_client.OmadaDocsClient"),
             patch("omada.service.OmadaService") as MockService,
         ):
             MockService.return_value.run.return_value = mock_paths

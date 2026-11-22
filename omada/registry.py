@@ -4,7 +4,7 @@ Each :class:`ResourceDefinition` describes one resource category:
 
 * **name** – snake_case identifier used as file stem (``acl_rules``, …)
 * **title** – human-readable Markdown heading
-* **fetch_method** – method name on :class:`~omada.api.openapi_client.OmadaOpenApiClient`
+* **fetch_method** – method name on :class:`~omada.docs_client.OmadaDocsClient`
 * **row_formatter** – callable that converts raw API/YAML data to a list of
   display-row dicts (used by :class:`~omada.exporters.markdown_generator.MarkdownGenerator`)
 * **sort_key** – column header to sort rows by; ``""`` disables sorting
@@ -13,7 +13,7 @@ Each :class:`ResourceDefinition` describes one resource category:
 
 Adding a new resource category requires only:
 
-1. A new ``get_*`` method on ``OmadaOpenApiClient``
+1. A new ``get_*`` method on ``OmadaDocsClient``
 2. A new :class:`ResourceDefinition` appended to :data:`RESOURCES`
 
 No other files need to be modified.
@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from omada.redaction import REDACTED
+from omada_openapi import REDACTED
 
 
 # ---------------------------------------------------------------------------
