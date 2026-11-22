@@ -1,88 +1,33 @@
 # Omada Open API Reference
 
-This document lists the API endpoints used by the application for each
-resource type. All resource endpoints use the base path:
+This document lists the API endpoints used by the application for each resource type. All resource endpoints use the base path:
 
 ```
 /openapi/v1/{omadacId}/
 ```
 
-The `{omadacId}` (controller ID) is auto-discovered via `GET /api/info` unless
-explicitly provided.
+The `{omadacId}` (controller ID) is auto-discovered via `GET /api/info` unless explicitly provided.
 
 The official API documentation is available at:
 <https://use1-omada-northbound.tplinkcloud.com/doc.html#/home>
 
 ---
 
-## Authentication
+## Authentication & Discovery
 
-### Client Credentials Mode
-
-| Step | Method | Endpoint | Notes |
-| --- | --- | --- | --- |
-| Obtain token | `POST` | `/openapi/authorize/token?grant_type=client_credentials` | Client ID and Secret in JSON body |
-
-### Authorization Code Mode
-
-| Step | Method | Endpoint | Notes |
-| --- | --- | --- | --- |
-| 1. Login | `POST` | `/openapi/authorize/login?client_id={clientId}` | Username and password in JSON body; establishes login session (does **not** return authorization code) |
-| 2. Get authorization code | `POST` | `/openapi/authorize/code?client_id={clientId}` | Uses active login session; returns authorization code |
-| 3. Exchange code | `POST` | `/openapi/authorize/token?grant_type=authorization_code` | Authorization code, Client ID, and Secret in JSON body |
-
-> **API docs:** Authentication endpoints are documented under the
-> [Authorize](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Authorize) tag.
-
----
-
-## Discovery
-
-| Purpose | Method | Endpoint | Notes |
-| --- | --- | --- | --- |
-| Controller ID | `GET` | `/api/info` | Returns `result.omadacId` |
-| Sites | `GET` | `/openapi/v1/{omadacId}/sites` | Returns available sites; used to resolve site name → site ID |
-
-> **API docs:**
-> - Controller info — not part of the Open API spec (internal endpoint).
-> - Sites — documented under the [Site](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Site) tag.
-
----
+Authentication (Client Credentials and Authorization Code modes), controller ID discovery, site lookup, request pacing, rate-limit retries and pagination are handled by the [omada-openapi](https://github.com/t3knoid/omada-openapi) library. See its README for the endpoints it uses.
 
 ---
 
 ## Conventions
 
-- **Paths.** Endpoints below are relative to `/openapi/v1/{omadacId}/` unless a
-  version (`v2`) is shown. `{siteId}` is resolved from the site name during
-  discovery.
-- **Output.** Each resource is written to `docs/<site>/<resource>.yaml` (the raw
-  API data, source of truth) and `docs/<site>/<resource>.md` (formatted
-  tables). Many Markdown files start with a summary table, followed by one
-  detail section per item.
-- **Best-effort parts.** Resources built from several endpoints treat
-  secondary endpoints as optional: a failing endpoint is logged and left out,
-  and the rest of the resource is still exported. A resource fails (and is
-  reported in the run summary) only when its primary endpoint, or every one
-  of its endpoints, fails. A failed resource is written as an empty file.
-- **Read-only POST.** `POST sites/{siteId}/switches/ports/select` is a query
-  that takes its filter in the body; nothing on the controller is modified.
-  Every other call is a `GET`.
-- **Codes and names.** Numeric codes are translated to labels as defined in
-  the Open API schemas, and IDs are resolved to names (networks, profiles,
-  WAN ports, devices) using the other exported resources. Unknown codes and
-  IDs are shown as-is.
-- **Secrets.** Any non-empty string whose field name looks like a credential
-  (password, pwd, secret, token, security key, pre-shared key, private key)
-  is replaced with `<redacted>` before anything is written, both in the client
-  and again for every resource in `OmadaService.fetch_all`
-  (`omada_openapi.redact_secrets`). The Markdown then shows `Configured` / `Not set`.
-  `--include-secrets` (or the web UI checkbox) exports the real values. Every
-  Markdown file containing one then gets a warning banner.
-- **Not readable through the Open API.** Some settings can be written but not
-  read: the switch-wide STP mode and bridge priority, site loopback control,
-  and the WAN health-check (online detection) targets. The relevant sections
-  note this.
+- **Paths.** Endpoints below are relative to `/openapi/v1/{omadacId}/` unless a version (`v2`) is shown. `{siteId}` is resolved from the site name during discovery.
+- **Output.** Each resource is written to `docs/<site>/<resource>.yaml` (the raw API data, source of truth) and `docs/<site>/<resource>.md` (formatted tables). Many Markdown files start with a summary table, followed by one detail section per item.
+- **Best-effort parts.** Resources built from several endpoints treat secondary endpoints as optional: a failing endpoint is logged and left out, and the rest of the resource is still exported. A resource fails (and is reported in the run summary) only when its primary endpoint, or every one of its endpoints, fails. A failed resource is written as an empty file.
+- **Read-only POST.** `POST sites/{siteId}/switches/ports/select` is a query that takes its filter in the body; nothing on the controller is modified. Every other call is a `GET`.
+- **Codes and names.** Numeric codes are translated to labels as defined in the Open API schemas, and IDs are resolved to names (networks, profiles, WAN ports, devices) using the other exported resources. Unknown codes and IDs are shown as-is.
+- **Secrets.** Any non-empty string whose field name looks like a credential (password, pwd, secret, token, security key, pre-shared key, private key) is replaced with `<redacted>` before anything is written, both in the client and again for every resource in `OmadaService.fetch_all` (`omada_openapi.redact_secrets`). The Markdown then shows `Configured` / `Not set`. `--include-secrets` (or the web UI checkbox) exports the real values. Every Markdown file containing one then gets a warning banner.
+- **Not readable through the Open API.** Some settings can be written but not read: the switch-wide STP mode and bridge priority, site loopback control, and the WAN health-check (online detection) targets. The relevant sections note this.
 
 ---
 
@@ -157,10 +102,7 @@ Returns the adopted devices for the selected site.
 
 **Resource:** `device_ports`
 
-Port configuration for every switch and gateway in the site, exported as one
-record per port. Each record is tagged with `deviceName`, `deviceMac`,
-`deviceType`, and `deviceModel`. Other device types (e.g. access points) are
-skipped.
+Port configuration for every switch and gateway in the site, exported as one record per port. Each record is tagged with `deviceName`, `deviceMac`, `deviceType`, and `deviceModel`. Other device types (e.g. access points) are skipped.
 
 | Device type | Method | Endpoint | Notes |
 | --- | --- | --- | --- |
@@ -173,9 +115,7 @@ skipped.
 | Gateway | `GET` | `sites/{siteId}/gateways/{gatewayMac}/ports` | `osgPortInfos`: name, type, physical type, mode |
 | Gateway | `GET` | `sites/{siteId}/gateways/{gatewayMac}/wan-status` | Link status, speed, duplex — stored as `portStatus` |
 
-Gateway sources are merged by port number; if some fail, the rest are still
-used. Failures for a device are logged as warnings and the remaining devices
-are still exported.
+Gateway sources are merged by port number; if some fail, the rest are still used. Failures for a device are logged as warnings and the remaining devices are still exported.
 
 The Markdown table mirrors the controller's port list:
 
@@ -188,35 +128,15 @@ The Markdown table mirrors the controller's port list:
 | Profile | `profileName` | — |
 | Native Network | `nativeNetworkId` resolved to the network name | LAN-mode ports: `pvid` resolved to the network with that VLAN |
 
-> **API docs:** See the [Device](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Device) tag —
-> *Get the switches ports overview*, *Get switch info*, *Get gateway info*,
-> *Get gateway ports*, *Get gateway wan status*.
+> **API docs:** See the [Device](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Device) tag — *Get the switches ports overview*, *Get switch info*, *Get gateway info*, *Get gateway ports*, *Get gateway wan status*.
 
 #### Per-port overrides
 
-The port overview only has profile, PoE,
-speed/duplex, native network and tag mode. Each switch port is therefore
-merged with its full configuration from `switches/ports/select`, and then
-compared with its assigned profile (`switch_port_profiles`, matched by ID,
-then name). Compared settings: PoE, 802.1X, bandwidth control, rate limit,
-storm control, port isolation, voice network / VLAN / DSCP, loopback
-detection (port and VLAN based), STP, LLDP-MED, topology notification, EEE,
-flow control, IGMP / MLD fast leave, DHCP L2 relay, 802.1p priority, trust
-mode, network tags setting, and native / untagged / tagged networks
-(compared as sets). Settings with no profile equivalent are always listed
-as port-level: fixed speed or duplex, mirroring, disabled ports, and PoE /
-port schedule membership. The controller's `networkConflict` flag is
-reported too.
+The port overview only has profile, PoE, speed/duplex, native network and tag mode. Each switch port is therefore merged with its full configuration from `switches/ports/select`, and then compared with its assigned profile (`switch_port_profiles`, matched by ID, then name). Compared settings: PoE, 802.1X, bandwidth control, rate limit, storm control, port isolation, voice network / VLAN / DSCP, loopback detection (port and VLAN based), STP, LLDP-MED, topology notification, EEE, flow control, IGMP / MLD fast leave, DHCP L2 relay, 802.1p priority, trust mode, network tags setting, and native / untagged / tagged networks (compared as sets). Settings with no profile equivalent are always listed as port-level: fixed speed or duplex, mirroring, disabled ports, and PoE / port schedule membership. The controller's `networkConflict` flag is reported too.
 
-`device_ports.md` gains an **Overrides** column and a **Ports differing
-from their profile** table (setting, port value, profile value, and whether
-the port is in custom-settings / custom-VLAN mode). A profile PoE of "use
-device setting" isn't counted as a difference. Rate limit and storm
-control are compared only when both sides use that control type.
+`device_ports.md` gains an **Overrides** column and a **Ports differing from their profile** table (setting, port value, profile value, and whether the port is in custom-settings / custom-VLAN mode). A profile PoE of "use device setting" isn't counted as a difference. Rate limit and storm control are compared only when both sides use that control type.
 
-If the full-config call fails, ports keep their overview data. Only the
-settings present there (PoE, speed/duplex, native network, tag mode) are
-compared.
+If the full-config call fails, ports keep their overview data. Only the settings present there (PoE, speed/duplex, native network, tag mode) are compared.
 
 ### PoE & Port Schedules
 
@@ -227,9 +147,7 @@ compared.
 | `poeSchedules` | `GET` | `sites/{siteId}/poe-schedules` | Paginated, best-effort. PoE powered only during the time range; `poePortsMap` = switch MAC → ports |
 | `portSchedules` | `GET` | `sites/{siteId}/port-schedules` | Paginated, best-effort. Port enabled only during the time range; `portsMap` = switch MAC → ports |
 
-The Markdown lists each schedule's type, status, time range (by name from
-`time_range_profiles`), and the switch ports it covers. Each member port is
-also tagged in `device_ports` and shows up there as a port-level override.
+The Markdown lists each schedule's type, status, time range (by name from `time_range_profiles`), and the switch ports it covers. Each member port is also tagged in `device_ports` and shows up there as a port-level override.
 
 ### Switch Port Profiles
 
@@ -237,13 +155,7 @@ also tagged in `device_ports` and shows up there as a port-level override.
 
 Attempts multiple endpoints with fallback.
 
-The Markdown output has a summary table (type, native / untagged / tagged
-networks, PoE, spanning tree, loopback detect) followed by one section per
-profile listing every property, grouped as General, VLAN, Switching,
-QoS & Bandwidth, and Spanning Tree. Fields without a dedicated mapping are
-listed under **Other**, so no profile property is left out. Profile `type` follows
-the API definition: 0 = built-in *All*, 1 = built-in *Disable*, 2 = any other
-(*Standard*) profile.
+The Markdown output has a summary table (type, native / untagged / tagged networks, PoE, spanning tree, loopback detect) followed by one section per profile listing every property, grouped as General, VLAN, Switching, QoS & Bandwidth, and Spanning Tree. Fields without a dedicated mapping are listed under **Other**, so no profile property is left out. Profile `type` follows the API definition: 0 = built-in *All*, 1 = built-in *Disable*, 2 = any other (*Standard*) profile.
 
 | Priority | Method | Endpoint | Notes |
 | --- | --- | --- | --- |
@@ -251,8 +163,7 @@ the API definition: 0 = built-in *All*, 1 = built-in *Disable*, 2 = any other
 | 2 | `GET` | `sites/{siteId}/lan-profiles` | v2 API (`/openapi/v2/…`) |
 | 3 | `GET` | `sites/{siteId}/lan-switch-setting` | Legacy fallback (paginated) |
 
-> **API docs:** Documented under the [Wired Network](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Wired%20Network) tag —
-> *Get LAN profile list* (v1), *Get switch profile list* (v2), *Get switch port profile info* (legacy).
+> **API docs:** Documented under the [Wired Network](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Wired%20Network) tag — *Get LAN profile list* (v1), *Get switch profile list* (v2), *Get switch port profile info* (legacy).
 
 ### Link Aggregation
 
@@ -266,20 +177,11 @@ the API definition: 0 = built-in *All*, 1 = built-in *Disable*, 2 = any other
 | `mlagGroups` | `GET` | `sites/{siteId}/mlag` | Paginated, best-effort. M-LAG groups: status, member switches and roles, peer-link ports |
 | `hashAlgorithm` | `GET` | `sites/{siteId}/lag-hash-alg` | Best-effort. Site LAG hash: source / destination MAC or IP |
 
-**Group membership.** Ports are grouped by (switch, `lagId`). A group's
-members are the union of every member's `lagSetting.ports`, plus the ports
-carrying that `lagId`. A port marked `operation: AGGREGATING` therefore isn't
-the only source: a member is listed even if its own record is missing or
-incomplete. An aggregating port with no `lagSetting` is shown under
-"LAG (group unknown)".
+**Group membership.** Ports are grouped by (switch, `lagId`). A group's members are the union of every member's `lagSetting.ports`, plus the ports carrying that `lagId`. A port marked `operation: AGGREGATING` therefore isn't the only source: a member is listed even if its own record is missing or incomplete. An aggregating port with no `lagSetting` is shown under "LAG (group unknown)".
 
 **Mode** (`lagType`): 1 Static, 2 LACP, 3 LACP (Active), 4 LACP (Passive).
 
-The Markdown has one row per LAG (device, LAG ID, name, mode, member ports,
-link: up/down with speed for stacks, or "x/y members up", profile, M-LAG),
-then a member-port table for each LAG, the M-LAG groups, and the site hash
-algorithm. In `device_ports`, the Operation column of an aggregating port
-names its group, e.g. `Aggregating (LAG 1)`.
+The Markdown has one row per LAG (device, LAG ID, name, mode, member ports, link: up/down with speed for stacks, or "x/y members up", profile, M-LAG), then a member-port table for each LAG, the M-LAG groups, and the site hash algorithm. In `device_ports`, the Operation column of an aggregating port names its group, e.g. `Aggregating (LAG 1)`.
 
 ### Switch Settings
 
@@ -297,18 +199,10 @@ Every part is best-effort.
 
 **Derived from other resources** (no extra API calls):
 
-- **Loop prevention / STP per switch:** each switch port (`device_ports`) is
-  matched to its profile (`switch_port_profiles`, by ID, then by name). The
-  table counts ports with STP, port-based loopback detection, and VLAN-based
-  loopback detection. Ports with an unknown profile, and ports with a profile
-  override (whose own settings may differ), are reported separately.
-- **IGMP snooping:** the per-network `igmpSnoopEnable` from `networks`.
-  Snooping details (querier, unknown multicast, …) are in
-  `multicast_services`.
+- **Loop prevention / STP per switch:** each switch port (`device_ports`) is matched to its profile (`switch_port_profiles`, by ID, then by name). The table counts ports with STP, port-based loopback detection, and VLAN-based loopback detection. Ports with an unknown profile, and ports with a profile override (whose own settings may differ), are reported separately.
+- **IGMP snooping:** the per-network `igmpSnoopEnable` from `networks`. Snooping details (querier, unknown multicast, …) are in `multicast_services`.
 
-**Not available through the Open API:** the switch-wide STP mode
-(STP / RSTP / MSTP / RPVST) and bridge priority, and site loopback control,
-can be set but not read. The Markdown says so instead of leaving a blank.
+**Not available through the Open API:** the switch-wide STP mode (STP / RSTP / MSTP / RPVST) and bridge priority, and site loopback control, can be set but not read. The Markdown says so instead of leaving a blank.
 
 ### Uplinks & Stacks
 
@@ -322,18 +216,9 @@ can be set but not read. The Markdown says so instead of leaving a blank.
 
 All parts are best-effort.
 
-A link's **local port** is the port on this switch: `port`, `stPort` for
-stacks (`unit/slot/port`), or `lagId`, shown as `LAG n`. The remote device is
-`name` / `type` / `model`, and its port is `linkPeerPortInfo`. Speeds use the
-port-status codes (1 10M, 2 100M, 3 1000M, 4 10G).
+A link's **local port** is the port on this switch: `port`, `stPort` for stacks (`unit/slot/port`), or `lagId`, shown as `LAG n`. The remote device is `name` / `type` / `model`, and its port is `linkPeerPortInfo`. Speeds use the port-status codes (1 10M, 2 100M, 3 1000M, 4 10G).
 
-The Markdown has a summary row per switch (uplink port, upstream device and
-port, speed, downlink count, stack unit), a downlink table per switch, and a
-member table per stack. It ends with a **Remapping checklist** listing every
-port whose role depends on the hardware: uplink ports / LAGs, downlink ports,
-stack port groups, and LAG members (from `lags`). On a different switch model
-those port numbers may not exist or may mean something else (e.g. SFP vs.
-copper), so each one needs a deliberate mapping.
+The Markdown has a summary row per switch (uplink port, upstream device and port, speed, downlink count, stack unit), a downlink table per switch, and a member table per stack. It ends with a **Remapping checklist** listing every port whose role depends on the hardware: uplink ports / LAGs, downlink ports, stack port groups, and LAG members (from `lags`). On a different switch model those port numbers may not exist or may mean something else (e.g. SFP vs. copper), so each one needs a deliberate mapping.
 
 
 ### Switch Port Sheets
@@ -344,14 +229,9 @@ copper), so each one needs a deliberate mapping.
 | --- | --- | --- |
 | `GET` | `sites/{siteId}/devices` | Switch list only; the sheet is built from other resources |
 
-A per-switch record of every port, meant for manually reconfiguring a
-replacement switch, especially one with fewer ports. Built at Markdown time
-from `device_ports` (full port config), `switch_port_profiles`, `uplinks`, and
-`networks`, so it also regenerates from YAML.
+A per-switch record of every port, meant for manually reconfiguring a replacement switch, especially one with fewer ports. Built at Markdown time from `device_ports` (full port config), `switch_port_profiles`, `uplinks`, and `networks`, so it also regenerates from YAML.
 
-**Summary** (one row per switch): ports, connected, ports with custom
-settings, **Must Carry Over**, and how many of those are SFP / Combo or
-powering PoE devices.
+**Summary** (one row per switch): ports, connected, ports with custom settings, **Must Carry Over**, and how many of those are SFP / Combo or powering PoE devices.
 
 **Per switch** (one row per port):
 
@@ -366,8 +246,7 @@ powering PoE devices.
 | Port-Bound Rules | Site rules that select this port: DHCP snooping / ARP detection ports ([Switch Security](#switch-security)), OUI-VLAN rules and QoS rules bound to custom ports. LAG selections are expanded to member ports. Rules covering *all* ports of a switch are not repeated per port |
 | Carry Over | Why the port matters: connected, uplink, downlink, LAG, custom settings, port rules, named / labelled. Otherwise `No (unused, default)` |
 
-The sheet reflects the last export. For an exact record, run `fetch` just
-before replacing a switch.
+The sheet reflects the last export. For an exact record, run `fetch` just before replacing a switch.
 
 
 ### Switch Security
@@ -382,10 +261,7 @@ before replacing a switch.
 | `arpDetectStatus`, `arpDetects` | `GET` | `sites/{siteId}/arpDetects/status`, `sites/{siteId}/arpDetects` | Global switch, "use DHCP snooping entries", and per switch the selected ports and IP-MAC bindings (paginated) |
 | `ipMacBind`, `ipMacBinds` | `GET` | `sites/{siteId}/ip-mac-bind`, `sites/{siteId}/ip-mac-binds` | IP-MAC binding general setting (LANs, WANs, gratuitous ARP) and the binding list (paginated) |
 
-Each part is best-effort. The per-port 802.1X *mode* is part of the port
-configuration (see [Device Ports](#device-ports)). The spec doesn't say
-whether DHCP snooping / ARP detection "selected ports" are the trusted or the
-monitored ports, so the export uses the controller's wording.
+Each part is best-effort. The per-port 802.1X *mode* is part of the port configuration (see [Device Ports](#device-ports)). The spec doesn't say whether DHCP snooping / ARP detection "selected ports" are the trusted or the monitored ports, so the export uses the controller's wording.
 
 ### OUI-Based VLANs
 
@@ -428,16 +304,13 @@ monitored ports, so the export uses the controller's wording.
 | `GET` | `sites/{siteId}/lan-networks/all` | Primary — returns all LAN networks |
 | `GET` | `sites/{siteId}/lan-networks` | Fallback — paginated |
 
-> **API docs:** Documented under the [Wired Network](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Wired%20Network) tag —
-> *Get all networks for the omada id and site id*, *Get LAN network list*.
+> **API docs:** Documented under the [Wired Network](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Wired%20Network) tag — *Get all networks for the omada id and site id*, *Get LAN network list*.
 
 ### VLANs
 
 **Resource:** `vlans`
 
-VLANs are derived from the Networks endpoint by filtering for entries that
-contain a `vlan` or `vlanId` field. If no entries match, the full network
-list is returned.
+VLANs are derived from the Networks endpoint by filtering for entries that contain a `vlan` or `vlanId` field. If no entries match, the full network list is returned.
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
@@ -449,30 +322,18 @@ list is returned.
 
 **Resource:** `dhcp_scopes`
 
-Reservations alone don't recreate the DHCP service, so `dhcp_scopes` holds
-the DHCP definition of every LAN network: one YAML record per network
-containing only DHCP-related fields.
+Reservations alone don't recreate the DHCP service, so `dhcp_scopes` holds the DHCP definition of every LAN network: one YAML record per network containing only DHCP-related fields.
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
 | `GET` | `sites/{siteId}/lan-networks/all` | Via `get_networks()`; DHCP fields are extracted per network |
 | `GET` | `sites/{siteId}/networks/{networkId}/dhcp-server-info` | Pool usage (`poolStatus`), only for networks serving DHCP; best-effort |
 
-Fields kept per network: identity (`id`, `name`, `vlan`, `gatewaySubnet`,
-`purpose`), the serving device (`deviceType` 0 External / 1 Gateway / 2 Switch
-/ 3 None, `deviceMac`, and switch `mode` 1 Server / 2 Relay), gateway
-`dhcpSettings` (pools, lease time in minutes, DNS mode and servers, gateway,
-options 60 / 66 / 138, next server, custom options), switch `dhcpServer` /
-`dhcpRelay`, `domain`, `dhcpL2RelayEnable` (option 82), `dhcpGuard` /
-`dhcpv6Guard`, and the network's IPv6 config.
+Fields kept per network: identity (`id`, `name`, `vlan`, `gatewaySubnet`, `purpose`), the serving device (`deviceType` 0 External / 1 Gateway / 2 Switch / 3 None, `deviceMac`, and switch `mode` 1 Server / 2 Relay), gateway `dhcpSettings` (pools, lease time in minutes, DNS mode and servers, gateway, options 60 / 66 / 138, next server, custom options), switch `dhcpServer` / `dhcpRelay`, `domain`, `dhcpL2RelayEnable` (option 82), `dhcpGuard` / `dhcpv6Guard`, and the network's IPv6 config.
 
-The Markdown summary shows, per network: DHCP server, pools (with free
-addresses), lease time, DNS, gateway, domain, relay targets, and L2 relay.
-Each network then gets a detail section (Server, Pool, DNS / Domain, Options,
-Relay, Guard).
+The Markdown summary shows, per network: DHCP server, pools (with free addresses), lease time, DNS, gateway, domain, relay targets, and L2 relay. Each network then gets a detail section (Server, Pool, DNS / Domain, Options, Relay, Guard).
 
-> Custom DHCP option *type* codes differ by server: gateway 0 String /
-> 1 IP Address / 2 Hex Array; switch 0 Hex Array / 1 String / 2 IP Address.
+> Custom DHCP option *type* codes differ by server: gateway 0 String / 1 IP Address / 2 Hex Array; switch 0 Hex Array / 1 String / 2 IP Address.
 
 ### DHCP Reservations
 
@@ -482,11 +343,9 @@ Relay, Guard).
 | --- | --- | --- |
 | `GET` | `sites/{siteId}/setting/service/dhcp` | Paginated |
 
-Rows are sorted by network, then numerically by IP, and include the
-reservation description and any per-reservation DHCP options.
+Rows are sorted by network, then numerically by IP, and include the reservation description and any per-reservation DHCP options.
 
-> **API docs:** Documented under the [Service](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Service) tag —
-> *Get DHCP Reservation List*.
+> **API docs:** Documented under the [Service](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Service) tag — *Get DHCP Reservation List*.
 
 ### DHCP Leases
 
@@ -496,10 +355,7 @@ reservation description and any per-reservation DHCP options.
 | --- | --- | --- |
 | `GET` | `sites/{siteId}/setting/service/dhcp/user-list` | Paginated; leases from every DHCP server in the site |
 
-Network, IP, MAC, name, device/client type, binding (Dynamic / Static), lease
-time remaining, and serving device, sorted by network then IP. Leases are
-runtime state: they change between runs and are not needed to recreate the
-service.
+Network, IP, MAC, name, device/client type, binding (Dynamic / Static), lease time remaining, and serving device, sorted by network then IP. Leases are runtime state: they change between runs and are not needed to recreate the service.
 
 ---
 
@@ -516,8 +372,7 @@ IP groups are profile groups with `groupType=0`.
 | `GET` | `sites/{siteId}/profiles/groups/0` | Primary — returns only IP groups |
 | `GET` | `sites/{siteId}/profiles/groups` | Fallback — returns all groups; filtered client-side by `type == 0` |
 
-> **API docs:** Documented under the [Profiles](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Profiles) tag —
-> *Get group profile list by type* (`groupType=0`).
+> **API docs:** Documented under the [Profiles](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Profiles) tag — *Get group profile list by type* (`groupType=0`).
 
 ### Port Groups (IP-Port Groups)
 
@@ -530,15 +385,13 @@ Port groups are profile groups with `groupType=1`.
 | `GET` | `sites/{siteId}/profiles/groups/1` | Primary — returns only IP-Port groups |
 | `GET` | `sites/{siteId}/profiles/groups` | Fallback — returns all groups; filtered client-side by `type == 1` |
 
-> **API docs:** Documented under the [Profiles](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Profiles) tag —
-> *Get group profile list by type* (`groupType=1`).
+> **API docs:** Documented under the [Profiles](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Profiles) tag — *Get group profile list by type* (`groupType=1`).
 
 ### ACL Rules
 
 **Resource:** `acl_rules`
 
-Fetches gateway, switch, and EAP ACL rules separately and merges the results.
-An `aclType` field (`gateway`, `switch`, or `eap`) is added to each rule.
+Fetches gateway, switch, and EAP ACL rules separately and merges the results. An `aclType` field (`gateway`, `switch`, or `eap`) is added to each rule.
 
 | ACL Type | Method | Endpoint |
 | --- | --- | --- |
@@ -546,11 +399,9 @@ An `aclType` field (`gateway`, `switch`, or `eap`) is added to each rule.
 | Switch | `GET` | `sites/{siteId}/acls/osw-acls` |
 | EAP | `GET` | `sites/{siteId}/acls/eap-acls` |
 
-All three endpoints are paginated. Failures are logged and skipped (partial
-results are still returned).
+All three endpoints are paginated. Failures are logged and skipped (partial results are still returned).
 
-> **API docs:** Documented under the [ACL](https://use1-omada-northbound.tplinkcloud.com/doc.html#/ACL) tag —
-> *Get gateway ACL list*, *Get switch ACL list*, *Get eap ACL list*.
+> **API docs:** Documented under the [ACL](https://use1-omada-northbound.tplinkcloud.com/doc.html#/ACL) tag — *Get gateway ACL list*, *Get switch ACL list*, *Get eap ACL list*.
 
 ---
 
@@ -568,8 +419,7 @@ Attempts multiple endpoints with fallback.
 | 2 | `GET` | `sites/{siteId}/internet/basic-info` | Basic internet info |
 | 3 | `GET` | `sites/{siteId}/setting/virtual-wans` | Virtual WAN settings |
 
-> **API docs:** Documented under the [Wired Network](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Wired%20Network) tag —
-> *Get internet wan ports config*, *Get internet basic info*, *Query virtual WAN list*.
+> **API docs:** Documented under the [Wired Network](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Wired%20Network) tag — *Get internet wan ports config*, *Get internet basic info*, *Query virtual WAN list*.
 
 ### WAN Failover & Load Balancing
 
@@ -594,14 +444,9 @@ Attempts multiple endpoints with fallback.
 | --- | --- | --- |
 | `GET` | `sites/{siteId}/devices` | Gateway list only; the sheet is built from other resources |
 
-Meant for replacing a gateway with another model. Gateway port IDs have the
-form `<port number>_<uuid>`, so the sheet maps every ID back to a physical
-port by its prefix. Built at Markdown time from `device_ports`,
-`gateway_settings`, `wan_failover`, `networks`, `uplinks` and the resources
-listed below, so it also regenerates from YAML.
+Meant for replacing a gateway with another model. Gateway port IDs have the form `<port number>_<uuid>`, so the sheet maps every ID back to a physical port by its prefix. Built at Markdown time from `device_ports`, `gateway_settings`, `wan_failover`, `networks`, `uplinks` and the resources listed below, so it also regenerates from YAML.
 
-**Summary** (one row per gateway): ports, WAN-mode ports, connected ports,
-port-bound rules, ports that must carry over.
+**Summary** (one row per gateway): ports, WAN-mode ports, connected ports, port-bound rules, ports that must carry over.
 
 **Per gateway** (one row per port):
 
@@ -615,8 +460,7 @@ port-bound rules, ports that must carry over.
 | PVID (Native VLAN), Speed / Duplex, Mirroring | Port configuration (`linkSpeed` 0 Auto, 1 10M, 2 100M, 3 1000M, 4 2500M, 5 10G, 6 5G) |
 | Rules Bound, Carry Over | Count of checklist rows for this port; why the port matters (WAN, connected, downlink, rules, fixed speed, mirroring, PVID, disabled) |
 
-**Connected switches:** switches uplinked to the gateway, with the gateway
-port when the controller reports the link peer.
+**Connected switches:** switches uplinked to the gateway, with the gateway port when the controller reports the link peer.
 
 **Port reference checklist:** every setting that names a gateway port.
 
@@ -635,16 +479,13 @@ port when the controller reports the link peer.
 | `multicast_services` | IGMP / MLD proxy `wanPortId`, IPTV `wanPortId` and port roles, UPnP `wanPortIds` (enabled features only) |
 | `switch_security` | IP-MAC binding `wanIds`, WAN bindings' `interfaceId` |
 
-Not covered, because they aren't exported: gateway QoS bandwidth control
-(`wan`) and virtual WAN definitions.
+Not covered, because they aren't exported: gateway QoS bandwidth control (`wan`) and virtual WAN definitions.
 
 ### NAT
 
 **Resources:** `port_forwarding`, `one_to_one_nat`, `alg`
 
-Gateway NAT settings, exported as three resources. WAN port IDs in the rules
-(e.g. `1_<uuid>`) are shown as WAN port names, resolved from `gateway_settings`
-(`wanPortsConfig[].portId` → `portName`); unknown IDs are shown as-is.
+Gateway NAT settings, exported as three resources. WAN port IDs in the rules (e.g. `1_<uuid>`) are shown as WAN port names, resolved from `gateway_settings` (`wanPortsConfig[].portId` → `portName`); unknown IDs are shown as-is.
 
 | Resource | Method | Endpoint | Notes |
 | --- | --- | --- | --- |
@@ -652,16 +493,13 @@ Gateway NAT settings, exported as three resources. WAN port IDs in the rules
 | `one_to_one_nat` | `GET` | `sites/{siteId}/nat/one-to-one-nat` | Paginated. Name, status, interface, internal IP, external IP, DMZ, description |
 | `alg` | `GET` | `sites/{siteId}/nat/alg` | Single object, rendered as Setting / Value rows: FTP (+ ports), H.323, PPTP, IPSec, SIP (+ TCP/UDP, ports, direct signaling/media, timeouts when SIP is on) |
 
-> **API docs:** Documented under the NAT tag —
-> *Get port forwarding list*, *Get One-to-One NAT list*, *Get ALG Info*.
+> **API docs:** Documented under the NAT tag — *Get port forwarding list*, *Get One-to-One NAT list*, *Get ALG Info*.
 
 ### Static Routes
 
 **Resource:** `static_routes`
 
-Gateway and switch static routes, combined into one resource. Each route is
-tagged with `routeSource` (`gateway` or `switch`); switch routes also carry
-`deviceName` and `deviceMac`.
+Gateway and switch static routes, combined into one resource. Each route is tagged with `routeSource` (`gateway` or `switch`); switch routes also carry `deviceName` and `deviceMac`.
 
 | Source | Method | Endpoint | Notes |
 | --- | --- | --- | --- |
@@ -678,8 +516,7 @@ tagged with `routeSource` (`gateway` or `switch`); switch routes also carry
 | Metric | `metric` (0–15) | — |
 | Distance | — | `distance` (administrative distance, 1–255) |
 
-> **API docs:** *Get static routing list*, *Get static routing interface list*,
-> *Get grid switch staticRouting*.
+> **API docs:** *Get static routing list*, *Get static routing interface list*, *Get grid switch staticRouting*.
 
 ### Policy Routes
 
@@ -689,13 +526,7 @@ tagged with `routeSource` (`gateway` or `switch`); switch routes also carry
 | --- | --- | --- |
 | `GET` | `sites/{siteId}/routing/policy-routings` | Paginated |
 
-Rows are listed in evaluation order (`index`). Source and destination IDs are
-resolved to network / IP group / IP-Port group names; protocols use the same
-codes as ACL rules. **WAN Binding** comes from `interfaceType` (0 WAN, 2 L2TP,
-3 PPTP, 4 multiple): a single `interfaceId`, or for type 4 the lists of
-`wanPortIds`, `vpnIds`, and `virtualWanIds`. WAN port IDs are resolved to
-port names from `gateway_settings`. **Backup Interface** shows whether traffic
-fails over to another WAN when the bound one is down.
+Rows are listed in evaluation order (`index`). Source and destination IDs are resolved to network / IP group / IP-Port group names; protocols use the same codes as ACL rules. **WAN Binding** comes from `interfaceType` (0 WAN, 2 L2TP, 3 PPTP, 4 multiple): a single `interfaceId`, or for type 4 the lists of `wanPortIds`, `vpnIds`, and `virtualWanIds`. WAN port IDs are resolved to port names from `gateway_settings`. **Backup Interface** shows whether traffic fails over to another WAN when the bound one is down.
 
 > **API docs:** *Get policy routing list*.
 
@@ -755,25 +586,13 @@ The SSID list is only a summary, so each SSID is merged with its detail.
 | 3. SSID detail | `GET` | `sites/{siteId}/wireless-network/ssids/{ssidId}` | Falls back to `…/wlans/{wlanId}/ssids/{ssidId}`; best-effort |
 | 4. AP overrides | `GET` | `sites/{siteId}/wireless-network/ssids/{ssidId}/overrides` | Paginated; stored as `apOverrides`; best-effort |
 
-Each SSID is enriched with the parent WLAN's `name` / ID as `wlanName` /
-`wlanId`. The detail adds security (PSK / Enterprise / PPSK settings, RADIUS
-profile, PMF, 802.11r, OWE, MLO), VLAN, client and SSID rate limits, WLAN
-schedule, band steering, data/management rate control, MAC filter,
-multicast, DHCP option 82, and Hotspot 2.0. The WPA passphrase and AP
-override passwords are redacted.
+Each SSID is enriched with the parent WLAN's `name` / ID as `wlanName` / `wlanId`. The detail adds security (PSK / Enterprise / PPSK settings, RADIUS profile, PMF, 802.11r, OWE, MLO), VLAN, client and SSID rate limits, WLAN schedule, band steering, data/management rate control, MAC filter, multicast, DHCP option 82, and Hotspot 2.0. The WPA passphrase and AP override passwords are redacted.
 
-The Markdown summary resolves the referenced RADIUS, rate limit, and schedule
-profiles, networks, and the portal bound to each SSID by name. Each SSID then
-gets a detail section, plus an **AP overrides** table when any AP overrides
-the SSID name, VLAN, or password.
+The Markdown summary resolves the referenced RADIUS, rate limit, and schedule profiles, networks, and the portal bound to each SSID by name. Each SSID then gets a detail section, plus an **AP overrides** table when any AP overrides the SSID name, VLAN, or password.
 
-> `security` codes follow the API: 0 Open, 2 WPA-Enterprise, 3 WPA-Personal,
-> 4 PPSK, 5 PPSK + RADIUS. Earlier versions mislabelled 3 as "WPA2". The
-> SSID band-steer setting appears in the spec under a field named
-> `ssidDhcpOption`; both that and `bandSteer` are read.
+> `security` codes follow the API: 0 Open, 2 WPA-Enterprise, 3 WPA-Personal, 4 PPSK, 5 PPSK + RADIUS. Earlier versions mislabelled 3 as "WPA2". The SSID band-steer setting appears in the spec under a field named `ssidDhcpOption`; both that and `bandSteer` are read.
 
-> **API docs:** Documented under the [Wireless Network](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Wireless%20Network) tag —
-> *Get WLAN group list*, *Get SSID list*, *Get SSID detail info*, *Get Ssid override details*.
+> **API docs:** Documented under the [Wireless Network](https://use1-omada-northbound.tplinkcloud.com/doc.html#/Wireless%20Network) tag — *Get WLAN group list*, *Get SSID list*, *Get SSID detail info*, *Get Ssid override details*.
 
 ### RADIUS Profiles
 
@@ -794,13 +613,7 @@ Auth, accounting, CoA, and built-in server secrets are redacted.
 | `GET` | `sites/{siteId}/portals` | Portal list |
 | `GET` | `sites/{siteId}/portal/{portalId}` | Per-portal detail, merged; best-effort |
 
-Summary: status, authentication (No Auth, Simple Password, External RADIUS,
-External Portal Server, Hotspot with its methods, LDAP, Social Login), bound
-SSIDs and networks, auth timeout, landing page, HTTPS redirect. Each portal
-gets a detail section for its method (RADIUS profile, PAP/CHAP, NAS ID,
-disconnect requests, external portal server, LDAP profile, Google client ID,
-Twilio account SID and sender). Portal passwords, OAuth client secrets, and
-SMS auth tokens are redacted.
+Summary: status, authentication (No Auth, Simple Password, External RADIUS, External Portal Server, Hotspot with its methods, LDAP, Social Login), bound SSIDs and networks, auth timeout, landing page, HTTPS redirect. Each portal gets a detail section for its method (RADIUS profile, PAP/CHAP, NAS ID, disconnect requests, external portal server, LDAP profile, Google client ID, Twilio account SID and sender). Portal passwords, OAuth client secrets, and SMS auth tokens are redacted.
 
 ### Schedules and Rate Limit Profiles
 
@@ -834,24 +647,13 @@ Each part is best-effort; the resource fails only if all four fail.
 | --- | --- | --- |
 | `GET` | `sites/{siteId}/aps/{apMac}/radio-config` | Per AP (`type: ap`); unavailable APs are logged and skipped |
 
-One row per AP radio (2.4 GHz, 5 GHz, 5 GHz-1/-2, 6 GHz): radio on/off,
-channel (`0` = Auto), channel width, Tx power level (custom power shown in
-dBm), wireless mode, and channel limit. These are the per-AP radio overrides
-configured on the controller.
+One row per AP radio (2.4 GHz, 5 GHz, 5 GHz-1/-2, 6 GHz): radio on/off, channel (`0` = Auto), channel width, Tx power level (custom power shown in dBm), wireless mode, and channel limit. These are the per-AP radio overrides configured on the controller.
 
 ### Access Point Sheets
 
 **Resource:** `ap_sheets`
 
-Per-AP settings that don't follow an AP to a new model. For every AP
-(`type: ap`), each part is a `GET sites/{siteId}/aps/{apMac}/<path>`, kept
-when available. A part that can't be read (the model lacks the feature, or the
-call failed) is not dropped silently: it is listed in the record's
-`unavailableParts` as `{part, path, reason}`, where `reason` is
-`API error <code>` or `Request failed (<exception type>)`, and one warning
-per AP is logged naming the missing endpoints.
-Radios come from [`ap_radios`](#ap-radio-settings) and SSID overrides from
-[`ssids`](#ssids) at Markdown time.
+Per-AP settings that don't follow an AP to a new model. For every AP (`type: ap`), each part is a `GET sites/{siteId}/aps/{apMac}/<path>`, kept when available. A part that can't be read (the model lacks the feature, or the call failed) is not dropped silently: it is listed in the record's `unavailableParts` as `{part, path, reason}`, where `reason` is `API error <code>` or `Request failed (<exception type>)`, and one warning per AP is logged naming the missing endpoints. Radios come from [`ap_radios`](#ap-radio-settings) and SSID overrides from [`ssids`](#ssids) at Markdown time.
 
 | Part | Path | Notes |
 | --- | --- | --- |
@@ -871,17 +673,9 @@ Radios come from [`ap_radios`](#ap-radio-settings) and SSID overrides from
 | `qos` | `qos` | U-APSD per band |
 | `bridge` | `bridge` | P2P bridge SSID (password redacted), DIP switch |
 
-**Summary** (one row per AP): bands, IP setting, management VLAN, uplink, LAN
-ports (and how many carry over), SSID overrides, settings to carry over, and
-**Not Exported** (the number of parts that couldn't be read; blank when none).
+**Summary** (one row per AP): bands, IP setting, management VLAN, uplink, LAN ports (and how many carry over), SSID overrides, settings to carry over, and **Not Exported** (the number of parts that couldn't be read; blank when none).
 
-**Per AP:** a Category / Setting / Value table. **Carry Over** is `Yes` for
-values set on this AP by hand: fixed channel or Tx power, static IP or
-reservation / fallback, custom management VLAN, management SSID, SSID
-overrides, fixed uplink port, LAG, bridge, and LED / LLDP / power saving /
-load balancing / U-APSD changed from the defaults. Then a **LAN ports** table
-(role, connection, connected device, VLAN, PoE out, rate limit, carry over)
-and the effective **port VLANs**.
+**Per AP:** a Category / Setting / Value table. **Carry Over** is `Yes` for values set on this AP by hand: fixed channel or Tx power, static IP or reservation / fallback, custom management VLAN, management SSID, SSID overrides, fixed uplink port, LAG, bridge, and LED / LLDP / power saving / load balancing / U-APSD changed from the defaults. Then a **LAN ports** table (role, connection, connected device, VLAN, PoE out, rate limit, carry over) and the effective **port VLANs**.
 
 ---
 
@@ -891,8 +685,7 @@ and the effective **port VLANs**.
 
 **Resources:** `site_to_site_vpns`, `remote_access_vpns`, `wireguard`, `vpn_users`
 
-Pre-shared keys, user / client passwords, and WireGuard private / preshared keys are
-redacted (see [Conventions](#conventions)); the Markdown shows `Configured` / `Not set`.
+Pre-shared keys, user / client passwords, and WireGuard private / preshared keys are redacted (see [Conventions](#conventions)); the Markdown shows `Configured` / `Not set`.
 
 | Resource | Method | Endpoint | Notes |
 | --- | --- | --- | --- |
@@ -903,27 +696,11 @@ redacted (see [Conventions](#conventions)); the Markdown shows `Configured` / `N
 | `wireguard` | `GET` | `sites/{siteId}/vpn/wireguard-peers` | Peers, nested under their interface as `peers` |
 | `vpn_users` | `GET` | `sites/{siteId}/vpn/users` | Accounts referenced by L2TP / PPTP / OpenVPN servers |
 
-**Site-to-site** summary: name, status, type (Auto / Manual IPsec), remote
-peer (remote site or IP), remote subnets, local networks (network names or
-custom subnets), WAN, encryption (e.g. `IKEv2 AES256/SHA256/DH14, ESP
-AES256/SHA256, PFS DH14`), authentication. Each tunnel then gets a detail
-section: Phase 1 (key exchange version, encryption, hash, DH group, exchange
-and negotiation mode, SA lifetime, DPD), Phase 2 (encapsulation, AH/ESP,
-encryption, hash, PFS, SA lifetime), and Authentication (method, local /
-remote ID type and value).
+**Site-to-site** summary: name, status, type (Auto / Manual IPsec), remote peer (remote site or IP), remote subnets, local networks (network names or custom subnets), WAN, encryption (e.g. `IKEv2 AES256/SHA256/DH14, ESP AES256/SHA256, PFS DH14`), authentication. Each tunnel then gets a detail section: Phase 1 (key exchange version, encryption, hash, DH group, exchange and negotiation mode, SA lifetime, DPD), Phase 2 (encapsulation, AH/ESP, encryption, hash, PFS, SA lifetime), and Authentication (method, local / remote ID type and value).
 
-**Remote access** summary: name, role (server / client), status, protocol
-(L2TP, PPTP, IPsec, OpenVPN), remote peer, remote subnets, local networks,
-client IP pool, WAN, service (UDP/TCP and port), encryption (L2TP over IPsec,
-MPPE, IKE suite, or TLS), and authentication references (local / LDAP users and
-the usernames assigned to that server from `vpn_users`, OpenVPN certificate
-mode and config file, client username, and pre-shared key / password state).
-Each tunnel gets a detail section titled `<name> (<role>)`.
+**Remote access** summary: name, role (server / client), status, protocol (L2TP, PPTP, IPsec, OpenVPN), remote peer, remote subnets, local networks, client IP pool, WAN, service (UDP/TCP and port), encryption (L2TP over IPsec, MPPE, IKE suite, or TLS), and authentication references (local / LDAP users and the usernames assigned to that server from `vpn_users`, OpenVPN certificate mode and config file, client username, and pre-shared key / password state). Each tunnel gets a detail section titled `<name> (<role>)`.
 
-**WireGuard**: one row per interface (listen port, local IP, MTU, public key,
-private-key state, peer count) and one section per interface listing its peers
-(endpoint, allowed addresses, keepalive, public key, preshared-key state,
-comment).
+**WireGuard**: one row per interface (listen port, local IP, MTU, public key, private-key state, peer count) and one section per interface listing its peers (endpoint, allowed addresses, keepalive, public key, preshared-key state, comment).
 
 ### SSL VPN Server
 
@@ -938,14 +715,7 @@ comment).
 | `GET` | `sites/{siteId}/vpn/ssl-vpn-server/resource-groups` | `resourceGroups` | Paginated, best-effort |
 | `GET` | `sites/{siteId}/vpn/ssl-vpn-server/radius` | `radiusServers` | Used to name the RADIUS profile |
 
-The Markdown starts with server settings as Setting / Value rows: status, WAN
-and WAN IP, service port, client IP pool, DNS, tunnel mode (full / split),
-authentication (Local / RADIUS / LDAP, with RADIUS profile, PAP/CHAP, retries,
-timeout, NAS IP, default user group, or LDAP profile), username and IP
-lockout, and idle logout. Sections follow for **User Groups** (users, resource
-groups, RADIUS / LDAP attribute), **Users** (group, status, validity,
-concurrent logins, password state), **Resources** (IP/subnet or domain,
-protocol, ports or ICMP type/code, groups), and **Resource Groups**.
+The Markdown starts with server settings as Setting / Value rows: status, WAN and WAN IP, service port, client IP pool, DNS, tunnel mode (full / split), authentication (Local / RADIUS / LDAP, with RADIUS profile, PAP/CHAP, retries, timeout, NAS IP, default user group, or LDAP profile), username and IP lockout, and idle logout. Sections follow for **User Groups** (users, resource groups, RADIUS / LDAP attribute), **Users** (group, status, validity, concurrent logins, password state), **Resources** (IP/subnet or domain, protocol, ports or ICMP type/code, groups), and **Resource Groups**.
 
 ### EoGRE Tunnel
 
@@ -963,13 +733,6 @@ protocol, ports or ICMP type/code, groups), and **Resource Groups**.
 | --- | --- | --- |
 | `GET` | `sites/{siteId}/vpn/ipsec_failovers` | Paginated. Name, primary tunnel, candidate tunnels in failover order, failback |
 
-Tunnel references include the state the controller reports (`Active`,
-`Standby`, `Disconnected`). The failback time is shown as returned; the spec
-does not state its unit.
+Tunnel references include the state the controller reports (`Active`, `Standby`, `Disconnected`). The failback time is shown as returned; the spec does not state its unit.
 
-> **API docs:** VPN tag — *Get site-to-site VPN list*, *Get client-to-site VPN
-> server list*, *Get client-to-site VPN client list*, *Get wireguard list*,
-> *Get wireguard peer list*, *Get VPN user list*, *Get SSL VPN server setting*,
-> *Get user group / user / resource / resource group list for SSL VPN server*,
-> *Get radius server for SSL VPN server*, *Get EoGRE tunnel config*,
-> *Get IPsec failover list*.
+> **API docs:** VPN tag — *Get site-to-site VPN list*, *Get client-to-site VPN server list*, *Get client-to-site VPN client list*, *Get wireguard list*, *Get wireguard peer list*, *Get VPN user list*, *Get SSL VPN server setting*, *Get user group / user / resource / resource group list for SSL VPN server*, *Get radius server for SSL VPN server*, *Get EoGRE tunnel config*, *Get IPsec failover list*.

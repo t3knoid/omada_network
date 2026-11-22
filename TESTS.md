@@ -55,11 +55,7 @@ python -m pytest tests/ -v
 
 ## conftest.py
 
-An autouse fixture, `_block_real_network`, makes any unstubbed HTTP request
-raise `requests.ConnectionError` immediately, so a test that forgets to mock
-an endpoint fails fast instead of waiting for a network timeout. A second
-one, `_no_real_waiting`, replaces the `omada-openapi` client's sleep so request pacing and
-rate-limit backoff never slow the suite down.
+An autouse fixture, `_block_real_network`, makes any unstubbed HTTP request raise `requests.ConnectionError` immediately, so a test that forgets to mock an endpoint fails fast instead of waiting for a network timeout. A second one, `_no_real_waiting`, replaces the `omada-openapi` client's sleep so request pacing and rate-limit backoff never slow the suite down.
 
 ---
 
@@ -156,10 +152,7 @@ Centralized logging configuration tests.
 
 ## test_docs_client.py
 
-Resource getter tests for `OmadaDocsClient` (`omada/docs_client.py`). The
-authentication, discovery, request, pagination, rate-limit and redaction
-tests moved to the [`omada-openapi`](https://github.com/t3knoid/omada-openapi)
-library along with that code.
+Resource getter tests for `OmadaDocsClient` (`omada/docs_client.py`). The authentication, discovery, request, pagination, rate-limit and redaction tests moved to the [`omada-openapi`](https://github.com/t3knoid/omada-openapi) library along with that code.
 
 | Class | Test | Description |
 | --- | --- | --- |

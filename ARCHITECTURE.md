@@ -2,26 +2,16 @@
 
 ## Overview
 
-The application connects to TP-Link Omada controllers via the official
-**Omada Open API (Northbound API)** to extract network configuration data,
-persist it as YAML (source of truth), and generate Markdown documentation
-tables. The resources it covers are listed in the
-[API reference resource index](api_reference.md#resource-index). It is
-read-only towards the controller.
+The application connects to TP-Link Omada controllers via the official **Omada Open API (Northbound API)** to extract network configuration data, persist it as YAML (source of truth), and generate Markdown documentation tables. The resources it covers are listed in the [API reference resource index](api_reference.md#resource-index). It is read-only towards the controller.
 
 **Design principles:**
 
-- **Registry-driven** — all resource definitions live in a single registry;
-  adding a resource requires minimal code changes.
-- **Two-mode operation** — fetch from the API *or* regenerate Markdown from
-  existing YAML files (no credentials needed for generation).
+- **Registry-driven** — all resource definitions live in a single registry; adding a resource requires minimal code changes.
+- **Two-mode operation** — fetch from the API *or* regenerate Markdown from existing YAML files (no credentials needed for generation).
 - **CLI + Web UI** — both interfaces share the same service layer.
-- **Graceful degradation** — if one resource fails to fetch, the remaining
-  resources continue; failures are logged and reported.
-- **YAML as source of truth** — Markdown can be regenerated at any time from
-  the YAML files without API access.
-- **Secrets redacted by default** — credentials never reach the exports
-  unless explicitly requested (`--include-secrets`).
+- **Graceful degradation** — if one resource fails to fetch, the remaining resources continue; failures are logged and reported.
+- **YAML as source of truth** — Markdown can be regenerated at any time from the YAML files without API access.
+- **Secrets redacted by default** — credentials never reach the exports unless explicitly requested (`--include-secrets`).
 
 ---
 
@@ -84,18 +74,11 @@ Key helpers:
 
 - `_env()` / `_env_bool()` — read typed values from environment variables.
 - `_openapi_options()` — shared decorator applying common CLI options.
-- `_build_client()` — authenticate (auto-selecting the correct mode) and
-  discover the site; returns `(api_client, site_id, site_name, controller_id,
-  login_result)`, used by `fetch` and `diagnose`. The web UI follows the same
-  steps inline.
+- `_build_client()` — authenticate (auto-selecting the correct mode) and discover the site; returns `(api_client, site_id, site_name, controller_id, login_result)`, used by `fetch` and `diagnose`. The web UI follows the same steps inline.
 
-Running `cli.py` without a subcommand invokes `fetch`. `fetch` takes
-`--output-dir` and `--include-secrets` in addition to the connection options.
-`serve` takes `--host`, `--port`, `--output-dir` and `--debug`. `diagnose`
-prints record counts and field names, never values.
+Running `cli.py` without a subcommand invokes `fetch`. `fetch` takes `--output-dir` and `--include-secrets` in addition to the connection options. `serve` takes `--host`, `--port`, `--output-dir` and `--debug`. `diagnose` prints record counts and field names, never values.
 
-All CLI options have corresponding `OMADA_*` environment variables for
-headless / CI usage.
+All CLI options have corresponding `OMADA_*` environment variables for headless / CI usage.
 
 ---
 
@@ -103,11 +86,7 @@ headless / CI usage.
 
 High-level orchestration that both the CLI and web UI delegate to.
 
-**`OmadaService(client, site_id, output_dir, site_name=None,
-include_secrets=False)`** — files are written to
-`{output_dir}/{safe site name}/`. The site name is made filesystem-safe,
-including Windows reserved names. When `include_secrets` is set, it also sets
-`client.include_secrets` so the client's own getters stop redacting.
+**`OmadaService(client, site_id, output_dir, site_name=None, include_secrets=False)`** — files are written to `{output_dir}/{safe site name}/`. The site name is made filesystem-safe, including Windows reserved names. When `include_secrets` is set, it also sets `client.include_secrets` so the client's own getters stop redacting.
 
 | Method | Description |
 | --- | --- |
@@ -116,21 +95,13 @@ including Windows reserved names. When `include_secrets` is set, it also sets
 | `generate_docs(data)` | Delegate to `MarkdownGenerator.generate_all()` |
 | `run()` | Orchestrate the full pipeline: create output dir → `fetch_all` → `export_yaml` → `generate_docs` → return paths |
 
-**`generate_from_yaml(input_dir, output_dir, site_name=None)`** — standalone
-function that loads `*.yaml` files from disk (from the site subdirectory when
-`site_name` is given), passes the full data set as cross-reference context,
-and writes Markdown. No API interaction.
+**`generate_from_yaml(input_dir, output_dir, site_name=None)`** — standalone function that loads `*.yaml` files from disk (from the site subdirectory when `site_name` is given), passes the full data set as cross-reference context, and writes Markdown. No API interaction.
 
 ---
 
 ### API Client — `omada-openapi` library and `omada/docs_client.py`
 
-The Open API plumbing lives in the separate
-[`omada-openapi`](https://github.com/t3knoid/omada-openapi) package (import
-name `omada_openapi`), pinned in `requirements.txt` and `pyproject.toml`. It
-supports both official OAuth 2 modes and handles pacing, rate-limit retries,
-pagination and credential redaction. This project adds the
-documentation-specific resource getters on top of it.
+The Open API plumbing lives in the separate [`omada-openapi`](https://github.com/t3knoid/omada-openapi) package (import name `omada_openapi`), pinned in `requirements.txt` and `pyproject.toml`. It supports both official OAuth 2 modes and handles pacing, rate-limit retries, pagination and credential redaction. This project adds the documentation-specific resource getters on top of it.
 
 **Authentication & discovery functions** (`omada_openapi`):
 
@@ -141,8 +112,7 @@ documentation-specific resource getters on top of it.
 | `openapi_auth_code_login()` | Three-step Authorization Code flow → access token |
 | `openapi_discover_site()` | List sites and resolve by name (case-insensitive); returns `(site_id, site_name)`. A single site is auto-selected. `openapi_discover_site_id()` is a wrapper returning only the ID |
 
-**`omada_openapi.OmadaOpenApiClient`** — authenticated client for data
-retrieval.
+**`omada_openapi.OmadaOpenApiClient`** — authenticated client for data retrieval.
 
 | Method | Description |
 | --- | --- |
@@ -152,27 +122,13 @@ retrieval.
 | `redact(data)` | Apply `redact_secrets()` unless `include_secrets` is set |
 | `get_devices()`, `get_networks()`, `get_dhcp_leases()` | Common single-endpoint getters |
 
-**`omada.docs_client.OmadaDocsClient`** — subclass of `OmadaOpenApiClient`
-with one `get_*` method per exported resource, plus `_collect(site_id,
-parts, label)`, which fetches several endpoints into one dict, each
-best-effort, and raises only if all fail. The CLI and web UI build this
-client. Three patterns recur in its getters:
+**`omada.docs_client.OmadaDocsClient`** — subclass of `OmadaOpenApiClient` with one `get_*` method per exported resource, plus `_collect(site_id, parts, label)`, which fetches several endpoints into one dict, each best-effort, and raises only if all fail. The CLI and web UI build this client. Three patterns recur in its getters:
 
-- **Fallback:** try a preferred endpoint, then an alternative if it returns
-  an error (e.g. `/lan-networks/all`, then paginated `/lan-networks`).
-- **Enrichment:** list endpoints are often summaries, so records are merged
-  with per-item detail. Examples: SSID detail and AP overrides; portal
-  detail; full switch-port config from `switches/ports/select`; PoE / port
-  schedule membership; LAG names; WAN status for gateway ports; DHCP pool
-  usage.
-- **Composition:** some resources combine several endpoints into one dict:
-  `wan_failover`, `dns_settings`, `time_settings`, `multicast_services`,
-  `wireless_settings`, `ssl_vpn`, `switch_settings`, `switch_security`,
-  `oui_vlans`, `switch_qos`, `lags`, `uplinks`, `port_schedules`.
+- **Fallback:** try a preferred endpoint, then an alternative if it returns an error (e.g. `/lan-networks/all`, then paginated `/lan-networks`).
+- **Enrichment:** list endpoints are often summaries, so records are merged with per-item detail. Examples: SSID detail and AP overrides; portal detail; full switch-port config from `switches/ports/select`; PoE / port schedule membership; LAG names; WAN status for gateway ports; DHCP pool usage.
+- **Composition:** some resources combine several endpoints into one dict: `wan_failover`, `dns_settings`, `time_settings`, `multicast_services`, `wireless_settings`, `ssl_vpn`, `switch_settings`, `switch_security`, `oui_vlans`, `switch_qos`, `lags`, `uplinks`, `port_schedules`.
 
-Per-device lookups (switch, gateway and AP endpoints) iterate over
-`get_devices()`, filtered by device type. Results are tagged with
-`deviceName` / `deviceMac` / `deviceModel`.
+Per-device lookups (switch, gateway and AP endpoints) iterate over `get_devices()`, filtered by device type. Results are tagged with `deviceName` / `deviceMac` / `deviceModel`.
 
 ---
 
@@ -197,21 +153,7 @@ Single source of truth for every resource type the application supports.
 - `RESOURCES` — ordered list of all `ResourceDefinition` instances.
 - `REGISTRY` — dict mapping resource name → definition for fast lookup.
 
-**Row formatter helpers** handle enum-to-label conversion (codes as defined
-in the Open API schemas), nested-data flattening, and ID-to-name resolution
-using the other resources as context. Examples: networks, IP / port groups
-(`_build_id_lookup()`); WAN port IDs (`_wan_port_names()`); RADIUS / rate
-limit / schedule profiles (`_ssid_lookups()`); devices. Derived views are
-computed here as well, such as per-port overrides
-(`_port_overrides()` compares each port with its profile), switch
-loop-prevention coverage, the uplink remapping checklist, the port-bound
-rule references (`_port_rule_refs()`: DHCP snooping / ARP detection / OUI-VLAN /
-QoS rules that name specific switch ports), the gateway port references
-(`_gw_port_refs()`: every setting that names a gateway port ID), and the
-replacement sheets (`switch_port_sheets`, `gateway_port_sheets`,
-`ap_sheets`). The switch and gateway sheets are built entirely from other
-resources, so they also regenerate from YAML. The AP sheet fetches its own
-per-AP settings and takes radios and SSID overrides from other resources.
+**Row formatter helpers** handle enum-to-label conversion (codes as defined in the Open API schemas), nested-data flattening, and ID-to-name resolution using the other resources as context. Examples: networks, IP / port groups (`_build_id_lookup()`); WAN port IDs (`_wan_port_names()`); RADIUS / rate limit / schedule profiles (`_ssid_lookups()`); devices. Derived views are computed here as well, such as per-port overrides (`_port_overrides()` compares each port with its profile), switch loop-prevention coverage, the uplink remapping checklist, the port-bound rule references (`_port_rule_refs()`: DHCP snooping / ARP detection / OUI-VLAN / QoS rules that name specific switch ports), the gateway port references (`_gw_port_refs()`: every setting that names a gateway port ID), and the replacement sheets (`switch_port_sheets`, `gateway_port_sheets`, `ap_sheets`). The switch and gateway sheets are built entirely from other resources, so they also regenerate from YAML. The AP sheet fetches its own per-AP settings and takes radios and SSID overrides from other resources.
 
 ---
 
@@ -219,23 +161,15 @@ per-AP settings and takes radios and SSID overrides from other resources.
 
 **`YamlExporter`** (`yaml_exporter.py`)
 
-- `export(name, data)` — write a single resource to `{output_dir}/{name}.yaml`
-  with sorted keys and Unicode support.
+- `export(name, data)` — write a single resource to `{output_dir}/{name}.yaml` with sorted keys and Unicode support.
 - `export_all(data)` — export every resource; return `{name: Path}` mapping.
 
 **`MarkdownGenerator`** (`markdown_generator.py`)
 
-- `generate(name, data, context)` — look up the resource in `REGISTRY`, call
-  its row formatter, sort rows by `sort_key` (if set), render a
-  GitHub-Flavoured Markdown table, and append one `##` section per
-  `detail_formatter` item. If the data contains a plaintext credential
-  (`contains_secrets()`), a warning banner is inserted below the title.
-  Writes `{output_dir}/{name}.md`. Falls back to a generic table for
-  unknown resources.
+- `generate(name, data, context)` — look up the resource in `REGISTRY`, call its row formatter, sort rows by `sort_key` (if set), render a GitHub-Flavoured Markdown table, and append one `##` section per `detail_formatter` item. If the data contains a plaintext credential (`contains_secrets()`), a warning banner is inserted below the title. Writes `{output_dir}/{name}.md`. Falls back to a generic table for unknown resources.
 - `generate_all(data)` — generate Markdown for every resource.
 
-Table rendering helpers: `_table()`, `_sanitize()` (escapes pipes, renders
-booleans as ✓/✗), `_column_header()` (snake_case → Title Case).
+Table rendering helpers: `_table()`, `_sanitize()` (escapes pipes, renders booleans as ✓/✗), `_column_header()` (snake_case → Title Case).
 
 ---
 
@@ -256,41 +190,25 @@ Flask application created via the `create_app()` factory.
 
 - Per-session CSRF tokens on all POST routes.
 - Path-traversal prevention on all file-serving routes.
-- `FLASK_SECRET_KEY` env var for persistent sessions (ephemeral random key
-  by default).
-- Only non-secret form values are kept in the session. Passwords and secrets
-  are blanked, and the Include secrets checkbox is never pre-checked.
+- `FLASK_SECRET_KEY` env var for persistent sessions (ephemeral random key by default).
+- Only non-secret form values are kept in the session. Passwords and secrets are blanked, and the Include secrets checkbox is never pre-checked.
 
 ---
 
 ### Credential Redaction — `omada_openapi.redaction`
 
-`redact_secrets(data)` returns a copy of any resource with every non-empty
-string value whose key looks like a credential (`password`, `pwd`, `secret`,
-`token`, `securityKey`, `preSharedKey`, `privateKey`, …) replaced by
-`<redacted>`. Booleans such as `hidePwd` and nested setting objects are left
-intact, and the key is kept so exports show that a secret is configured.
-`OmadaService.fetch_all()` applies it to every resource; the VPN and wireless
-client getters also apply it at the source.
+`redact_secrets(data)` returns a copy of any resource with every non-empty string value whose key looks like a credential (`password`, `pwd`, `secret`, `token`, `securityKey`, `preSharedKey`, `privateKey`, …) replaced by `<redacted>`. Booleans such as `hidePwd` and nested setting objects are left intact, and the key is kept so exports show that a secret is configured. `OmadaService.fetch_all()` applies it to every resource; the VPN and wireless client getters also apply it at the source.
 
-`OmadaService(include_secrets=True)` (CLI `--include-secrets`, env
-`OMADA_INCLUDE_SECRETS`, web UI checkbox) disables both: it skips the
-service-level pass and sets `client.include_secrets`, so the getters return
-credentials unredacted. `contains_secrets(data)` lets `MarkdownGenerator`
-insert a warning banner into any file whose data holds a plaintext
-credential, which also covers Markdown regenerated from YAML.
+`OmadaService(include_secrets=True)` (CLI `--include-secrets`, env `OMADA_INCLUDE_SECRETS`, web UI checkbox) disables both: it skips the service-level pass and sets `client.include_secrets`, so the getters return credentials unredacted. `contains_secrets(data)` lets `MarkdownGenerator` insert a warning banner into any file whose data holds a plaintext credential, which also covers Markdown regenerated from YAML.
 
 ---
 
 ### Logging — `omada/logging_config.py`
 
-Logging uses Python's built-in `logging` module from the standard library
-(no third-party logging packages). `setup_logging()` configures the root
-logger with:
+Logging uses Python's built-in `logging` module from the standard library (no third-party logging packages). `setup_logging()` configures the root logger with:
 
 - A **console handler** (always, to `stderr`).
-- An optional **`RotatingFileHandler`** (5 MB / 3 backups) when a log file
-  path is provided.
+- An optional **`RotatingFileHandler`** (5 MB / 3 backups) when a log file path is provided.
 - Graceful fallback to console-only if the file path is invalid.
 
 Repeated calls are safe — existing handlers are removed first.
@@ -322,20 +240,13 @@ The `-v` / `--verbose` flag is a shortcut for `--log-level DEBUG`.
 | Backup count | 3 (`DEFAULT_BACKUP_COUNT`) |
 | Encoding | UTF-8 |
 
-When a log file path is provided, `_add_file_handler()` creates parent
-directories automatically. If the file cannot be opened (e.g. permission
-error, invalid path), a warning is logged to the console and the application
-continues with console-only logging.
+When a log file path is provided, `_add_file_handler()` creates parent directories automatically. If the file cannot be opened (e.g. permission error, invalid path), a warning is logged to the console and the application continues with console-only logging.
 
 **Integration points:**
 
-- **CLI** — `setup_logging()` is called in the top-level `cli()` group
-  callback before any subcommand runs, using values from `--log-level`,
-  `--log-file`, and `OMADA_LOG_FORMAT`.
-- **Web UI** — `create_app()` calls `setup_logging()` when
-  `configure_logging=True`, reading from the same environment variables.
-- **All modules** — use `logging.getLogger(__name__)` which inherits from the
-  root logger configured by `setup_logging()`.
+- **CLI** — `setup_logging()` is called in the top-level `cli()` group callback before any subcommand runs, using values from `--log-level`, `--log-file`, and `OMADA_LOG_FORMAT`.
+- **Web UI** — `create_app()` calls `setup_logging()` when `configure_logging=True`, reading from the same environment variables.
+- **All modules** — use `logging.getLogger(__name__)` which inherits from the root logger configured by `setup_logging()`.
 
 ---
 
@@ -436,16 +347,13 @@ POST /download                 → selected files (single or ZIP)
    Body: { omadacId, client_id, client_secret }          → accessToken
 ```
 
-When `--username` and `--password` are provided the application automatically
-selects Authorization Code mode; otherwise it uses Client Credentials.
+When `--username` and `--password` are provided the application automatically selects Authorization Code mode; otherwise it uses Client Credentials.
 
 ---
 
 ## Pagination
 
-All paginated endpoints use `page` (1-indexed) and `pageSize` query
-parameters. The library's `get_paged()` method handles three response shapes
-transparently:
+All paginated endpoints use `page` (1-indexed) and `pageSize` query parameters. The library's `get_paged()` method handles three response shapes transparently:
 
 | Shape | Example `result` field | Detection |
 | --- | --- | --- |
@@ -453,30 +361,17 @@ transparently:
 | Wrapped dict | `{"data": […], "totalRows": N}` | `result.get("data")` |
 | Custom key | `{"items": [{…}]}` | Iterate dict, find first list-of-dicts value |
 
-Pagination stops when `len(items) >= totalRows`, the page returns no data,
-or `max_pages` (default 200) is reached.
+Pagination stops when `len(items) >= totalRows`, the page returns no data, or `max_pages` (default 200) is reached.
 
 ---
 
 ## Error Handling & Resilience
 
-**Rate limiting** — the controller rate-limits the Open API and answers
-`errorCode -7132` ("too many requests") or HTTP 429. The `omada-openapi` client
-spaces every call at least `request_interval` apart (0.2s, or
-`OMADA_REQUEST_INTERVAL`). `_send_with_rate_limit()` retries a rate-limited
-response up to 6 times with exponential backoff (2s, 4s, … up to 60s,
-honouring `Retry-After`) and, in the client, doubles the interval for the
-rest of the run (capped at 2s). Login, controller-ID and site discovery
-calls use the same helper. Only after every retry fails is the error
-raised, so the resource is recorded as failed rather than silently empty.
+**Rate limiting** — the controller rate-limits the Open API and answers `errorCode -7132` ("too many requests") or HTTP 429. The `omada-openapi` client spaces every call at least `request_interval` apart (0.2s, or `OMADA_REQUEST_INTERVAL`). `_send_with_rate_limit()` retries a rate-limited response up to 6 times with exponential backoff (2s, 4s, … up to 60s, honouring `Retry-After`) and, in the client, doubles the interval for the rest of the run (capped at 2s). Login, controller-ID and site discovery calls use the same helper. Only after every retry fails is the error raised, so the resource is recorded as failed rather than silently empty.
 
-**Per-resource isolation** — `OmadaService.fetch_all()` catches exceptions
-per resource and records the failure. Remaining resources continue. A summary
-of failures is logged at the end.
+**Per-resource isolation** — `OmadaService.fetch_all()` catches exceptions per resource and records the failure. Remaining resources continue. A summary of failures is logged at the end.
 
-**Endpoint fallbacks** — several API client methods try a preferred endpoint
-first and fall back to an alternative if it returns an error code (e.g.
-`-1600 Unsupported`). Examples:
+**Endpoint fallbacks** — several API client methods try a preferred endpoint first and fall back to an alternative if it returns an error code (e.g. `-1600 Unsupported`). Examples:
 
 | Resource | Primary endpoint | Fallback |
 | --- | --- | --- |
@@ -488,13 +383,7 @@ first and fall back to an alternative if it returns an error code (e.g.
 | Switch ports | `/switches/ports/overview` | `/switches/{mac}` `portList` |
 | Uplinks | `/switches/ports/switch-detail` | `POST /switches/ports/select` |
 
-**Sub-resource independence** — multi-endpoint resources treat secondary
-parts as best-effort. For example, `get_acl_rules()` tries gateway, switch,
-and EAP ACLs independently; `get_remote_access_vpns()` keeps servers if
-clients fail; `_collect()`-based resources raise only when every part fails;
-per-device lookups skip a failing device and continue. Whether a failure is
-logged at `WARNING` or `DEBUG` depends on whether it's expected (e.g. L2
-switches without static routing are `DEBUG`).
+**Sub-resource independence** — multi-endpoint resources treat secondary parts as best-effort. For example, `get_acl_rules()` tries gateway, switch, and EAP ACLs independently; `get_remote_access_vpns()` keeps servers if clients fail; `_collect()`-based resources raise only when every part fails; per-device lookups skip a failing device and continue. Whether a failure is logged at `WARNING` or `DEBUG` depends on whether it's expected (e.g. L2 switches without static routing are `DEBUG`).
 
 ---
 
@@ -502,34 +391,15 @@ switches without static routing are `DEBUG`).
 
 Adding a new resource type requires code changes in only two files:
 
-1. **`omada/docs_client.py`** — add a `get_*()` method to `OmadaDocsClient`
-   using `self.get()` / `self.get_paged()`. Use the `_collect()` /
-   enrichment patterns for multi-endpoint data, and `self.redact()` if the
-   endpoint returns credentials (the service layer redacts again
-   regardless). Generic, reusable endpoint access belongs in `omada-openapi`
-   instead.
-2. **`omada/registry.py`** — add a row formatter, and optionally a detail
-   formatter, plus a `ResourceDefinition` entry in `RESOURCES`. Set
-   `needs_context=True` to resolve IDs from other resources.
+1. **`omada/docs_client.py`** — add a `get_*()` method to `OmadaDocsClient` using `self.get()` / `self.get_paged()`. Use the `_collect()` / enrichment patterns for multi-endpoint data, and `self.redact()` if the endpoint returns credentials (the service layer redacts again regardless). Generic, reusable endpoint access belongs in `omada-openapi` instead.
+2. **`omada/registry.py`** — add a row formatter, and optionally a detail formatter, plus a `ResourceDefinition` entry in `RESOURCES`. Set `needs_context=True` to resolve IDs from other resources.
 
-No changes are needed in the CLI, web UI, service layer, exporters, or
-`diagnose` — they discover resources dynamically from the registry.
+No changes are needed in the CLI, web UI, service layer, exporters, or `diagnose` — they discover resources dynamically from the registry.
 
-To keep the suite and docs consistent, also: add the new fetcher's mock
-return value to the client fixtures in `tests/test_service.py` and
-`tests/test_docs_client.py`; update the resource-count test in
-`tests/test_registry.py`; add tests and rows in `TESTS.md`; and document
-the endpoints in `api_reference.md` (the resource index there is grouped by
-area).
+To keep the suite and docs consistent, also: add the new fetcher's mock return value to the client fixtures in `tests/test_service.py` and `tests/test_docs_client.py`; update the resource-count test in `tests/test_registry.py`; add tests and rows in `TESTS.md`; and document the endpoints in `api_reference.md` (the resource index there is grouped by area).
 
 ---
 
 ## Testing
 
-The suite (see [TESTS.md](TESTS.md)) runs fully offline. `tests/conftest.py`
-blocks real network access with an autouse fixture, so any unmocked HTTP call
-fails immediately. Client tests patch `get` / `get_paged` / `post` with
-path-based `side_effect` functions; formatter tests feed representative API
-records straight to the row and detail formatters. End-to-end tests run
-`OmadaService` on the real client methods to confirm that no secret value
-reaches any written file, and that `include_secrets` behaves as documented.
+The suite (see [TESTS.md](TESTS.md)) runs fully offline. `tests/conftest.py` blocks real network access with an autouse fixture, so any unmocked HTTP call fails immediately. Client tests patch `get` / `get_paged` / `post` with path-based `side_effect` functions; formatter tests feed representative API records straight to the row and detail formatters. End-to-end tests run `OmadaService` on the real client methods to confirm that no secret value reaches any written file, and that `include_secrets` behaves as documented.

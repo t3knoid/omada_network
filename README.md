@@ -3,24 +3,16 @@
 [![Build](https://github.com/t3knoid/omada_network/actions/workflows/build.yml/badge.svg)](https://github.com/t3knoid/omada_network/actions/workflows/build.yml)
 [![Release](https://github.com/t3knoid/omada_network/actions/workflows/release.yml/badge.svg)](https://github.com/t3knoid/omada_network/actions/workflows/release.yml)
 
-A Python application that uses the **Omada Open API** (Northbound API) to
-extract network configuration data into YAML files (source of truth) and
-generate Markdown documentation tables.
+A Python application that uses the **Omada Open API** (Northbound API) to extract network configuration data into YAML files (source of truth) and generate Markdown documentation tables.
 
-Use it to document a site, review changes over time (the YAML diffs cleanly),
-check a configuration before and after an upgrade, or keep a reference copy
-of the settings before migrating or replacing hardware. It is **read-only**:
-nothing on the controller is changed. See [Practical use](#practical-use).
+Use it to document a site, review changes over time (the YAML diffs cleanly), check a configuration before and after an upgrade, or keep a reference copy of the settings before migrating or replacing hardware. It is **read-only**: nothing on the controller is changed. See [Practical use](#practical-use).
 
-It can be run from a **CLI** (suited to scripts and CI) or a **web UI**. It
-supports both official Open API authentication modes:
+It can be run from a **CLI** (suited to scripts and CI) or a **web UI**. It supports both official Open API authentication modes:
 
 - **Client Credentials Mode** — direct token exchange with Client ID + Secret
 - **Authorization Code Mode** — three-step flow with user credentials
 
-The API access itself (authentication, rate limiting, pagination, redaction)
-comes from the [omada-openapi](https://github.com/t3knoid/omada-openapi)
-library, which you can also use on its own.
+The API access itself (authentication, rate limiting, pagination, redaction) comes from the [omada-openapi](https://github.com/t3knoid/omada-openapi) library, which you can also use on its own. This project is pinned to **omada-openapi v0.1.0** (the `v0.1.0` git tag), set in `requirements.txt`, `requirements-dev.txt` and `pyproject.toml`. To move to a newer release, change the tag in all three files and reinstall.
 
 ## Features
 
@@ -177,8 +169,8 @@ omada_network/
 git clone https://github.com/t3knoid/omada_network.git
 cd omada_network
 
-# Install dependencies (includes the omada-openapi client library, installed
-# from GitHub, so git must be available)
+# Install dependencies (includes the omada-openapi client library, pinned to
+# v0.1.0 and installed from GitHub, so git must be available)
 pip install -r requirements.txt
 
 # For development (includes test dependencies)
@@ -189,8 +181,7 @@ pip install -r requirements-dev.txt
 
 ## Docker
 
-A Docker image lets you run the application without installing Python or any
-dependencies on your host.
+A Docker image lets you run the application without installing Python or any dependencies on your host.
 
 ### Build
 
@@ -252,8 +243,7 @@ docker run \
 
 ### Logs
 
-Application logs are written to **stdout/stderr** by default and are visible
-with:
+Application logs are written to **stdout/stderr** by default and are visible with:
 
 ```bash
 docker logs <container>
@@ -275,16 +265,7 @@ docker run -p 5000:5000 \
 
 The application supports two authentication modes, both using the official Omada Open API (Northbound API):
 
-For **Controller IP / hostname**, enter an address that this application can
-reach. It does not have to be a numeric IP: if you open the controller UI at
-`https://omada.example.com:8043`, use `omada.example.com` as the controller
-value. The API port is configured separately and defaults to `443`; the UI
-port in the browser address may be different. If you specifically need the
-numeric IP for an OC200, open the network where the controller is connected
-in the Omada UI, select **Clients**, and search for **OC200**. Use the IP
-address shown for that client. For a software controller, check the host
-machine's network settings; a router's DHCP client list is another option for
-hardware controllers.
+For **Controller IP / hostname**, enter an address that this application can reach. It does not have to be a numeric IP: if you open the controller UI at `https://omada.example.com:8043`, use `omada.example.com` as the controller value. The API port is configured separately and defaults to `443`; the UI port in the browser address may be different. If you specifically need the numeric IP for an OC200, open the network where the controller is connected in the Omada UI, select **Clients**, and search for **OC200**. Use the IP address shown for that client. For a software controller, check the host machine's network settings; a router's DHCP client list is another option for hardware controllers.
 
 ### Generate Open API credentials
 
@@ -298,11 +279,9 @@ These are API application credentials, not your controller username and password
 
 ### Option A — Client Credentials Mode (simplest)
 
-Direct token exchange using the Client ID and Client Secret only. No
-controller login credentials are needed.
+Direct token exchange using the Client ID and Client Secret only. No controller login credentials are needed.
 
-**Prerequisites:** Enable the Open API and generate credentials as described
-in [Generate Open API credentials](#generate-open-api-credentials).
+**Prerequisites:** Enable the Open API and generate credentials as described in [Generate Open API credentials](#generate-open-api-credentials).
 
 | Parameter | CLI Option | Environment Variable | Default |
 | --- | --- | --- | --- |
@@ -338,9 +317,7 @@ python cli.py fetch
 
 ### Option B — Authorization Code Mode
 
-Three-step OAuth2 flow that additionally requires controller admin
-credentials (username and password). Use this mode when your Open API
-configuration requires user-level authorization.
+Three-step OAuth2 flow that additionally requires controller admin credentials (username and password). Use this mode when your Open API configuration requires user-level authorization.
 
 | Parameter | CLI Option | Environment Variable | Default |
 | --- | --- | --- | --- |
@@ -365,16 +342,11 @@ python cli.py fetch \
   --password secret
 ```
 
-> **Note:** When `--username` and `--password` are provided alongside the
-> client credentials, the tool automatically uses Authorization Code mode.
-> Without them, it defaults to Client Credentials mode.
+> **Note:** When `--username` and `--password` are provided alongside the client credentials, the tool automatically uses Authorization Code mode. Without them, it defaults to Client Credentials mode.
 
 ### Logging
 
-By default the application logs to the console (``stderr``) at the ``INFO``
-level.  You can optionally enable **file logging** with automatic rotation,
-and customise the log level and format via CLI options or environment
-variables.
+By default the application logs to the console (``stderr``) at the ``INFO`` level.  You can optionally enable **file logging** with automatic rotation, and customise the log level and format via CLI options or environment variables.
 
 | Parameter | CLI Option | Environment Variable | Default |
 | --- | --- | --- | --- |
@@ -382,11 +354,7 @@ variables.
 | Log file path | `--log-file` | `OMADA_LOG_FILE` | *(disabled)* |
 | Log format | — | `OMADA_LOG_FORMAT` | `%(levelname)s %(message)s` |
 
-When a log file path is provided, the application uses a
-`RotatingFileHandler` (5 MB per file, 3 backups) so log files never grow
-without bound.  The log directory is created automatically if it does not
-exist.  **Log file paths are relative to the current working directory**
-(the directory from which you run the command).
+When a log file path is provided, the application uses a `RotatingFileHandler` (5 MB per file, 3 backups) so log files never grow without bound.  The log directory is created automatically if it does not exist.  **Log file paths are relative to the current working directory** (the directory from which you run the command).
 
 ```bash
 # Enable file logging — writes to ./logs/omada_network.log relative to CWD
@@ -401,32 +369,19 @@ export OMADA_LOG_FILE=logs/omada_network.log
 python cli.py fetch ...
 ```
 
-> **Note:** The `--verbose` / `-v` flag is a shortcut for `--log-level DEBUG`.
-> Console logging to ``stderr`` is always active regardless of file logging
-> settings.
+> **Note:** The `--verbose` / `-v` flag is a shortcut for `--log-level DEBUG`. Console logging to ``stderr`` is always active regardless of file logging settings.
 >
-> The `start_web` convenience scripts enable file logging to
-> `omada_network.log` in the current working directory (not the default
-> `logs/` subdirectory).  These scripts are intended for local development
-> only.
+> The `start_web` convenience scripts enable file logging to `omada_network.log` in the current working directory (not the default `logs/` subdirectory).  These scripts are intended for local development only.
 
 ### API rate limiting
 
-The controller limits how fast the Open API can be called. Past that limit it
-answers *"Omada API error -7132: Our server is receiving too many requests
-now"*. The tool stays under it on its own:
+The controller limits how fast the Open API can be called. Past that limit it answers *"Omada API error -7132: Our server is receiving too many requests now"*. The tool stays under it on its own:
 
 - Calls are spaced at least **0.2 s** apart (about 5 per second).
-- A rate-limited call is retried up to 6 times, waiting 2 s, 4 s, 8 s … (up
-  to 60 s, or what the controller asks for), and all later calls in that run
-  are spaced further apart (up to 2 s). The first occurrence is logged as a
-  warning.
+- A rate-limited call is retried up to 6 times, waiting 2 s, 4 s, 8 s … (up to 60 s, or what the controller asks for), and all later calls in that run are spaced further apart (up to 2 s). The first occurrence is logged as a warning.
 - Login and site discovery are retried the same way.
 
-A full export of a large site therefore takes longer than it would without
-pacing, but it doesn't lose resources part way through. If you still see
-`-7132` (for example when several tools share the same controller), raise the
-interval:
+A full export of a large site therefore takes longer than it would without pacing, but it doesn't lose resources part way through. If you still see `-7132` (for example when several tools share the same controller), raise the interval:
 
 | Parameter | CLI Option | Environment Variable | Default |
 | --- | --- | --- | --- |
@@ -440,11 +395,8 @@ OMADA_REQUEST_INTERVAL=0.5 python cli.py fetch ...
 
 Both modes automatically discover:
 
-1. **Controller ID** — `GET /api/info` → `result.omadacId` (unless
-   `--controller-id` is explicitly provided)
-2. **Site ID** — via the Open API sites endpoint. For controllers with
-   multiple sites, pass `--site-name` to select by display name
-   (case-insensitive).
+1. **Controller ID** — `GET /api/info` → `result.omadacId` (unless `--controller-id` is explicitly provided)
+2. **Site ID** — via the Open API sites endpoint. For controllers with multiple sites, pass `--site-name` to select by display name (case-insensitive).
 
 ---
 
@@ -487,12 +439,7 @@ python cli.py fetch --verify-ssl ...
 python cli.py fetch --include-secrets ...
 ```
 
-> **`--include-secrets`** exports Wi-Fi passphrases, RADIUS / VPN shared
-> secrets, portal and VPN user passwords, WireGuard keys, PPPoE passwords and
-> other credentials as their real values instead of `<redacted>`, in both YAML
-> and Markdown. A warning is printed, and every Markdown file holding a
-> plaintext credential gets a warning banner below its title (also when
-> regenerated from YAML). Treat the output directory as sensitive.
+> **`--include-secrets`** exports Wi-Fi passphrases, RADIUS / VPN shared secrets, portal and VPN user passwords, WireGuard keys, PPPoE passwords and other credentials as their real values instead of `<redacted>`, in both YAML and Markdown. A warning is printed, and every Markdown file holding a plaintext credential gets a warning banner below its title (also when regenerated from YAML). Treat the output directory as sensitive.
 
 ### `generate` — regenerate Markdown from existing YAML (no API credentials)
 
@@ -531,18 +478,11 @@ python cli.py diagnose --controller 192.168.1.1 \
   --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET
 ```
 
-Authenticates like `fetch` and calls every resource's fetcher. For each
-resource it prints the record count and the field names of the first record,
-or the error. It never prints field values. Use it when an export comes out
-empty or a field you expect is missing. It accepts the same connection
-options as `fetch`.
+Authenticates like `fetch` and calls every resource's fetcher. For each resource it prints the record count and the field names of the first record, or the error. It never prints field values. Use it when an export comes out empty or a field you expect is missing. It accepts the same connection options as `fetch`.
 
 ### Global options
 
-`--log-level` (`debug`, `info`, `warning`, `error`), `-v` / `--verbose`
-(same as `--log-level debug`) and `--log-file` go **before** the
-subcommand, e.g. `python cli.py -v fetch …`. Running `python cli.py` with no
-subcommand runs `fetch` using the `OMADA_*` environment variables.
+`--log-level` (`debug`, `info`, `warning`, `error`), `-v` / `--verbose` (same as `--log-level debug`) and `--log-file` go **before** the subcommand, e.g. `python cli.py -v fetch …`. Running `python cli.py` with no subcommand runs `fetch` using the `OMADA_*` environment variables.
 
 ---
 
@@ -555,50 +495,29 @@ python cli.py serve
 
 The configuration form offers two authentication tabs:
 
-- **🔒 Client Credentials** — enter your Client ID and Client Secret for a
-  direct token exchange (simplest mode).
-- **🔑 Authorization Code** — enter Client ID, Client Secret, plus your
-  controller username and password for the three-step OAuth2 flow.
+- **🔒 Client Credentials** — enter your Client ID and Client Secret for a direct token exchange (simplest mode).
+- **🔑 Authorization Code** — enter Client ID, Client Secret, plus your controller username and password for the three-step OAuth2 flow.
 
-> **Note on SSL verification defaults:** The web UI defaults to SSL
-> verification **enabled** (checkbox checked) to encourage secure connections
-> in the browser-based workflow. The CLI defaults to SSL verification **off**
-> (`--verify-ssl` must be passed explicitly) because most self-signed
-> controller setups are managed from the command line. This difference is
-> intentional — set `OMADA_VERIFY_SSL=true` or pass `--verify-ssl` in the CLI
-> if your controller has a valid (non-self-signed) certificate.
+> **Note on SSL verification defaults:** The web UI defaults to SSL verification **enabled** (checkbox checked) to encourage secure connections in the browser-based workflow. The CLI defaults to SSL verification **off** (`--verify-ssl` must be passed explicitly) because most self-signed controller setups are managed from the command line. This difference is intentional — set `OMADA_VERIFY_SSL=true` or pass `--verify-ssl` in the CLI if your controller has a valid (non-self-signed) certificate.
 
 Below the tabs:
 
 - **Verify SSL certificate**: checked by default (see the note above).
-- **Include secrets**: unchecked on every visit. When ticked, credentials are
-  exported in plaintext, as with `--include-secrets` on the CLI, and a warning
-  is shown after the run. See [Secrets](#secrets).
+- **Include secrets**: unchecked on every visit. When ticked, credentials are exported in plaintext, as with `--include-secrets` on the CLI, and a warning is shown after the run. See [Secrets](#secrets).
 
-Click **⚡ Fetch & Generate Documentation** to pull data from the controller
-and create the YAML + Markdown files. Non-secret form values (controller,
-port, IDs, site name) are remembered in the session. Passwords and secrets
-are never stored.
+Click **⚡ Fetch & Generate Documentation** to pull data from the controller and create the YAML + Markdown files. Non-secret form values (controller, port, IDs, site name) are remembered in the session. Passwords and secrets are never stored.
 
-The **Generated Documents** panel lists every Markdown file under the output
-directory as `Site/file.md`:
+The **Generated Documents** panel lists every Markdown file under the output directory as `Site/file.md`:
 
 - **View** renders the file in the browser, with navigation between documents.
 - **⬇** downloads that file.
-- Tick several files and click **⬇ Download Selected** to get them as a ZIP
-  archive (`omada_docs.zip`). A single ticked file downloads as-is.
+- Tick several files and click **⬇ Download Selected** to get them as a ZIP archive (`omada_docs.zip`). A single ticked file downloads as-is.
 
-**🔄 Regenerate Markdown from YAML** rebuilds the Markdown from the existing
-YAML files without connecting to the controller. It uses the site from the
-last fetch, or the site name in the form.
+**🔄 Regenerate Markdown from YAML** rebuilds the Markdown from the existing YAML files without connecting to the controller. It uses the site from the last fetch, or the site name in the form.
 
 ### Persistent sessions (`FLASK_SECRET_KEY`)
 
-By default the web server generates a random secret key on startup.  This
-means browser sessions — and the CSRF tokens embedded in every form — are
-invalidated every time the server restarts.  For deployments that need
-persistent sessions, set the `FLASK_SECRET_KEY` environment variable to a
-stable, secret value:
+By default the web server generates a random secret key on startup.  This means browser sessions — and the CSRF tokens embedded in every form — are invalidated every time the server restarts.  For deployments that need persistent sessions, set the `FLASK_SECRET_KEY` environment variable to a stable, secret value:
 
 ```bash
 export FLASK_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
@@ -607,12 +526,9 @@ python cli.py serve
 
 ### Air-gapped networks
 
-The web UI loads **Bootstrap 5** and **GitHub Markdown CSS** from public CDNs
-(`cdn.jsdelivr.net` and `cdnjs.cloudflare.com`).  On networks without
-internet access the UI will still function but will render without styling.
+The web UI loads **Bootstrap 5** and **GitHub Markdown CSS** from public CDNs (`cdn.jsdelivr.net` and `cdnjs.cloudflare.com`).  On networks without internet access the UI will still function but will render without styling.
 
-If you need fully offline operation, download the three assets listed below
-and place them in a local directory (e.g. `omada/web/static/`):
+If you need fully offline operation, download the three assets listed below and place them in a local directory (e.g. `omada/web/static/`):
 
 | Asset | CDN URL |
 | --- | --- |
@@ -620,9 +536,7 @@ and place them in a local directory (e.g. `omada/web/static/`):
 | Bootstrap 5.3.3 JS | `https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js` |
 | GitHub Markdown CSS 5.5.1 | `https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown-light.min.css` |
 
-Then update the `<link>` and `<script>` tags in both
-`omada/web/templates/index.html` and `omada/web/templates/doc_view.html` to
-point to the local files instead of the CDN URLs. For example, replace:
+Then update the `<link>` and `<script>` tags in both `omada/web/templates/index.html` and `omada/web/templates/doc_view.html` to point to the local files instead of the CDN URLs. For example, replace:
 
 ```html
 <link rel="stylesheet"
@@ -642,27 +556,13 @@ Repeat for the Bootstrap JS bundle and the GitHub Markdown CSS file.
 
 ## Output
 
-After a successful run, YAML source files and Markdown documentation are
-written under `docs/<site_name>/`:
+After a successful run, YAML source files and Markdown documentation are written under `docs/<site_name>/`:
 
-> **Note:** The `docs/` directory is excluded from version control via
-> `.gitignore`.  Generated output is local to each environment — run
-> `python cli.py fetch` to populate it.
+> **Note:** The `docs/` directory is excluded from version control via `.gitignore`.  Generated output is local to each environment — run `python cli.py fetch` to populate it.
 
 ### Secrets
 
-> **Secrets are not exported by default.** Every resource is passed through
-> the `omada-openapi` redaction helper before anything is written: any non-empty string whose
-> field name looks like a credential (password, pwd, secret, token, security
-> key, pre-shared key, private key) is replaced with `<redacted>`. This covers
-> Wi-Fi passphrases and per-AP override passwords, RADIUS shared secrets, guest
-> portal passwords, OAuth secrets and SMS tokens, VPN pre-shared keys and user /
-> client passwords, SSL VPN user passwords, WireGuard private / preshared keys,
-> and WAN credentials such as PPPoE passwords. The YAML records only that a
-> secret is configured, and the Markdown shows `Configured` / `Not set`. Public
-> keys, usernames, and account / certificate identifiers are kept as
-> authentication references. To export the real values (for a restorable
-> backup), pass `--include-secrets` or tick **Include secrets** in the web UI.
+> **Secrets are not exported by default.** Every resource is passed through the `omada-openapi` redaction helper before anything is written: any non-empty string whose field name looks like a credential (password, pwd, secret, token, security key, pre-shared key, private key) is replaced with `<redacted>`. This covers Wi-Fi passphrases and per-AP override passwords, RADIUS shared secrets, guest portal passwords, OAuth secrets and SMS tokens, VPN pre-shared keys and user / client passwords, SSL VPN user passwords, WireGuard private / preshared keys, and WAN credentials such as PPPoE passwords. The YAML records only that a secret is configured, and the Markdown shows `Configured` / `Not set`. Public keys, usernames, and account / certificate identifiers are kept as authentication references. To export the real values (for a restorable backup), pass `--include-secrets` or tick **Include secrets** in the web UI.
 
 ```text
 docs/
@@ -674,9 +574,7 @@ docs/
     └── …                     ← one .yaml / .md pair per resource (see Features)
 ```
 
-`generate` (or **Regenerate** in the web UI) rebuilds every `.md` from the
-`.yaml` files, so you can edit or version the YAML and regenerate the docs
-offline.
+`generate` (or **Regenerate** in the web UI) rebuilds every `.md` from the `.yaml` files, so you can edit or version the YAML and regenerate the docs offline.
 
 ### Example – DHCP Reservations Markdown
 
@@ -689,21 +587,17 @@ offline.
 | LAN | 192.168.1.120 | 11-22-33-44-55-66 | nas |  | Option 66: 192.168.1.10 | Enabled | Gateway |
 ```
 
-Resources with more settings than fit in one table, such as port profiles,
-SSIDs, DHCP scopes, VPN tunnels and switch settings, add a detail section per
-item below the summary table (Category / Setting / Value).
+Resources with more settings than fit in one table, such as port profiles, SSIDs, DHCP scopes, VPN tunnels and switch settings, add a detail section per item below the summary table (Category / Setting / Value).
 
 ---
 
 ## Practical use
 
-The tool takes a written "picture" of a site. Run `fetch`, read or share the
-Markdown, keep the YAML. These are the common ways to use it.
+The tool takes a written "picture" of a site. Run `fetch`, read or share the Markdown, keep the YAML. These are the common ways to use it.
 
 ### Document a site
 
-Run `fetch` once and open the output in the web UI (or any Markdown viewer).
-Good places to start:
+Run `fetch` once and open the output in the web UI (or any Markdown viewer). Good places to start:
 
 | Question | File |
 | --- | --- |
@@ -715,17 +609,11 @@ Good places to start:
 | What is open to the internet? | `port_forwarding.md`, `one_to_one_nat.md`, `acl_rules.md` |
 | How does remote access work? | `remote_access_vpns.md`, `wireguard.md`, `ssl_vpn.md` |
 
-Secrets are redacted by default, so the output can be handed to a colleague,
-a consultant or a support ticket. It still contains IP addresses, MAC
-addresses, device names and network layout, so share it on a need-to-know
-basis. In the web UI, tick the files you need and use **Download Selected**
-to get a ZIP.
+Secrets are redacted by default, so the output can be handed to a colleague, a consultant or a support ticket. It still contains IP addresses, MAC addresses, device names and network layout, so share it on a need-to-know basis. In the web UI, tick the files you need and use **Download Selected** to get a ZIP.
 
 ### Track changes over time
 
-The YAML is the raw API data written with sorted keys, so a diff shows what
-was changed rather than what moved. Write the output to a folder
-under version control and commit after each run:
+The YAML is the raw API data written with sorted keys, so a diff shows what was changed rather than what moved. Write the output to a folder under version control and commit after each run:
 
 ```bash
 # One-time setup: a separate repository for the exports
@@ -739,29 +627,20 @@ git log --stat          # which resources changed, and when
 git diff HEAD~1         # exactly what changed since the last run
 ```
 
-Some resources are runtime snapshots and change on most runs: DHCP leases,
-device status and the WAN health table. Ignore those when looking for
-configuration changes, or review the diff file by file.
+Some resources are runtime snapshots and change on most runs: DHCP leases, device status and the WAN health table. Ignore those when looking for configuration changes, or review the diff file by file.
 
-To run it on a schedule, put the credentials in the environment rather than on
-the command line, then call the same two steps from cron (Linux / macOS) or
-Task Scheduler (Windows):
+To run it on a schedule, put the credentials in the environment rather than on the command line, then call the same two steps from cron (Linux / macOS) or Task Scheduler (Windows):
 
 ```bash
 # /etc/cron.d/omada-export — every night at 02:00
 0 2 * * * omada . /etc/omada-export.env && cd /opt/omada_network && python cli.py fetch --output-dir /srv/omada-config && cd /srv/omada-config && git add -A && git commit -qm "Omada export $(date +\%F)"
 ```
 
-where `/etc/omada-export.env` (readable only by that user) exports
-`OMADA_CONTROLLER`, `OMADA_CLIENT_ID`, `OMADA_CLIENT_SECRET` and, for a
-multi-site controller, `OMADA_SITE_NAME`. Use one run per site.
+where `/etc/omada-export.env` (readable only by that user) exports `OMADA_CONTROLLER`, `OMADA_CLIENT_ID`, `OMADA_CLIENT_SECRET` and, for a multi-site controller, `OMADA_SITE_NAME`. Use one run per site.
 
 ### Before and after a change
 
-Before a firmware upgrade, a controller migration, or a reconfiguration, run
-`fetch` and keep the result. Run it again afterwards and compare. With the
-git setup above, that is `git diff`. Without it, copy the folder first and
-compare the two copies:
+Before a firmware upgrade, a controller migration, or a reconfiguration, run `fetch` and keep the result. Run it again afterwards and compare. With the git setup above, that is `git diff`. Without it, copy the folder first and compare the two copies:
 
 ```bash
 python cli.py fetch --output-dir before
@@ -770,136 +649,68 @@ python cli.py fetch --output-dir after
 diff -r "before/My Office" "after/My Office"
 ```
 
-A setting that disappeared or reset to its default after an upgrade shows up
-as a removed or changed line in the YAML.
+A setting that disappeared or reset to its default after an upgrade shows up as a removed or changed line in the YAML.
 
 ### Review the configuration
 
-The Markdown resolves IDs to names and codes to labels, which makes it
-practical to read the configuration end to end instead of clicking through the
-controller. Things worth checking:
+The Markdown resolves IDs to names and codes to labels, which makes it practical to read the configuration end to end instead of clicking through the controller. Things worth checking:
 
-- **Exposure:** every port forward and one-to-one NAT rule, and whether it is
-  still needed (`port_forwarding.md`, `one_to_one_nat.md`).
-- **Wi-Fi security:** SSIDs still on WPA2 / open, guest networks without
-  isolation, SSIDs on the wrong VLAN (`ssids.md`, `portals.md`).
-- **Segmentation:** which networks the ACLs actually separate
-  (`acl_rules.md`, `networks.md`).
-- **Leftovers:** unused port profiles, IP groups, VPN users and DHCP
-  reservations for devices that are gone.
-- **Consistency:** switches with different management VLAN, STP or LLDP
-  settings (`switch_settings.md`), ports with settings that differ from their
-  profile (`device_ports.md`).
+- **Exposure:** every port forward and one-to-one NAT rule, and whether it is still needed (`port_forwarding.md`, `one_to_one_nat.md`).
+- **Wi-Fi security:** SSIDs still on WPA2 / open, guest networks without isolation, SSIDs on the wrong VLAN (`ssids.md`, `portals.md`).
+- **Segmentation:** which networks the ACLs actually separate (`acl_rules.md`, `networks.md`).
+- **Leftovers:** unused port profiles, IP groups, VPN users and DHCP reservations for devices that are gone.
+- **Consistency:** switches with different management VLAN, STP or LLDP settings (`switch_settings.md`), ports with settings that differ from their profile (`device_ports.md`).
 
 ### Keep a complete written record
 
-`--include-secrets` (or **Include secrets** in the web UI) also writes Wi-Fi
-passphrases, VPN keys, RADIUS secrets and other credentials in plaintext. Use
-it when you need a record you could rebuild the site from by hand, for
-example before resetting a controller. Store that output encrypted or offline
-and do not commit it to a shared repository.
+`--include-secrets` (or **Include secrets** in the web UI) also writes Wi-Fi passphrases, VPN keys, RADIUS secrets and other credentials in plaintext. Use it when you need a record you could rebuild the site from by hand, for example before resetting a controller. Store that output encrypted or offline and do not commit it to a shared repository.
 
-This tool only reads. It cannot push a configuration back. To restore a
-controller, use the controller's own backup (**Settings → Maintenance →
-Backup & Restore** in the Omada UI; labels vary slightly between versions). The export is the readable companion to
-that backup: it tells you what the backup contains and what to check after
-restoring it.
+This tool only reads. It cannot push a configuration back. To restore a controller, use the controller's own backup (**Settings → Maintenance → Backup & Restore** in the Omada UI; labels vary slightly between versions). The export is the readable companion to that backup: it tells you what the backup contains and what to check after restoring it.
 
 ### Replace hardware
 
-Omada can move settings from an old device to a new one of the same kind. It
-cannot decide where things go when the new model has a different number or
-layout of ports. For that, the export has one printable sheet per device:
-what each port does, what is plugged in, which settings were set by hand, and
-which site rules point at that specific port. Run a fresh `fetch` just before
-the swap and keep the output.
+Omada can move settings from an old device to a new one of the same kind. It cannot decide where things go when the new model has a different number or layout of ports. For that, the export has one printable sheet per device: what each port does, what is plugged in, which settings were set by hand, and which site rules point at that specific port. Run a fresh `fetch` just before the swap and keep the output.
 
 #### Replacing a switch
 
-Omada can transfer settings to a replacement device. When the new switch has
-**fewer ports** (or a different port layout), use `switch_port_sheets.md` to
-reconfigure it by hand:
+Omada can transfer settings to a replacement device. When the new switch has **fewer ports** (or a different port layout), use `switch_port_sheets.md` to reconfigure it by hand:
 
-1. Run a fresh `fetch` just before the swap, so the sheets reflect the
-   current configuration. Keep that output.
-2. In the summary table, check **Must Carry Over** (and its SFP / PoE counts)
-   against the new switch's ports.
-3. In the old switch's section, each port shows its profile, native /
-   untagged / tagged VLANs, PoE, speed, LAG, what's connected to it, and the
-   settings that **differ from the profile** (which a profile alone won't
-   restore). **Carry Over** says why a port matters (connected, uplink,
-   downlink, LAG member, custom settings, named); `No (unused, default)`
-   ports can be dropped.
-4. Assign the same profiles on the new switch, apply the listed manual
-   settings, rebuild LAGs (see `lags.md`), and re-patch the uplink and
-   downlinks (see the remapping checklist in `uplinks.md`).
-5. **Port-Bound Rules** lists site rules that name this specific port: DHCP
-   snooping and ARP detection selections (`switch_security.md`), OUI-based
-   VLAN rules (`oui_vlans.md`) and QoS rules (`switch_qos.md`). Those rules
-   reference the old switch's ports, so re-select the new ports in each one.
+1. Run a fresh `fetch` just before the swap, so the sheets reflect the current configuration. Keep that output.
+2. In the summary table, check **Must Carry Over** (and its SFP / PoE counts) against the new switch's ports.
+3. In the old switch's section, each port shows its profile, native / untagged / tagged VLANs, PoE, speed, LAG, what's connected to it, and the settings that **differ from the profile** (which a profile alone won't restore). **Carry Over** says why a port matters (connected, uplink, downlink, LAG member, custom settings, named); `No (unused, default)` ports can be dropped.
+4. Assign the same profiles on the new switch, apply the listed manual settings, rebuild LAGs (see `lags.md`), and re-patch the uplink and downlinks (see the remapping checklist in `uplinks.md`).
+5. **Port-Bound Rules** lists site rules that name this specific port: DHCP snooping and ARP detection selections (`switch_security.md`), OUI-based VLAN rules (`oui_vlans.md`) and QoS rules (`switch_qos.md`). Those rules reference the old switch's ports, so re-select the new ports in each one.
 
-Site-wide settings (networks, profiles, ACLs, DHCP, …) stay in the controller
-and aren't affected by the swap.
+Site-wide settings (networks, profiles, ACLs, DHCP, …) stay in the controller and aren't affected by the swap.
 
 #### Replacing a gateway
 
-On a gateway, many site settings point at a **WAN port by ID** (for example
-`1_<uuid>`, where the prefix is the port number): port forwarding, one-to-one
-NAT, routes, VPNs, failover, Dynamic DNS, UPnP / IGMP / IPTV, IP-MAC binding.
-LAN networks are tied to gateway LAN ports the same way. A model with a
-different set of WAN-capable ports changes those IDs, and settings pointing at
-a missing port stop working. Use `gateway_port_sheets.md`:
+On a gateway, many site settings point at a **WAN port by ID** (for example `1_<uuid>`, where the prefix is the port number): port forwarding, one-to-one NAT, routes, VPNs, failover, Dynamic DNS, UPnP / IGMP / IPTV, IP-MAC binding. LAN networks are tied to gateway LAN ports the same way. A model with a different set of WAN-capable ports changes those IDs, and settings pointing at a missing port stop working. Use `gateway_port_sheets.md`:
 
 1. Run a fresh `fetch` just before the swap.
-2. The gateway's section lists each port's **Capability** (WAN only, WAN or
-   LAN, LAN only) and current **Mode**. Check that the new model has a port
-   for every WAN and every connected LAN port.
-3. **WAN Connection** has what you need to re-create the internet
-   connection: type, static address, PPPoE user, MTU, VLAN tag, cloned MAC,
-   IPv6. Passwords show as `configured`; see [Secrets](#secrets) to export
-   them.
-4. **Connected switches** shows which switch port uplinks to the gateway, and
-   **Connected To** which gateway port it uses (when the controller reports
-   it).
-5. Work through the **Port reference checklist**. Every row names a setting,
-   in the file where it lives, that references a gateway port. Re-select the
-   right port in each one on the new gateway.
+2. The gateway's section lists each port's **Capability** (WAN only, WAN or LAN, LAN only) and current **Mode**. Check that the new model has a port for every WAN and every connected LAN port.
+3. **WAN Connection** has what you need to re-create the internet connection: type, static address, PPPoE user, MTU, VLAN tag, cloned MAC, IPv6. Passwords show as `configured`; see [Secrets](#secrets) to export them.
+4. **Connected switches** shows which switch port uplinks to the gateway, and **Connected To** which gateway port it uses (when the controller reports it).
+5. Work through the **Port reference checklist**. Every row names a setting, in the file where it lives, that references a gateway port. Re-select the right port in each one on the new gateway.
 
 #### Replacing an access point
 
-SSIDs and most wireless settings are site-wide and follow automatically. The
-settings in `ap_sheets.md` belong to one AP and are lost when you swap it
-for a different model. Rows marked **Carry Over** were set by hand:
+SSIDs and most wireless settings are site-wide and follow automatically. The settings in `ap_sheets.md` belong to one AP and are lost when you swap it for a different model. Rows marked **Carry Over** were set by hand:
 
-- **Radios:** fixed channels, widths and Tx power, per band. A model with
-  different bands (for example tri-band or 6 GHz) needs new choices.
-- **IP address and management VLAN:** static IP, DHCP reservation or
-  fallback IP, custom management VLAN, management SSID.
+- **Radios:** fixed channels, widths and Tx power, per band. A model with different bands (for example tri-band or 6 GHz) needs new choices.
+- **IP address and management VLAN:** static IP, DHCP reservation or fallback IP, custom management VLAN, management SSID.
 - **SSID overrides** on this AP (SSID off, name, VLAN, password).
-- **Uplink:** the switch port the AP is plugged into, uplink port selection,
-  LAG, P2P bridge.
-- **LAN ports** on wall-plate and multi-port APs: VLAN, PoE out, rate limits,
-  and what's connected.
-- **General:** LED, LLDP, power saving, load balancing, U-APSD, where not
-  left on the site defaults.
+- **Uplink:** the switch port the AP is plugged into, uplink port selection, LAG, P2P bridge.
+- **LAN ports** on wall-plate and multi-port APs: VLAN, PoE out, rate limits, and what's connected.
+- **General:** LED, LLDP, power saving, load balancing, U-APSD, where not left on the site defaults.
 
-If the controller doesn't return one of these parts for an AP (the model
-doesn't have the feature, or the call failed), the summary shows a
-**Not Exported** count, the AP gets a **settings not exported (sheet
-incomplete)** table naming each part, and `fetch` logs a warning. Check
-those settings on the old AP in the controller UI before the swap.
+If the controller doesn't return one of these parts for an AP (the model doesn't have the feature, or the call failed), the summary shows a **Not Exported** count, the AP gets a **settings not exported (sheet incomplete)** table naming each part, and `fetch` logs a warning. Check those settings on the old AP in the controller UI before the swap.
 
-Each AP needs about 15 API calls, so on a large site this resource takes a
-while to fetch (see [API rate limiting](#api-rate-limiting)).
+Each AP needs about 15 API calls, so on a large site this resource takes a while to fetch (see [API rate limiting](#api-rate-limiting)).
 
 ### When an export looks wrong
 
-If a file is empty or a setting you expect is missing, run `diagnose`. It
-shows, per resource, how many records the controller returned and which
-fields they have, without printing any values. A resource that errors
-usually means the controller version or the Open API application's
-permissions don't cover that endpoint. Re-run with `-v` for the full API
-log.
+If a file is empty or a setting you expect is missing, run `diagnose`. It shows, per resource, how many records the controller returned and which fields they have, without printing any values. A resource that errors usually means the controller version or the Open API application's permissions don't cover that endpoint. Re-run with `-v` for the full API log.
 
 ---
 
@@ -924,18 +735,11 @@ pip install build
 python -m build
 ```
 
-Tests never touch the network: `tests/conftest.py` blocks real HTTP traffic,
-so every API call must be mocked. See [TESTS.md](TESTS.md) for the full test
-inventory.
+Tests never touch the network: `tests/conftest.py` blocks real HTTP traffic, so every API call must be mocked. See [TESTS.md](TESTS.md) for the full test inventory.
 
 ### Adding a resource
 
-Add a `get_*` method to `OmadaDocsClient` in `omada/docs_client.py` and a
-`ResourceDefinition` (with its row formatter) to `omada/registry.py`. The CLI,
-web UI, YAML export, Markdown generation and `diagnose` all pick it up from the
-registry. Add the mock return value to the service fixtures in
-`tests/test_service.py` and `tests/test_docs_client.py`, and document it
-in `api_reference.md`. See [ARCHITECTURE.md](ARCHITECTURE.md#extensibility).
+Add a `get_*` method to `OmadaDocsClient` in `omada/docs_client.py` and a `ResourceDefinition` (with its row formatter) to `omada/registry.py`. The CLI, web UI, YAML export, Markdown generation and `diagnose` all pick it up from the registry. Add the mock return value to the service fixtures in `tests/test_service.py` and `tests/test_docs_client.py`, and document it in `api_reference.md`. See [ARCHITECTURE.md](ARCHITECTURE.md#extensibility).
 
 ### CI/CD
 
@@ -951,18 +755,15 @@ This project uses GitHub Actions for continuous integration and deployment.
 **Release Workflow** (`.github/workflows/release.yml`)
 
 - Triggers on version tags (e.g. `v1.0.0`) or manual dispatch.
-- Tags must use the format `vN.N.N` (e.g. `v1.0.0`, `v0.0.1`). Invalid
-  formats will cause the workflow to fail with a clear error message.
+- Tags must use the format `vN.N.N` (e.g. `v1.0.0`, `v0.0.1`). Invalid formats will cause the workflow to fail with a clear error message.
 - When using manual dispatch, the tag must already exist in the repository.
 - Lints and runs the test suite, then builds and packages the project (sdist + wheel).
 - Creates a GitHub Release with the built artifacts.
-- Optionally publishes to PyPI when a `PYPI_API_TOKEN` secret is configured
-  in a `pypi` environment.
+- Optionally publishes to PyPI when a `PYPI_API_TOKEN` secret is configured in a `pypi` environment.
 
 ### Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for a comprehensive overview of the
-system design, component details, data flows, and extensibility guide.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a comprehensive overview of the system design, component details, data flows, and extensibility guide.
 
 ---
 
