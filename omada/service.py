@@ -17,10 +17,10 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from omada_openapi import redact_secrets
 
 from omada.exporters.markdown_generator import MarkdownGenerator
 from omada.exporters.yaml_exporter import YamlExporter
-from omada.redaction import redact_secrets
 from omada.registry import RESOURCES
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ class OmadaService:
     Parameters
     ----------
     client:
-        An authenticated :class:`~omada.api.openapi_client.OmadaOpenApiClient`.
+        An authenticated :class:`~omada.docs_client.OmadaDocsClient`.
     site_id:
         Site ID to query.
     site_name:

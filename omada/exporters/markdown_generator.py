@@ -14,7 +14,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from omada.redaction import contains_secrets
+from omada_openapi import contains_secrets
+
 from omada.registry import REGISTRY
 
 

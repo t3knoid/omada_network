@@ -1,465 +1,25 @@
-"""Omada Open API (Northbound API) client.
+"""Omada client for documentation exports.
 
-Supports the official Omada Open API using both OAuth2 authentication
-modes documented in the TP-Link Open API Access Guide:
-
-* **Client Credentials Mode** — direct token exchange using
-  ``client_id``, ``client_secret``, and ``omadacId``.
-* **Authorization Code Mode** — three-step flow: login with user
-  credentials, obtain an authorization code, then exchange for a token.
-
-The base-path prefix is ``/openapi/v1/{omadacId}/…`` (or ``/openapi/v2/``
-for a handful of newer endpoints).
-
-This module also provides:
-
-* :func:`openapi_login` — Client Credentials Mode token exchange.
-* :func:`openapi_auth_code_login` — Authorization Code Mode (3-step).
-* :func:`openapi_discover_site_id` — list sites and select by name.
-* :func:`discover_controller_id` — ``GET /api/info`` to find omadacId.
+:class:`OmadaDocsClient` extends :class:`omada_openapi.OmadaOpenApiClient`
+with one ``get_*`` method per exported resource (see :mod:`omada.registry`).
+Many of them combine several endpoints into one record -- e.g. switch ports
+merged with their full configuration and schedules, SSIDs with their detail
+and AP overrides, LAGs rebuilt from the port overview -- and drop live
+counters so the YAML only changes when configuration does.  That shaping is
+specific to the documentation, so it lives here rather than in the library.
 """
 
 from __future__ import annotations
 
 import logging
-import os
-import time
-import warnings
-from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote, urljoin
+from urllib.parse import quote
 
 import requests
-import urllib3
 
-from omada.redaction import REDACTED, redact_secrets  # noqa: F401  (REDACTED re-exported)
+from omada_openapi import OmadaAPIError, OmadaOpenApiClient, normalize_mac
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Shared utilities
-# ---------------------------------------------------------------------------
-
-class OmadaAPIError(Exception):
-    """Raised when the Omada controller returns an error response."""
-
-    def __init__(self, error_code: int, message: str) -> None:
-        self.error_code = error_code
-        super().__init__(f"Omada API error {error_code}: {message}")
-
-
-#: Omada's "too many requests" error code (its API rate limit).
-RATE_LIMIT_ERROR_CODE = -7132
-#: Default minimum gap between API calls, in seconds (``OMADA_REQUEST_INTERVAL``).
-DEFAULT_REQUEST_INTERVAL = 0.2
-#: The gap never grows beyond this, however often the controller pushes back.
-MAX_REQUEST_INTERVAL = 2.0
-#: Retries of one call after a rate-limit response before giving up.
-RATE_LIMIT_RETRIES = 6
-#: First backoff delay in seconds; doubled on each retry, capped below.
-RATE_LIMIT_BACKOFF = 2.0
-RATE_LIMIT_MAX_BACKOFF = 60.0
-
-# Indirection so tests can skip real waiting.
-_sleep = time.sleep
-_monotonic = time.monotonic
-
-
-def _request_interval_from_env() -> float:
-    raw = os.environ.get("OMADA_REQUEST_INTERVAL", "").strip()
-    if not raw:
-        return DEFAULT_REQUEST_INTERVAL
-    try:
-        return max(0.0, float(raw))
-    except ValueError:
-        logger.warning("Ignoring OMADA_REQUEST_INTERVAL=%r (not a number); using %.1fs",
-                       raw, DEFAULT_REQUEST_INTERVAL)
-        return DEFAULT_REQUEST_INTERVAL
-
-
-def _retry_after(resp: requests.Response) -> float | None:
-    """Seconds from a numeric ``Retry-After`` header, if the server sent one."""
-    try:
-        value = float(resp.headers.get("Retry-After", ""))
-    except (TypeError, ValueError, AttributeError):
-        return None
-    return value if value >= 0 else None
-
-
-def _send_with_rate_limit(
-    label: str,
-    send: Any,
-    on_limited: Any = None,
-) -> requests.Response:
-    """Call *send()* until the controller stops answering "too many requests".
-
-    Omada rate-limits its API and answers with ``errorCode -7132`` (or HTTP
-    429).  Those responses are retried up to :data:`RATE_LIMIT_RETRIES` times
-    with exponential backoff, honouring a ``Retry-After`` header.  Any other
-    response, success or error, is returned to the caller unchanged.
-    *on_limited(attempt, wait)* is called before each wait; by default a
-    warning is logged.
-    """
-    delay = RATE_LIMIT_BACKOFF
-    for attempt in range(1, RATE_LIMIT_RETRIES + 2):
-        resp = send()
-        message = "too many requests"
-        if resp.status_code != 429:
-            try:
-                body = resp.json()
-            except ValueError:
-                return resp
-            if not (isinstance(body, dict) and body.get("errorCode") == RATE_LIMIT_ERROR_CODE):
-                return resp
-            message = body.get("msg", message)
-        if attempt > RATE_LIMIT_RETRIES:
-            raise OmadaAPIError(
-                RATE_LIMIT_ERROR_CODE,
-                f"{message} (still rate limited after {RATE_LIMIT_RETRIES} retries; "
-                "wait a few minutes, or raise OMADA_REQUEST_INTERVAL)",
-            )
-        hint = _retry_after(resp)
-        wait = min(RATE_LIMIT_MAX_BACKOFF, delay if hint is None else max(hint, delay))
-        if on_limited is not None:
-            on_limited(attempt, wait)
-        else:
-            logger.warning("Controller rate limit hit on %s; retrying in %.0fs (attempt %d of %d)",
-                           label, wait, attempt, RATE_LIMIT_RETRIES)
-        _sleep(wait)
-        delay = min(RATE_LIMIT_MAX_BACKOFF, delay * 2)
-    raise AssertionError("unreachable")  # pragma: no cover
-
-
-def _make_session(verify_ssl: bool, base_url: str) -> requests.Session:
-    """Create a :class:`requests.Session` with optional TLS verification."""
-    sess = requests.Session()
-    sess.headers.update({"Content-Type": "application/json"})
-    if not verify_ssl:
-        sess.verify = False
-        warnings.warn(
-            f"TLS certificate verification is disabled for {base_url}. "
-            "This makes the connection vulnerable to MITM attacks.",
-            urllib3.exceptions.InsecureRequestWarning,
-            stacklevel=3,
-        )
-    return sess
-
-
-def discover_controller_id(
-    base_url: str,
-    *,
-    verify_ssl: bool = True,
-    timeout: int = 30,
-) -> str:
-    """Discover the controller ID (``omadacId``) from ``GET /api/info``.
-
-    This endpoint is unauthenticated and works regardless of auth mode.
-    """
-    url = base_url.rstrip("/") + "/api/info"
-    sess = _make_session(verify_ssl, base_url)
-    resp = _send_with_rate_limit("/api/info", lambda: sess.get(url, timeout=timeout))
-    resp.raise_for_status()
-    body = resp.json()
-    error_code = body.get("errorCode", -1)
-    if error_code != 0:
-        raise OmadaAPIError(error_code, body.get("msg", "unknown error"))
-    result = body.get("result", {})
-    cid = result.get("omadacId", "")
-    if not cid:
-        raise RuntimeError(
-            "Could not determine controller ID: 'omadacId' not found "
-            "in /api/info response"
-        )
-    logger.info("Discovered controller ID: %s", cid)
-    return cid
-
-
-# ---------------------------------------------------------------------------
-# Auth helpers
-# ---------------------------------------------------------------------------
-
-@dataclass
-class OpenApiLoginResult:
-    """Result of a successful login (either auth mode)."""
-
-    access_token: str
-    session: requests.Session
-    base_url: str
-
-
-def openapi_login(
-    base_url: str,
-    omadac_id: str,
-    client_id: str,
-    client_secret: str,
-    *,
-    verify_ssl: bool = True,
-    timeout: int = 30,
-) -> OpenApiLoginResult:
-    """Authenticate via **Client Credentials Mode** and return a session.
-
-    Endpoint: ``POST /openapi/authorize/token?grant_type=client_credentials``
-
-    Parameters
-    ----------
-    base_url:
-        Controller base URL, e.g. ``https://192.168.1.1:8043``.
-    omadac_id:
-        The Omada controller ID.
-    client_id, client_secret:
-        Open API application credentials.
-    """
-    sess = _make_session(verify_ssl, base_url)
-    base = base_url.rstrip("/")
-    token_url = f"{base}/openapi/authorize/token"
-
-    resp = _send_with_rate_limit("token", lambda: sess.post(
-        token_url,
-        params={"grant_type": "client_credentials"},
-        json={
-            "omadacId": omadac_id,
-            "client_id": client_id,
-            "client_secret": client_secret,
-        },
-        timeout=timeout,
-    ))
-    resp.raise_for_status()
-    body = resp.json()
-
-    error_code = body.get("errorCode", -1)
-    if error_code != 0:
-        raise OmadaAPIError(error_code, body.get("msg", "unknown error"))
-
-    result = body.get("result", {})
-    access_token = result.get("accessToken", "")
-    if not access_token:
-        raise RuntimeError(
-            "Open API login succeeded but no accessToken was returned"
-        )
-
-    sess.headers.update({"Authorization": f"AccessToken={access_token}"})
-    logger.info("Client Credentials login successful — token obtained")
-    return OpenApiLoginResult(
-        access_token=access_token, session=sess, base_url=base,
-    )
-
-
-def openapi_auth_code_login(
-    base_url: str,
-    omadac_id: str,
-    client_id: str,
-    client_secret: str,
-    username: str,
-    password: str,
-    *,
-    verify_ssl: bool = True,
-    timeout: int = 30,
-) -> OpenApiLoginResult:
-    """Authenticate via **Authorization Code Mode** (3-step) and return a session.
-
-    Steps per TP-Link Open API docs §2.2:
-
-    1. ``POST /openapi/authorize/login`` — log in with user credentials.
-    2. ``POST /openapi/authorize/code``  — obtain an authorization code.
-    3. ``POST /openapi/authorize/token`` — exchange the code for a token.
-
-    Parameters
-    ----------
-    base_url:
-        Controller base URL, e.g. ``https://192.168.1.1:8043``.
-    omadac_id:
-        The Omada controller ID.
-    client_id, client_secret:
-        Open API application credentials.
-    username, password:
-        Omada controller user credentials.
-    """
-    sess = _make_session(verify_ssl, base_url)
-    base = base_url.rstrip("/")
-
-    # Step 1 — Login
-    login_url = f"{base}/openapi/authorize/login"
-    login_resp = _send_with_rate_limit("login", lambda: sess.post(
-        login_url,
-        params={"client_id": client_id, "omadacId": omadac_id},
-        json={"username": username, "password": password},
-        timeout=timeout,
-    ))
-    login_resp.raise_for_status()
-    login_body = login_resp.json()
-
-    login_error = login_body.get("errorCode", -1)
-    if login_error != 0:
-        raise OmadaAPIError(login_error, login_body.get("msg", "login failed"))
-
-    login_result = login_body.get("result", {})
-    csrf_token = login_result.get("csrfToken", "")
-    session_id = login_result.get("sessionId", "")
-    if not csrf_token or not session_id:
-        raise RuntimeError(
-            "Authorization Code login succeeded but csrfToken/sessionId missing"
-        )
-
-    # Step 2 — Obtain authorization code
-    code_url = f"{base}/openapi/authorize/code"
-    code_resp = _send_with_rate_limit("authorize code", lambda: sess.post(
-        code_url,
-        params={
-            "client_id": client_id,
-            "omadacId": omadac_id,
-            "response_type": "code",
-        },
-        headers={
-            "Csrf-Token": csrf_token,
-            "Cookie": f"TPOMADA_SESSIONID={session_id}",
-        },
-        timeout=timeout,
-    ))
-    code_resp.raise_for_status()
-    code_body = code_resp.json()
-
-    code_error = code_body.get("errorCode", -1)
-    if code_error != 0:
-        raise OmadaAPIError(code_error, code_body.get("msg", "authorize failed"))
-
-    auth_code = code_body.get("result", "")
-    if not auth_code:
-        raise RuntimeError(
-            "Authorization Code grant succeeded but no code was returned"
-        )
-
-    # Step 3 — Exchange authorization code for access token
-    token_url = f"{base}/openapi/authorize/token"
-    token_resp = _send_with_rate_limit("token", lambda: sess.post(
-        token_url,
-        params={
-            "grant_type": "authorization_code",
-            "code": auth_code,
-        },
-        json={
-            "omadacId": omadac_id,
-            "client_id": client_id,
-            "client_secret": client_secret,
-        },
-        timeout=timeout,
-    ))
-    token_resp.raise_for_status()
-    token_body = token_resp.json()
-
-    token_error = token_body.get("errorCode", -1)
-    if token_error != 0:
-        raise OmadaAPIError(token_error, token_body.get("msg", "token exchange failed"))
-
-    token_result = token_body.get("result", {})
-    access_token = token_result.get("accessToken", "")
-    if not access_token:
-        raise RuntimeError(
-            "Authorization Code token exchange succeeded but no accessToken "
-            "was returned"
-        )
-
-    # Prepare session for subsequent API calls
-    sess.headers.update({"Authorization": f"AccessToken={access_token}"})
-    # Clear login cookies — we only need the bearer token going forward
-    sess.cookies.clear()
-    logger.info("Authorization Code login successful — token obtained")
-    return OpenApiLoginResult(
-        access_token=access_token, session=sess, base_url=base,
-    )
-
-
-def openapi_discover_site(
-    base_url: str,
-    omadac_id: str,
-    session: requests.Session,
-    *,
-    site_name: str = "",
-    timeout: int = 30,
-) -> tuple[str, str]:
-    """Discover a site's ID and display name via the Open API.
-
-    Parameters
-    ----------
-    session:
-        An authenticated session from :func:`openapi_login`.
-    site_name:
-        Human-readable site name to match (case-insensitive).
-
-    Returns
-    -------
-    tuple[str, str]
-        The site ID and display name.
-    """
-    url = (
-        f"{base_url.rstrip('/')}/openapi/v1/{omadac_id}/sites"
-        "?page=1&pageSize=1000"
-    )
-    resp = _send_with_rate_limit("sites", lambda: session.get(url, timeout=timeout))
-    resp.raise_for_status()
-    body = resp.json()
-
-    error_code = body.get("errorCode", -1)
-    if error_code != 0:
-        raise OmadaAPIError(error_code, body.get("msg", "unknown error"))
-
-    result = body.get("result", {})
-    if isinstance(result, dict):
-        sites = result.get("data", [])
-    elif isinstance(result, list):
-        sites = result
-    else:
-        raise RuntimeError("Unexpected response format from Open API /sites")
-
-    if not sites:
-        raise RuntimeError("No sites found via Open API")
-
-    needle = site_name.strip().casefold()
-    if needle:
-        for s in sites:
-            if s.get("name", "").strip().casefold() == needle:
-                site_id = s.get("siteId", s.get("id", ""))
-                logger.info(
-                    "Matched site by name: %s (%s)", s.get("name"), site_id,
-                )
-                return site_id, s.get("name", "")
-        available = ", ".join(s.get("name", "?") for s in sites)
-        raise RuntimeError(
-            f"No site named '{site_name.strip()}' found. "
-            f"Available sites: {available}"
-        )
-
-    if len(sites) == 1:
-        site_id = sites[0].get("siteId", sites[0].get("id", ""))
-        logger.info(
-            "Auto-selected site: %s (%s)", sites[0].get("name"), site_id,
-        )
-        return site_id, sites[0].get("name", "")
-
-    lines = ["Multiple sites found. Please select a site by name or id:"]
-    for s in sites:
-        sid = s.get("siteId", s.get("id", "?"))
-        lines.append(f"  • {s.get('name', '?')}  (id: {sid})")
-    raise RuntimeError("\n".join(lines))
-
-
-def openapi_discover_site_id(
-    base_url: str,
-    omadac_id: str,
-    session: requests.Session,
-    *,
-    site_name: str = "",
-    timeout: int = 30,
-) -> str:
-    """Discover a site ID via the Open API."""
-    site_id, _ = openapi_discover_site(
-        base_url,
-        omadac_id,
-        session,
-        site_name=site_name,
-        timeout=timeout,
-    )
-    return site_id
 
 
 def _sort_ports(ports: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -480,244 +40,12 @@ _DHCP_SCOPE_KEYS: tuple[str, ...] = (
 )
 
 
-# Credential redaction lives in omada.redaction; these aliases keep the
-# client's VPN/wireless getters (and existing imports) working.
-_redact_secrets = redact_secrets
+class OmadaDocsClient(OmadaOpenApiClient):
+    """Open API client with the resource getters used by :class:`~omada.service.OmadaService`.
 
-
-def _normalize_mac(mac: Any) -> str:
-    """Normalize a MAC address for comparison (``aa:bb`` → ``AA-BB``)."""
-    return str(mac).strip().upper().replace(":", "-")
-
-
-# ---------------------------------------------------------------------------
-# Client
-# ---------------------------------------------------------------------------
-
-class OmadaOpenApiClient:
-    """HTTP client for the Omada Open API (Northbound API).
-
-    Provides ``get_*`` methods consumed by
-    :class:`~omada.service.OmadaService`.
-
-    Parameters
-    ----------
-    base_url:
-        Controller / cloud base URL.
-    omadac_id:
-        The Omada controller ID.
-    access_token:
-        A valid access token from :func:`openapi_login`.
-    verify_ssl:
-        Whether to verify TLS certificates.
-    timeout:
-        Request timeout in seconds.
-    session:
-        An authenticated :class:`requests.Session` (from
-        :func:`openapi_login`).
+    Credentials in the returned data are redacted unless
+    :attr:`include_secrets` is set (``OmadaService(include_secrets=True)``).
     """
-
-    def __init__(
-        self,
-        base_url: str,
-        omadac_id: str,
-        access_token: str,
-        *,
-        verify_ssl: bool = True,
-        timeout: int = 30,
-        session: requests.Session | None = None,
-        request_interval: float | None = None,
-    ) -> None:
-        self.base_url = base_url.rstrip("/")
-        #: Minimum seconds between API calls.  Starts at *request_interval*
-        #: (default ``$OMADA_REQUEST_INTERVAL`` or 0.2s) and widens when the
-        #: controller answers "too many requests".
-        self.request_interval = (
-            _request_interval_from_env() if request_interval is None else max(0.0, request_interval)
-        )
-        self._last_request: float | None = None
-        self._rate_limit_warned = False
-        self.omadac_id = omadac_id
-        #: When True, credentials are returned as-is instead of redacted.
-        #: Set via ``OmadaService(include_secrets=True)``.
-        self.include_secrets = False
-        self.access_token = access_token
-        self.timeout = timeout
-
-        if session is not None:
-            self._session = session
-        else:
-            self._session = requests.Session()
-            self._session.headers.update({
-                "Authorization": f"AccessToken={access_token}",
-                "Content-Type": "application/json",
-            })
-            if not verify_ssl:
-                self._session.verify = False
-                warnings.warn(
-                    f"TLS certificate verification is disabled for {base_url}. "
-                    "This makes the connection vulnerable to MITM attacks.",
-                    urllib3.exceptions.InsecureRequestWarning,
-                    stacklevel=2,
-                )
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _redact(self, data: Any) -> Any:
-        """Redact credentials unless :attr:`include_secrets` is set."""
-        return data if self.include_secrets else _redact_secrets(data)
-
-    def _api_url(self, path: str, *, api_version: str = "v1") -> str:
-        """Build a full URL from a relative Open API *path*."""
-        prefix = f"/openapi/{api_version}/{self.omadac_id}/"
-        relative = path.lstrip("/")
-        return urljoin(self.base_url + prefix, relative)
-
-    def _throttle(self) -> None:
-        """Wait until at least :attr:`request_interval` has passed since the last call."""
-        if self._last_request is not None and self.request_interval > 0:
-            wait = self._last_request + self.request_interval - _monotonic()
-            if wait > 0:
-                _sleep(wait)
-        self._last_request = _monotonic()
-
-    def _on_rate_limited(self, path: str, attempt: int, delay: float) -> None:
-        """Slow down for the rest of the run and log the first occurrence."""
-        self.request_interval = min(MAX_REQUEST_INTERVAL, max(self.request_interval * 2, 0.5))
-        log = logger.debug if self._rate_limit_warned else logger.warning
-        self._rate_limit_warned = True
-        log(
-            "Controller rate limit hit on %s; waiting %.0fs and retrying (attempt %d of %d). "
-            "Calls are now spaced %.1fs apart.",
-            path, delay, attempt, RATE_LIMIT_RETRIES, self.request_interval,
-        )
-
-    def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        params: dict[str, Any] | None = None,
-        payload: dict[str, Any] | None = None,
-        api_version: str = "v1",
-    ) -> dict[str, Any]:
-        """Send one paced API call, retried while rate limited; return the body.
-
-        Every call waits for :attr:`request_interval` since the previous one.
-        A "too many requests" answer is retried with backoff (see
-        :func:`_send_with_rate_limit`) and widens the interval for the rest of
-        the run, so a long export finishes instead of losing resources.
-        """
-        url = self._api_url(path, api_version=api_version)
-
-        def send() -> requests.Response:
-            self._throttle()
-            if method == "POST":
-                logger.debug("OPENAPI POST %s", url)
-                return self._session.post(url, json=payload, timeout=self.timeout)
-            logger.debug("OPENAPI GET %s params=%s", url, params)
-            return self._session.get(url, params=params or {}, timeout=self.timeout)
-
-        resp = _send_with_rate_limit(
-            path, send, lambda attempt, wait: self._on_rate_limited(path, attempt, wait),
-        )
-        resp.raise_for_status()
-        body: dict[str, Any] = resp.json()
-        logger.debug(
-            "OpenAPI response for %s: status=%d, body keys=%s",
-            path, resp.status_code,
-            list(body.keys()) if isinstance(body, dict) else type(body).__name__,
-        )
-        if isinstance(body, dict) and "errorCode" in body and body["errorCode"] != 0:
-            raise OmadaAPIError(body["errorCode"], body.get("msg", "unknown error"))
-        return body
-
-    def _get(
-        self,
-        path: str,
-        params: dict[str, Any] | None = None,
-        *,
-        api_version: str = "v1",
-    ) -> Any:
-        """Perform a GET request and return the ``result`` payload."""
-        body = self._request("GET", path, params=params, api_version=api_version)
-        result = body.get("result", body)
-        if isinstance(result, dict):
-            logger.debug("OpenAPI result for %s: keys=%s", path, list(result.keys()))
-        elif isinstance(result, list):
-            logger.debug("OpenAPI result for %s: list with %d item(s)", path, len(result))
-        return result
-
-    def _post(self, path: str, payload: dict[str, Any], *, api_version: str = "v1") -> Any:
-        """Perform a read-only POST query and return the ``result`` payload.
-
-        Only used for Open API endpoints that take their query in the body
-        (e.g. ``switches/ports/select``); nothing is modified.
-        """
-        body = self._request("POST", path, payload=payload, api_version=api_version)
-        return body.get("result", body)
-
-    def _get_paged(
-        self,
-        path: str,
-        *,
-        page_size: int = 100,
-        max_pages: int = 200,
-        api_version: str = "v1",
-    ) -> list[dict[str, Any]]:
-        """Fetch all pages for a paginated Open API endpoint.
-
-        The Open API uses ``page`` and ``pageSize`` query parameters
-        (as opposed to ``currentPage``/``currentPageSize``).
-        """
-        items: list[dict[str, Any]] = []
-        for page in range(1, max_pages + 1):
-            params = {"page": page, "pageSize": page_size}
-            result = self._get(path, params=params, api_version=api_version)
-
-            if isinstance(result, list):
-                items.extend(result)
-                break
-
-            data = result.get("data", [])
-            if not data and page == 1 and isinstance(result, dict):
-                # Auto-detect: find any value that is a non-empty list of dicts
-                for key, val in result.items():
-                    if (
-                        key not in ("totalRows", "currentPage", "currentSize")
-                        and isinstance(val, list)
-                        and val
-                        and isinstance(val[0], dict)
-                    ):
-                        data = val
-                        logger.debug(
-                            "OpenAPI pagination for %s: auto-detected data "
-                            "under '%s' key (%d item(s))",
-                            path, key, len(val),
-                        )
-                        break
-
-            items.extend(data)
-            total_rows = result.get("totalRows", len(items))
-            if len(items) >= total_rows:
-                break
-        else:
-            logger.warning(
-                "OpenAPI pagination reached max_pages=%d for %s; "
-                "%d record(s) collected.",
-                max_pages, path, len(items),
-            )
-        return items
-
-    # ------------------------------------------------------------------
-    # Public API methods
-    # ------------------------------------------------------------------
-
-    def get_devices(self, site_id: str) -> list[dict[str, Any]]:
-        """Return the adopted devices for the given site."""
-        return self._get_paged(f"sites/{site_id}/devices")
 
     def get_device_ports(self, site_id: str) -> list[dict[str, Any]]:
         """Return port configuration for every switch and gateway in the site.
@@ -761,8 +89,8 @@ class OmadaOpenApiClient:
                 continue
             device_name = device.get("name", device.get("deviceName", ""))
             try:
-                if device_type == "switch" and _normalize_mac(device_mac) in overview:
-                    ports = _sort_ports(overview[_normalize_mac(device_mac)])
+                if device_type == "switch" and normalize_mac(device_mac) in overview:
+                    ports = _sort_ports(overview[normalize_mac(device_mac)])
                 else:
                     ports = fetcher(site_id, str(device_mac))
             except (OmadaAPIError, requests.RequestException) as exc:
@@ -771,7 +99,7 @@ class OmadaOpenApiClient:
                     device_type, device_name or "unknown", device_mac, exc,
                 )
                 continue
-            switch_detail = details.get(_normalize_mac(device_mac), {}).get("ports", {})
+            switch_detail = details.get(normalize_mac(device_mac), {}).get("ports", {})
             for port in ports:
                 record = {
                     "deviceName": device_name,
@@ -786,7 +114,7 @@ class OmadaOpenApiClient:
                         # Full config wins; overview-only status fields are kept.
                         record.update({k: v for k, v in full.items() if k not in ("site", "switchId")})
                     for kind in ("poeSchedules", "portSchedules"):
-                        names = schedules.get(kind, {}).get((_normalize_mac(device_mac), port.get("port")))
+                        names = schedules.get(kind, {}).get((normalize_mac(device_mac), port.get("port")))
                         if names:
                             record[kind] = names
                 all_ports.append(record)
@@ -805,8 +133,8 @@ class OmadaOpenApiClient:
         if not any(str(d.get("type", d.get("deviceType", ""))).lower() == "switch" for d in devices):
             return {}
         try:
-            result = self._post(f"sites/{site_id}/switches/ports/select",
-                                {"selectAll": True, "switchList": []})
+            result = self.post(f"sites/{site_id}/switches/ports/select",
+                               {"selectAll": True, "switchList": []})
         except (OmadaAPIError, requests.RequestException) as exc:
             logger.warning("Full switch port config unavailable; exporting overview only: %s", exc)
             return {}
@@ -814,7 +142,7 @@ class OmadaOpenApiClient:
         for switch in result if isinstance(result, list) else []:
             if not isinstance(switch, dict) or not switch.get("mac"):
                 continue
-            entry = details.setdefault(_normalize_mac(switch["mac"]), {"ports": {}, "lags": {}})
+            entry = details.setdefault(normalize_mac(switch["mac"]), {"ports": {}, "lags": {}})
             for port in switch.get("ports") or []:
                 if isinstance(port, dict) and port.get("port") is not None:
                     entry["ports"][port["port"]] = port
@@ -835,7 +163,7 @@ class OmadaOpenApiClient:
         schedules: dict[str, Any] = {}
         for key, path in (("poeSchedules", "poe-schedules"), ("portSchedules", "port-schedules")):
             try:
-                schedules[key] = self._get_paged(f"sites/{site_id}/{path}")
+                schedules[key] = self.get_paged(f"sites/{site_id}/{path}")
             except (OmadaAPIError, requests.RequestException) as exc:
                 logger.debug("%s unavailable: %s", path, exc)
         return schedules
@@ -855,7 +183,7 @@ class OmadaOpenApiClient:
         if not has_switch:
             return {}
         try:
-            records = self._get_paged(f"sites/{site_id}/switches/ports/overview")
+            records = self.get_paged(f"sites/{site_id}/switches/ports/overview")
         except (OmadaAPIError, requests.RequestException) as exc:
             logger.warning(
                 "Switch port overview unavailable; falling back to "
@@ -865,12 +193,12 @@ class OmadaOpenApiClient:
         grouped: dict[str, list[dict[str, Any]]] = {}
         for record in records:
             if isinstance(record, dict) and record.get("switchMac"):
-                grouped.setdefault(_normalize_mac(record["switchMac"]), []).append(record)
+                grouped.setdefault(normalize_mac(record["switchMac"]), []).append(record)
         return grouped
 
     def _get_switch_ports(self, site_id: str, mac: str) -> list[dict[str, Any]]:
         """Return the ``portList`` of a switch."""
-        info = self._get(f"sites/{site_id}/switches/{quote(mac, safe='')}")
+        info = self.get(f"sites/{site_id}/switches/{quote(mac, safe='')}")
         ports = info.get("portList", []) if isinstance(info, dict) else []
         return _sort_ports([p for p in ports or [] if isinstance(p, dict)])
 
@@ -881,7 +209,7 @@ class OmadaOpenApiClient:
         errors: list[Exception] = []
 
         try:
-            info = self._get(base)
+            info = self.get(base)
             configs = info.get("portConfigs", []) if isinstance(info, dict) else []
             for cfg in configs or []:
                 if isinstance(cfg, dict):
@@ -890,7 +218,7 @@ class OmadaOpenApiClient:
             errors.append(exc)
 
         try:
-            result = self._get(f"{base}/ports")
+            result = self.get(f"{base}/ports")
             infos = result.get("osgPortInfos", []) if isinstance(result, dict) else result
             for item in infos or []:
                 if isinstance(item, dict):
@@ -904,7 +232,7 @@ class OmadaOpenApiClient:
         # (unlike portConfigs' enabled/disabled), so it is stored under
         # ``portStatus`` in the same shape the switch overview uses.
         try:
-            result = self._get(f"{base}/wan-status")
+            result = self.get(f"{base}/wan-status")
             for item in result if isinstance(result, list) else []:
                 if not isinstance(item, dict):
                     continue
@@ -929,7 +257,7 @@ class OmadaOpenApiClient:
         acls: list[dict[str, Any]] = []
         # Gateway ACLs
         try:
-            gateway_acls = self._get_paged(f"sites/{site_id}/acls/osg-acls")
+            gateway_acls = self.get_paged(f"sites/{site_id}/acls/osg-acls")
             for a in gateway_acls:
                 a.setdefault("aclType", "gateway")
             acls.extend(gateway_acls)
@@ -937,7 +265,7 @@ class OmadaOpenApiClient:
             logger.debug("Gateway ACLs unavailable: %s", exc)
         # Switch ACLs
         try:
-            switch_acls = self._get_paged(f"sites/{site_id}/acls/osw-acls")
+            switch_acls = self.get_paged(f"sites/{site_id}/acls/osw-acls")
             for a in switch_acls:
                 a.setdefault("aclType", "switch")
             acls.extend(switch_acls)
@@ -945,7 +273,7 @@ class OmadaOpenApiClient:
             logger.debug("Switch ACLs unavailable: %s", exc)
         # EAP ACLs
         try:
-            eap_acls = self._get_paged(f"sites/{site_id}/acls/eap-acls")
+            eap_acls = self.get_paged(f"sites/{site_id}/acls/eap-acls")
             for a in eap_acls:
                 a.setdefault("aclType", "eap")
             acls.extend(eap_acls)
@@ -956,11 +284,11 @@ class OmadaOpenApiClient:
     def get_ip_groups(self, site_id: str) -> list[dict[str, Any]]:
         """Return IP group profiles (groupType=0) for the given site."""
         try:
-            result = self._get(f"sites/{site_id}/profiles/groups/0")
+            result = self.get(f"sites/{site_id}/profiles/groups/0")
             return result if isinstance(result, list) else []
         except OmadaAPIError:
             # Fallback: get all groups and filter
-            result = self._get(f"sites/{site_id}/profiles/groups")
+            result = self.get(f"sites/{site_id}/profiles/groups")
             if isinstance(result, list):
                 return [g for g in result if g.get("type") == 0]
             return []
@@ -968,21 +296,13 @@ class OmadaOpenApiClient:
     def get_port_groups(self, site_id: str) -> list[dict[str, Any]]:
         """Return IP-Port group profiles (groupType=1) for the given site."""
         try:
-            result = self._get(f"sites/{site_id}/profiles/groups/1")
+            result = self.get(f"sites/{site_id}/profiles/groups/1")
             return result if isinstance(result, list) else []
         except OmadaAPIError:
-            result = self._get(f"sites/{site_id}/profiles/groups")
+            result = self.get(f"sites/{site_id}/profiles/groups")
             if isinstance(result, list):
                 return [g for g in result if g.get("type") == 1]
             return []
-
-    def get_networks(self, site_id: str) -> list[dict[str, Any]]:
-        """Return all LAN networks for the given site."""
-        try:
-            result = self._get(f"sites/{site_id}/lan-networks/all")
-            return result if isinstance(result, list) else []
-        except OmadaAPIError:
-            return self._get_paged(f"sites/{site_id}/lan-networks")
 
     def get_vlans(self, site_id: str) -> list[dict[str, Any]]:
         """Return VLAN configuration for the given site."""
@@ -993,17 +313,17 @@ class OmadaOpenApiClient:
     def get_switch_port_profiles(self, site_id: str) -> list[dict[str, Any]]:
         """Return switch port / LAN profiles for the given site."""
         try:
-            return self._get_paged(f"sites/{site_id}/lan-profiles")
+            return self.get_paged(f"sites/{site_id}/lan-profiles")
         except OmadaAPIError:
             pass
         try:
-            return self._get_paged(
+            return self.get_paged(
                 f"sites/{site_id}/lan-profiles", api_version="v2",
             )
         except OmadaAPIError:
             pass
         try:
-            return self._get_paged(f"sites/{site_id}/lan-switch-setting")
+            return self.get_paged(f"sites/{site_id}/lan-switch-setting")
         except OmadaAPIError:
             return []
 
@@ -1011,17 +331,17 @@ class OmadaOpenApiClient:
         """Return gateway / WAN settings for the given site."""
         # Try internet ports-config first (most detailed)
         try:
-            return self._get(f"sites/{site_id}/internet/ports-config")
+            return self.get(f"sites/{site_id}/internet/ports-config")
         except OmadaAPIError:
             pass
         # Fallback to basic internet info
         try:
-            return self._get(f"sites/{site_id}/internet/basic-info")
+            return self.get(f"sites/{site_id}/internet/basic-info")
         except OmadaAPIError:
             pass
         # Virtual WANs
         try:
-            return self._get(f"sites/{site_id}/setting/virtual-wans")
+            return self.get(f"sites/{site_id}/setting/virtual-wans")
         except OmadaAPIError:
             return {}
 
@@ -1039,7 +359,7 @@ class OmadaOpenApiClient:
         Credentials (e.g. the WPA passphrase) are redacted.
         """
         try:
-            wlans_result = self._get_paged(
+            wlans_result = self.get_paged(
                 f"sites/{site_id}/wireless-network/wlans",
             )
         except OmadaAPIError:
@@ -1053,7 +373,7 @@ class OmadaOpenApiClient:
             if not wlan_id:
                 continue
             try:
-                wlan_ssids = self._get_paged(
+                wlan_ssids = self.get_paged(
                     f"sites/{site_id}/wireless-network/wlans/{wlan_id}/ssids",
                 )
             except OmadaAPIError:
@@ -1063,7 +383,7 @@ class OmadaOpenApiClient:
                 ssid.setdefault("wlanId", wlan_id)
                 ssids.append(self._enrich_ssid(site_id, str(wlan_id), ssid))
 
-        return self._redact(ssids)
+        return self.redact(ssids)
 
     def _enrich_ssid(self, site_id: str, wlan_id: str, ssid: dict[str, Any]) -> dict[str, Any]:
         """Merge SSID detail and AP overrides into a list record."""
@@ -1077,14 +397,14 @@ class OmadaOpenApiClient:
             f"sites/{site_id}/wireless-network/wlans/{quote(wlan_id, safe='')}/ssids/{sid}",
         ):
             try:
-                detail = self._get(path)
+                detail = self.get(path)
                 break
             except (OmadaAPIError, requests.RequestException) as exc:
                 logger.debug("SSID detail unavailable via %s: %s", path, exc)
         if isinstance(detail, dict):
             ssid = {**ssid, **detail}
         try:
-            overrides = self._get_paged(f"sites/{site_id}/wireless-network/ssids/{sid}/overrides")
+            overrides = self.get_paged(f"sites/{site_id}/wireless-network/ssids/{sid}/overrides")
             if overrides:
                 ssid["apOverrides"] = overrides
         except (OmadaAPIError, requests.RequestException) as exc:
@@ -1096,28 +416,28 @@ class OmadaOpenApiClient:
 
         Endpoint: ``GET /sites/{siteId}/setting/service/dhcp``
         """
-        return self._get_paged(f"sites/{site_id}/setting/service/dhcp")
+        return self.get_paged(f"sites/{site_id}/setting/service/dhcp")
 
     def get_port_forwarding(self, site_id: str) -> list[dict[str, Any]]:
         """Return gateway port forwarding rules for the site.
 
         Endpoint: ``GET /sites/{siteId}/nat/port-forwardings``
         """
-        return self._get_paged(f"sites/{site_id}/nat/port-forwardings")
+        return self.get_paged(f"sites/{site_id}/nat/port-forwardings")
 
     def get_one_to_one_nat(self, site_id: str) -> list[dict[str, Any]]:
         """Return One-to-One NAT rules for the site.
 
         Endpoint: ``GET /sites/{siteId}/nat/one-to-one-nat``
         """
-        return self._get_paged(f"sites/{site_id}/nat/one-to-one-nat")
+        return self.get_paged(f"sites/{site_id}/nat/one-to-one-nat")
 
     def get_alg_settings(self, site_id: str) -> dict[str, Any]:
         """Return NAT Application Layer Gateway (ALG) settings for the site.
 
         Endpoint: ``GET /sites/{siteId}/nat/alg``
         """
-        result = self._get(f"sites/{site_id}/nat/alg")
+        result = self.get(f"sites/{site_id}/nat/alg")
         return result if isinstance(result, dict) else {}
 
     def get_static_routes(self, site_id: str) -> list[dict[str, Any]]:
@@ -1134,7 +454,7 @@ class OmadaOpenApiClient:
         routes: list[dict[str, Any]] = []
 
         try:
-            gateway_routes = self._get_paged(f"sites/{site_id}/routing/static-routings")
+            gateway_routes = self.get_paged(f"sites/{site_id}/routing/static-routings")
         except (OmadaAPIError, requests.RequestException) as exc:
             logger.warning("Gateway static routes unavailable: %s", exc)
             gateway_routes = []
@@ -1154,7 +474,7 @@ class OmadaOpenApiClient:
             if not mac:
                 continue
             try:
-                switch_routes = self._get_paged(
+                switch_routes = self.get_paged(
                     f"sites/{site_id}/switches/{quote(str(mac), safe='')}/staticRoutings",
                 )
             except (OmadaAPIError, requests.RequestException) as exc:
@@ -1171,7 +491,7 @@ class OmadaOpenApiClient:
     def _static_route_interface_names(self, site_id: str) -> dict[str, str]:
         """Return static-route interface ID → name; empty if unavailable."""
         try:
-            result = self._get(f"sites/{site_id}/routing/static-routings/interfaces")
+            result = self.get(f"sites/{site_id}/routing/static-routings/interfaces")
         except (OmadaAPIError, requests.RequestException) as exc:
             logger.debug("Static route interface list unavailable: %s", exc)
             return {}
@@ -1187,7 +507,7 @@ class OmadaOpenApiClient:
 
         Endpoint: ``GET /sites/{siteId}/routing/policy-routings``
         """
-        return self._get_paged(f"sites/{site_id}/routing/policy-routings")
+        return self.get_paged(f"sites/{site_id}/routing/policy-routings")
 
     # ------------------------------------------------------------------
     # VPN (all secrets are redacted before being returned)
@@ -1198,7 +518,7 @@ class OmadaOpenApiClient:
 
         Endpoint: ``GET /sites/{siteId}/vpn/site-to-site-vpns``
         """
-        return self._redact(self._get_paged(f"sites/{site_id}/vpn/site-to-site-vpns"))
+        return self.redact(self.get_paged(f"sites/{site_id}/vpn/site-to-site-vpns"))
 
     def get_remote_access_vpns(self, site_id: str) -> list[dict[str, Any]]:
         """Return client-to-site VPN servers and clients, tagged ``vpnRole``.
@@ -1214,7 +534,7 @@ class OmadaOpenApiClient:
             ("client", "client-to-site-vpn-clients"),
         ):
             try:
-                items = self._get_paged(f"sites/{site_id}/vpn/{path}")
+                items = self.get_paged(f"sites/{site_id}/vpn/{path}")
             except (OmadaAPIError, requests.RequestException) as exc:
                 logger.warning("Remote-access VPN %ss unavailable: %s", role, exc)
                 errors.append(exc)
@@ -1224,7 +544,7 @@ class OmadaOpenApiClient:
             tunnels.extend(items)
         if len(errors) == 2:
             raise errors[0]
-        return self._redact(tunnels)
+        return self.redact(tunnels)
 
     def get_wireguard(self, site_id: str) -> list[dict[str, Any]]:
         """Return WireGuard interfaces, each with its ``peers`` nested.
@@ -1232,9 +552,9 @@ class OmadaOpenApiClient:
         Endpoints: ``GET /sites/{siteId}/vpn/wireguards`` and
         ``GET /sites/{siteId}/vpn/wireguard-peers``.
         """
-        interfaces = self._get_paged(f"sites/{site_id}/vpn/wireguards")
+        interfaces = self.get_paged(f"sites/{site_id}/vpn/wireguards")
         try:
-            peers = self._get_paged(f"sites/{site_id}/vpn/wireguard-peers")
+            peers = self.get_paged(f"sites/{site_id}/vpn/wireguard-peers")
         except (OmadaAPIError, requests.RequestException) as exc:
             logger.warning("WireGuard peers unavailable: %s", exc)
             peers = []
@@ -1250,14 +570,14 @@ class OmadaOpenApiClient:
                 by_id[iface_id] = {"id": iface_id, "name": peer.get("interfaceName", iface_id), "peers": []}
                 interfaces.append(by_id[iface_id])
             by_id[iface_id]["peers"].append(peer)
-        return self._redact(interfaces)
+        return self.redact(interfaces)
 
     def get_vpn_users(self, site_id: str) -> list[dict[str, Any]]:
         """Return VPN user accounts (passwords redacted).
 
         Endpoint: ``GET /sites/{siteId}/vpn/users``
         """
-        return self._redact(self._get_paged(f"sites/{site_id}/vpn/users"))
+        return self.redact(self.get_paged(f"sites/{site_id}/vpn/users"))
 
     def get_ssl_vpn(self, site_id: str) -> dict[str, Any]:
         """Return the SSL VPN server configuration (passwords redacted).
@@ -1269,7 +589,7 @@ class OmadaOpenApiClient:
         ``users``, ``resources``, ``resourceGroups`` and ``radiusServers``.
         """
         base = f"sites/{site_id}/vpn/ssl-vpn-server"
-        setting = self._get(f"{base}/setting")
+        setting = self.get(f"{base}/setting")
         config: dict[str, Any] = {"setting": setting if isinstance(setting, dict) else {}}
         for key, path, paged in (
             ("userGroups", "user-groups", True),
@@ -1279,19 +599,19 @@ class OmadaOpenApiClient:
             ("radiusServers", "radius", False),
         ):
             try:
-                result = self._get_paged(f"{base}/{path}") if paged else self._get(f"{base}/{path}")
+                result = self.get_paged(f"{base}/{path}") if paged else self.get(f"{base}/{path}")
             except (OmadaAPIError, requests.RequestException) as exc:
                 logger.warning("SSL VPN %s unavailable: %s", path, exc)
                 result = []
             config[key] = result if isinstance(result, list) else []
-        return self._redact(config)
+        return self.redact(config)
 
     def get_eogre_tunnel(self, site_id: str) -> dict[str, Any]:
         """Return the EoGRE tunnel settings.
 
         Endpoint: ``GET /sites/{siteId}/vpn/gre-tunnel``
         """
-        result = self._get(f"sites/{site_id}/vpn/gre-tunnel")
+        result = self.get(f"sites/{site_id}/vpn/gre-tunnel")
         return result if isinstance(result, dict) else {}
 
     def get_ipsec_failover(self, site_id: str) -> list[dict[str, Any]]:
@@ -1299,7 +619,7 @@ class OmadaOpenApiClient:
 
         Endpoint: ``GET /sites/{siteId}/vpn/ipsec_failovers``
         """
-        return self._get_paged(f"sites/{site_id}/vpn/ipsec_failovers")
+        return self.get_paged(f"sites/{site_id}/vpn/ipsec_failovers")
 
     # ------------------------------------------------------------------
     # DHCP
@@ -1325,7 +645,7 @@ class OmadaOpenApiClient:
             serving = (isinstance(settings, dict) and settings.get("enable")) or scope.get("mode") == 1
             if serving and scope.get("id"):
                 try:
-                    info = self._get(
+                    info = self.get(
                         f"sites/{site_id}/networks/{quote(str(scope['id']), safe='')}/dhcp-server-info",
                     )
                     ranges = info.get("ranges") if isinstance(info, dict) else None
@@ -1336,13 +656,6 @@ class OmadaOpenApiClient:
             scopes.append(scope)
         return scopes
 
-    def get_dhcp_leases(self, site_id: str) -> list[dict[str, Any]]:
-        """Return current DHCP leases across all DHCP servers in the site.
-
-        Endpoint: ``GET /sites/{siteId}/setting/service/dhcp/user-list``
-        """
-        return self._get_paged(f"sites/{site_id}/setting/service/dhcp/user-list")
-
     # ------------------------------------------------------------------
     # Wireless profiles and site wireless settings
     # ------------------------------------------------------------------
@@ -1352,8 +665,8 @@ class OmadaOpenApiClient:
 
         Endpoint: ``GET /sites/{siteId}/profiles/radius``
         """
-        result = self._get(f"sites/{site_id}/profiles/radius")
-        return self._redact(result if isinstance(result, list) else [])
+        result = self.get(f"sites/{site_id}/profiles/radius")
+        return self.redact(result if isinstance(result, list) else [])
 
     def get_portals(self, site_id: str) -> list[dict[str, Any]]:
         """Return guest portals, each merged with its detail (credentials redacted).
@@ -1361,7 +674,7 @@ class OmadaOpenApiClient:
         Endpoints: ``GET /sites/{siteId}/portals`` and, per portal,
         ``GET /sites/{siteId}/portal/{portalId}`` (best-effort).
         """
-        result = self._get(f"sites/{site_id}/portals")
+        result = self.get(f"sites/{site_id}/portals")
         portals = result if isinstance(result, list) else []
         merged = []
         for portal in portals:
@@ -1369,20 +682,20 @@ class OmadaOpenApiClient:
                 continue
             if portal.get("id"):
                 try:
-                    detail = self._get(f"sites/{site_id}/portal/{quote(str(portal['id']), safe='')}")
+                    detail = self.get(f"sites/{site_id}/portal/{quote(str(portal['id']), safe='')}")
                     if isinstance(detail, dict):
                         portal = {**portal, **detail}
                 except (OmadaAPIError, requests.RequestException) as exc:
                     logger.debug("Portal detail unavailable for %s: %s", portal.get("name"), exc)
             merged.append(portal)
-        return self._redact(merged)
+        return self.redact(merged)
 
     def get_time_range_profiles(self, site_id: str) -> list[dict[str, Any]]:
         """Return time range (schedule) profiles.
 
         Endpoint: ``GET /sites/{siteId}/time-range-profiles``
         """
-        result = self._get(f"sites/{site_id}/time-range-profiles")
+        result = self.get(f"sites/{site_id}/time-range-profiles")
         return result if isinstance(result, list) else []
 
     def get_rate_limit_profiles(self, site_id: str) -> list[dict[str, Any]]:
@@ -1390,7 +703,7 @@ class OmadaOpenApiClient:
 
         Endpoint: ``GET /sites/{siteId}/rate-limit-profiles``
         """
-        result = self._get(f"sites/{site_id}/rate-limit-profiles")
+        result = self.get(f"sites/{site_id}/rate-limit-profiles")
         return result if isinstance(result, list) else []
 
     def get_wireless_settings(self, site_id: str) -> dict[str, Any]:
@@ -1409,7 +722,7 @@ class OmadaOpenApiClient:
             ("multicastRateLimit", "multicast-rate-limit"),
         ):
             try:
-                result = self._get(f"sites/{site_id}/{path}")
+                result = self.get(f"sites/{site_id}/{path}")
             except (OmadaAPIError, requests.RequestException) as exc:
                 logger.warning("Wireless %s setting unavailable: %s", path, exc)
                 errors.append(exc)
@@ -1435,7 +748,7 @@ class OmadaOpenApiClient:
             if not mac:
                 continue
             try:
-                config = self._get(f"sites/{site_id}/aps/{quote(str(mac), safe='')}/radio-config")
+                config = self.get(f"sites/{site_id}/aps/{quote(str(mac), safe='')}/radio-config")
             except (OmadaAPIError, requests.RequestException) as exc:
                 logger.warning("Radio config unavailable for AP %s (%s): %s", device.get("name", ""), mac, exc)
                 continue
@@ -1469,7 +782,7 @@ class OmadaOpenApiClient:
         for key, path, paged in parts:
             url = f"sites/{site_id}/{path}" if path else f"sites/{site_id}"
             try:
-                value = self._get_paged(url) if paged else self._get(url)
+                value = self.get_paged(url) if paged else self.get(url)
             except (OmadaAPIError, requests.RequestException) as exc:
                 logger.warning("%s: %s unavailable: %s", label, path, exc)
                 errors.append(exc)
@@ -1502,7 +815,7 @@ class OmadaOpenApiClient:
             if not mac:
                 continue
             try:
-                status = self._get(f"sites/{site_id}/gateways/{quote(str(mac), safe='')}/wan-status")
+                status = self.get(f"sites/{site_id}/gateways/{quote(str(mac), safe='')}/wan-status")
             except (OmadaAPIError, requests.RequestException) as exc:
                 logger.debug("WAN status unavailable for gateway %s: %s", mac, exc)
                 continue
@@ -1511,7 +824,7 @@ class OmadaOpenApiClient:
                     health.append({"gatewayName": device.get("name", ""), **port})
         if health:
             data["wanHealth"] = health
-        return self._redact(data)
+        return self.redact(data)
 
     def get_dns_settings(self, site_id: str) -> dict[str, Any]:
         """Return DNS proxy, DNS cache, LAN DNS records and Dynamic DNS.
@@ -1520,7 +833,7 @@ class OmadaOpenApiClient:
         ``/setting/lan/dns`` (paged) and ``/setting/service/ddns`` (paged).
         DDNS passwords are redacted.
         """
-        return self._redact(self._collect(site_id, (
+        return self.redact(self._collect(site_id, (
             ("dnsProxy", "setting/service/dns-proxy", False),
             ("dnsCache", "setting/service/dns-cache", False),
             ("lanDns", "setting/lan/dns", True),
@@ -1603,9 +916,9 @@ class OmadaOpenApiClient:
             mac = device.get("mac", device.get("deviceMac", ""))
             if not mac:
                 continue
-            ports = overview.get(_normalize_mac(mac))
+            ports = overview.get(normalize_mac(mac))
             if ports is not None:
-                full_lags = details.get(_normalize_mac(mac), {}).get("lags", {})
+                full_lags = details.get(normalize_mac(mac), {}).get("lags", {})
                 for group in _lags_from_overview(device, ports):
                     full = full_lags.get(group.get("lagId"))
                     if full:
@@ -1631,7 +944,7 @@ class OmadaOpenApiClient:
                 })
 
         try:
-            stacks = self._get_paged(f"sites/{site_id}/stacks")
+            stacks = self.get_paged(f"sites/{site_id}/stacks")
         except (OmadaAPIError, requests.RequestException) as exc:
             logger.debug("Switch stacks unavailable: %s", exc)
             stacks = []
@@ -1639,7 +952,7 @@ class OmadaOpenApiClient:
             if not isinstance(stack, dict) or not stack.get("id"):
                 continue
             try:
-                stack_lags = self._get(f"sites/{site_id}/stacks/{quote(str(stack['id']), safe='')}/lags")
+                stack_lags = self.get(f"sites/{site_id}/stacks/{quote(str(stack['id']), safe='')}/lags")
             except (OmadaAPIError, requests.RequestException) as exc:
                 logger.warning("LAGs unavailable for stack %s: %s", stack.get("name", stack["id"]), exc)
                 continue
@@ -1653,7 +966,7 @@ class OmadaOpenApiClient:
         data: dict[str, Any] = {"lags": lags}
         for key, path, paged in (("mlagGroups", "mlag", True), ("hashAlgorithm", "lag-hash-alg", False)):
             try:
-                value = self._get_paged(f"sites/{site_id}/{path}") if paged else self._get(f"sites/{site_id}/{path}")
+                value = self.get_paged(f"sites/{site_id}/{path}") if paged else self.get(f"sites/{site_id}/{path}")
             except (OmadaAPIError, requests.RequestException) as exc:
                 logger.debug("LAG %s unavailable: %s", path, exc)
                 continue
@@ -1686,7 +999,7 @@ class OmadaOpenApiClient:
         site: dict[str, Any] = {}
         for key, path in (("jumbo", "jumbo"), ("lldp", "lldp")):
             try:
-                site[key] = self._get(f"sites/{site_id}/{path}")
+                site[key] = self.get(f"sites/{site_id}/{path}")
             except (OmadaAPIError, requests.RequestException) as exc:
                 logger.debug("Site %s setting unavailable: %s", path, exc)
 
@@ -1709,7 +1022,7 @@ class OmadaOpenApiClient:
                 ("rpvst", "rpvst-instances", False),
             ):
                 try:
-                    value = self._get_paged(f"{base}/{path}") if paged else self._get(f"{base}/{path}")
+                    value = self.get_paged(f"{base}/{path}") if paged else self.get(f"{base}/{path}")
                 except (OmadaAPIError, requests.RequestException) as exc:
                     logger.debug("Switch %s %s unavailable: %s", mac, path, exc)
                     continue
@@ -1717,7 +1030,7 @@ class OmadaOpenApiClient:
                     value = {k: v for k, v in value.items() if k != "location"}
                 record[key] = value
             switches.append(record)
-        return self._redact({"site": site, "switches": switches})
+        return self.redact({"site": site, "switches": switches})
 
     # ------------------------------------------------------------------
     # Uplinks and stacks (topology)
@@ -1744,27 +1057,27 @@ class OmadaOpenApiClient:
         by_mac: dict[str, dict[str, Any]] = {}
         if devices:
             try:
-                detail = self._get(f"sites/{site_id}/switches/ports/switch-detail")
+                detail = self.get(f"sites/{site_id}/switches/ports/switch-detail")
             except (OmadaAPIError, requests.RequestException) as exc:
                 logger.debug("Switch uplink detail unavailable: %s", exc)
                 detail = []
             for sw in detail if isinstance(detail, list) else []:
                 if isinstance(sw, dict) and sw.get("mac"):
-                    by_mac[_normalize_mac(sw["mac"])] = sw
-            if any(_normalize_mac(d["mac"]) not in by_mac for d in devices):
+                    by_mac[normalize_mac(sw["mac"])] = sw
+            if any(normalize_mac(d["mac"]) not in by_mac for d in devices):
                 try:
-                    selected = self._post(f"sites/{site_id}/switches/ports/select",
-                                          {"selectAll": True, "switchList": []})
+                    selected = self.post(f"sites/{site_id}/switches/ports/select",
+                                         {"selectAll": True, "switchList": []})
                 except (OmadaAPIError, requests.RequestException) as exc:
                     logger.debug("Switch port select unavailable for uplinks: %s", exc)
                     selected = []
                 for sw in selected if isinstance(selected, list) else []:
                     if isinstance(sw, dict) and sw.get("mac"):
-                        by_mac.setdefault(_normalize_mac(sw["mac"]), sw)
+                        by_mac.setdefault(normalize_mac(sw["mac"]), sw)
 
         switches = []
         for device in devices:
-            sw = by_mac.get(_normalize_mac(device["mac"]), {})
+            sw = by_mac.get(normalize_mac(device["mac"]), {})
             record: dict[str, Any] = {
                 "deviceName": device.get("name", ""),
                 "deviceMac": device["mac"],
@@ -1779,7 +1092,7 @@ class OmadaOpenApiClient:
             switches.append(record)
 
         try:
-            stacks_raw = self._get_paged(f"sites/{site_id}/stacks")
+            stacks_raw = self.get_paged(f"sites/{site_id}/stacks")
         except (OmadaAPIError, requests.RequestException) as exc:
             logger.debug("Switch stacks unavailable: %s", exc)
             stacks_raw = []
@@ -1831,7 +1144,7 @@ class OmadaOpenApiClient:
         and bindings), ``ipMacBind`` / ``ipMacBinds`` (``/ip-mac-bind``,
         ``/ip-mac-binds``).
         """
-        return self._redact(self._collect(site_id, (
+        return self.redact(self._collect(site_id, (
             ("dot1x", "dot1x", False),
             ("macAuth", "mac-auth", False),
             ("dhcpSnoopStatus", "dhcpSnoops/status", False),
@@ -1873,7 +1186,7 @@ class OmadaOpenApiClient:
 
         Endpoint: ``GET /sites/{siteId}/switches/port-tag``
         """
-        result = self._get(f"sites/{site_id}/switches/port-tag")
+        result = self.get(f"sites/{site_id}/switches/port-tag")
         return result if isinstance(result, list) else []
 
     # ------------------------------------------------------------------
@@ -1923,7 +1236,7 @@ class OmadaOpenApiClient:
             unavailable: list[dict[str, str]] = []
             for key, path, paged in _AP_SHEET_PARTS:
                 try:
-                    value = self._get_paged(f"{base}/{path}") if paged else self._get(f"{base}/{path}")
+                    value = self.get_paged(f"{base}/{path}") if paged else self.get(f"{base}/{path}")
                 except (OmadaAPIError, requests.RequestException) as exc:
                     logger.debug("AP %s (%s): %s unavailable: %s", device.get("name", ""), mac, path, exc)
                     unavailable.append({"part": key, "path": path, "reason": _ap_part_failure(exc)})
@@ -1941,7 +1254,7 @@ class OmadaOpenApiClient:
                     device.get("name", ""), mac, len(unavailable), len(_AP_SHEET_PARTS),
                     ", ".join(u["path"] for u in unavailable),
                 )
-            records.append(self._redact(record))
+            records.append(self.redact(record))
         return records
 
 
@@ -2045,6 +1358,6 @@ def _schedule_membership(schedules: dict[str, Any]) -> dict[str, dict[tuple[str,
             ports_map = sched.get(map_key) if isinstance(sched.get(map_key), dict) else {}
             for mac, ports in ports_map.items():
                 for port in ports or []:
-                    by_port.setdefault((_normalize_mac(mac), port), []).append(str(sched.get("name", "")))
+                    by_port.setdefault((normalize_mac(mac), port), []).append(str(sched.get("name", "")))
         membership[kind] = by_port
     return membership

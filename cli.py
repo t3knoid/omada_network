@@ -179,13 +179,13 @@ def _build_client(
 
     Raises :class:`click.UsageError` when required values are missing.
     """
-    from omada.api.openapi_client import (
-        OmadaOpenApiClient,
+    from omada_openapi import (
         discover_controller_id,
         openapi_auth_code_login,
         openapi_discover_site,
         openapi_login,
     )
+    from omada.docs_client import OmadaDocsClient
 
     if not controller:
         raise click.UsageError("Missing required value: --controller / OMADA_CONTROLLER")
@@ -238,7 +238,7 @@ def _build_client(
         site_name=site_name,
     )
 
-    api_client = OmadaOpenApiClient(
+    api_client = OmadaDocsClient(
         login_result.base_url, controller_id, login_result.access_token,
         verify_ssl=verify_ssl,
         session=login_result.session,

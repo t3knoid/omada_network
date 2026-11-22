@@ -89,10 +89,10 @@ class TestRunRoute:
 
         with (
             patch("omada.web.app.OmadaService") as MockService,
-            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
-            patch("omada.api.openapi_client.openapi_login", return_value=mock_lr),
-            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
-            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada_openapi.discover_controller_id", return_value="cid"),
+            patch("omada_openapi.openapi_login", return_value=mock_lr),
+            patch("omada_openapi.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.docs_client.OmadaDocsClient"),
         ):
             MockService.return_value.run.return_value = mock_paths
             resp = app_client.post("/run", data=form_data, follow_redirects=True)
@@ -112,10 +112,10 @@ class TestRunRoute:
         mock_lr.access_token = "AT-tok"
         with (
             patch("omada.web.app.OmadaService") as MockService,
-            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
-            patch("omada.api.openapi_client.openapi_login", return_value=mock_lr),
-            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
-            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada_openapi.discover_controller_id", return_value="cid"),
+            patch("omada_openapi.openapi_login", return_value=mock_lr),
+            patch("omada_openapi.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.docs_client.OmadaDocsClient"),
         ):
             MockService.return_value.run.return_value = {"yaml": {}, "docs": {}}
             resp = app_client.post("/run", data=form_data, follow_redirects=True)
@@ -153,10 +153,10 @@ class TestRunRoute:
 
         with (
             patch("omada.web.app.OmadaService") as MockService,
-            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
-            patch("omada.api.openapi_client.openapi_auth_code_login", return_value=mock_lr) as mock_ac,
-            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
-            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada_openapi.discover_controller_id", return_value="cid"),
+            patch("omada_openapi.openapi_auth_code_login", return_value=mock_lr) as mock_ac,
+            patch("omada_openapi.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.docs_client.OmadaDocsClient"),
         ):
             MockService.return_value.run.return_value = mock_paths
             resp = app_client.post("/run", data=form_data, follow_redirects=True)
@@ -172,7 +172,7 @@ class TestRunRoute:
             "ac_client_secret": "my-secret",
             "auth_mode": "auth_code",
         }
-        with patch("omada.api.openapi_client.discover_controller_id", return_value="cid"):
+        with patch("omada_openapi.discover_controller_id", return_value="cid"):
             resp = app_client.post("/run", data=form_data, follow_redirects=True)
         assert resp.status_code == 200
         assert b"Username and Password" in resp.data
@@ -191,10 +191,10 @@ class TestRunRoute:
         mock_lr.base_url = "https://192.168.1.1:8043"
 
         with (
-            patch("omada.api.openapi_client.discover_controller_id", return_value="cid"),
-            patch("omada.api.openapi_client.openapi_login", return_value=mock_lr),
-            patch("omada.api.openapi_client.openapi_discover_site", return_value=("sid", "Default")),
-            patch("omada.api.openapi_client.OmadaOpenApiClient"),
+            patch("omada_openapi.discover_controller_id", return_value="cid"),
+            patch("omada_openapi.openapi_login", return_value=mock_lr),
+            patch("omada_openapi.openapi_discover_site", return_value=("sid", "Default")),
+            patch("omada.docs_client.OmadaDocsClient"),
             patch("omada.web.app.OmadaService") as MockService,
         ):
             MockService.return_value.run.side_effect = Exception("Connection refused")

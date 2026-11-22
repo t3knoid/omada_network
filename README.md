@@ -18,6 +18,10 @@ supports both official Open API authentication modes:
 - **Client Credentials Mode** — direct token exchange with Client ID + Secret
 - **Authorization Code Mode** — three-step flow with user credentials
 
+The API access itself (authentication, rate limiting, pagination, redaction)
+comes from the [omada-openapi](https://github.com/t3knoid/omada-openapi)
+library, which you can also use on its own.
+
 ## Features
 
 The tool exports **46 resource types**. Each one is written to `docs/<site>/<resource>.yaml`, which holds the raw API data and is the source of truth, and `docs/<site>/<resource>.md`, which holds formatted tables (a summary table, and for many resources one detail section per item). IDs are resolved to names and numeric codes to labels. Credentials are redacted unless you ask for them (see [Secrets](#secrets)). For the API endpoints behind each resource, see the [API reference](api_reference.md#resource-index).
@@ -121,8 +125,6 @@ omada_network/
 │       └── release.yml            # Release workflow
 ├── docs/                          # Generated YAML + Markdown output
 ├── omada/
-│   ├── api/
-│   │   └── openapi_client.py      # Official Open API (Northbound) client
 │   ├── exporters/
 │   │   ├── markdown_generator.py  # Generates Markdown documentation
 │   │   └── yaml_exporter.py       # Writes resources to YAML files
@@ -131,17 +133,16 @@ omada_network/
 │   │   └── templates/
 │   │       ├── doc_view.html      # Document viewer
 │   │       └── index.html         # Main configuration form
+│   ├── docs_client.py             # Resource getters on top of omada-openapi
 │   ├── logging_config.py          # Logging configuration
-│   ├── redaction.py               # Credential redaction for exports
 │   ├── registry.py                # Resource registry (single place to add a resource)
 │   └── service.py                 # Orchestration service layer
 ├── tests/
 │   ├── conftest.py                # Blocks real network access during tests
 │   ├── test_cli.py
+│   ├── test_docs_client.py
 │   ├── test_exporters.py
 │   ├── test_logging_config.py
-│   ├── test_openapi_client.py
-│   ├── test_redaction.py
 │   ├── test_registry.py
 │   ├── test_service.py
 │   └── test_web.py
@@ -176,7 +177,8 @@ omada_network/
 git clone https://github.com/t3knoid/omada_network.git
 cd omada_network
 
-# Install dependencies
+# Install dependencies (includes the omada-openapi client library, installed
+# from GitHub, so git must be available)
 pip install -r requirements.txt
 
 # For development (includes test dependencies)
@@ -650,7 +652,7 @@ written under `docs/<site_name>/`:
 ### Secrets
 
 > **Secrets are not exported by default.** Every resource is passed through
-> `omada/redaction.py` before anything is written: any non-empty string whose
+> the `omada-openapi` redaction helper before anything is written: any non-empty string whose
 > field name looks like a credential (password, pwd, secret, token, security
 > key, pre-shared key, private key) is replaced with `<redacted>`. This covers
 > Wi-Fi passphrases and per-AP override passwords, RADIUS shared secrets, guest
@@ -911,7 +913,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 
 # Run a specific test module
-python -m pytest tests/test_openapi_client.py -v
+python -m pytest tests/test_docs_client.py -v
 
 # Lint (CI fails only on syntax errors / undefined names; style is reported)
 flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
@@ -928,11 +930,11 @@ inventory.
 
 ### Adding a resource
 
-Add a `get_*` method to `omada/api/openapi_client.py` and a
+Add a `get_*` method to `OmadaDocsClient` in `omada/docs_client.py` and a
 `ResourceDefinition` (with its row formatter) to `omada/registry.py`. The CLI,
 web UI, YAML export, Markdown generation and `diagnose` all pick it up from the
 registry. Add the mock return value to the service fixtures in
-`tests/test_service.py` and `tests/test_openapi_client.py`, and document it
+`tests/test_service.py` and `tests/test_docs_client.py`, and document it
 in `api_reference.md`. See [ARCHITECTURE.md](ARCHITECTURE.md#extensibility).
 
 ### CI/CD

@@ -12,7 +12,7 @@ def _block_real_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
     Real ``requests`` traffic raises ``ConnectionError`` immediately, which the
     client's best-effort lookups treat as "endpoint unavailable".  Tests that
-    mock sessions or ``_get`` / ``_get_paged`` / ``_post`` are unaffected.
+    mock sessions or ``get`` / ``get_paged`` / ``post`` are unaffected.
     """
     def _no_network(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
         raise requests.ConnectionError("Network access is disabled in tests")
@@ -23,4 +23,4 @@ def _block_real_network(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def _no_real_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
     """Request pacing and rate-limit backoff don't actually sleep in tests."""
-    monkeypatch.setattr("omada.api.openapi_client._sleep", lambda seconds: None)
+    monkeypatch.setattr("omada_openapi.client._sleep", lambda seconds: None)
